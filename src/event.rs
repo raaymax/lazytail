@@ -43,11 +43,11 @@ pub enum AppEvent {
     ToggleFollowMode,
     DisableFollowMode,
 
-    // Future events (placeholders for roadmap features)
-    #[allow(dead_code)]
+    // Help mode
     ShowHelp,
-    #[allow(dead_code)]
     HideHelp,
+
+    // Future events (placeholders for roadmap features)
     #[allow(dead_code)]
     HistoryUp,
     #[allow(dead_code)]

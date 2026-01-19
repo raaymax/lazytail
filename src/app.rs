@@ -57,6 +57,9 @@ pub struct App {
 
     /// Last line number that was filtered (for incremental filtering)
     pub last_filtered_line: usize,
+
+    /// Help overlay visible
+    pub show_help: bool,
 }
 
 impl App {
@@ -76,6 +79,7 @@ impl App {
             filter_pattern: None,
             follow_mode: false,
             last_filtered_line: 0,
+            show_help: false,
         }
     }
 
@@ -339,15 +343,19 @@ impl App {
                 self.should_quit = true;
             }
 
+            // Help mode
+            AppEvent::ShowHelp => {
+                self.show_help = true;
+            }
+            AppEvent::HideHelp => {
+                self.show_help = false;
+            }
+
             // Future events - not yet implemented
             AppEvent::StartFilter { .. } => {
                 // Will be handled in main loop to trigger background filter
             }
-            AppEvent::ShowHelp
-            | AppEvent::HideHelp
-            | AppEvent::HistoryUp
-            | AppEvent::HistoryDown
-            | AppEvent::JumpToLineInput(_) => {
+            AppEvent::HistoryUp | AppEvent::HistoryDown | AppEvent::JumpToLineInput(_) => {
                 // Not yet implemented - placeholders for future features
             }
         }
@@ -647,5 +655,27 @@ mod tests {
 
         // last_filtered_line should be updated
         assert_eq!(app.last_filtered_line, 10);
+    }
+
+    #[test]
+    fn test_help_mode_toggle() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+        assert!(!app.show_help);
+
+        // Show help
+        app.apply_event(AppEvent::ShowHelp);
+        assert!(app.show_help);
+
+        // Hide help
+        app.apply_event(AppEvent::HideHelp);
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_help_mode_initial_state() {
+        let app = App::new(10);
+        assert!(!app.show_help); // Help should be hidden initially
     }
 }

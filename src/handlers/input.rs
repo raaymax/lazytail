@@ -5,9 +5,26 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Handle keyboard input and return corresponding events
 /// Does not mutate app state directly - returns events to be processed
 pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
+    // If help is showing, most keys just hide help (except quit)
+    if app.show_help {
+        return handle_help_mode(key);
+    }
+
     match app.input_mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::Normal => handle_normal_mode(key),
+    }
+}
+
+/// Handle keyboard input when help overlay is showing
+fn handle_help_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char('q') => vec![AppEvent::Quit],
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::Quit]
+        }
+        // Any other key hides help
+        _ => vec![AppEvent::HideHelp],
     }
 }
 
@@ -45,6 +62,7 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('G') => vec![AppEvent::JumpToEnd, AppEvent::DisableFollowMode],
         KeyCode::Char('f') => vec![AppEvent::ToggleFollowMode],
         KeyCode::Char('/') => vec![AppEvent::StartFilterInput],
+        KeyCode::Char('?') => vec![AppEvent::ShowHelp],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         _ => vec![],
     }
@@ -168,5 +186,33 @@ mod tests {
             events,
             vec![AppEvent::JumpToEnd, AppEvent::DisableFollowMode]
         );
+    }
+
+    #[test]
+    fn test_show_help() {
+        let app = App::new(10);
+        let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::ShowHelp]);
+    }
+
+    #[test]
+    fn test_hide_help_on_any_key() {
+        let mut app = App::new(10);
+        app.show_help = true;
+
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::HideHelp]);
+    }
+
+    #[test]
+    fn test_quit_from_help_mode() {
+        let mut app = App::new(10);
+        app.show_help = true;
+
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::Quit]);
     }
 }

@@ -26,6 +26,11 @@ pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut 
         render_input_prompt(f, chunks[2], app);
     }
 
+    // Render help overlay on top of everything if active
+    if app.show_help {
+        render_help_overlay(f, f.area());
+    }
+
     Ok(())
 }
 
@@ -116,7 +121,8 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         if app.follow_mode { " | FOLLOW" } else { "" }
     );
 
-    let help_text = " q: Quit | ↑↓: Navigate | g/G: Start/End | f: Follow | /: Filter | Esc: Clear";
+    let help_text =
+        " q: Quit | ↑↓: Navigate | g/G: Start/End | f: Follow | /: Filter | Esc: Clear | ?: Help";
 
     let status_lines = vec![
         Line::from(vec![Span::styled(
@@ -150,4 +156,88 @@ fn render_input_prompt(f: &mut Frame, area: Rect, app: &App) {
 
     // Show cursor at the end of input
     f.set_cursor_position((area.x + 9 + app.get_input().len() as u16, area.y + 1));
+}
+
+fn render_help_overlay(f: &mut Frame, area: Rect) {
+    // Calculate centered popup area (60% width, 70% height)
+    let popup_width = (area.width as f32 * 0.6) as u16;
+    let popup_height = (area.height as f32 * 0.7) as u16;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: area.x + popup_x,
+        y: area.y + popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    // Help content
+    let help_lines = vec![
+        Line::from(vec![Span::styled(
+            "LazyTail - Keyboard Shortcuts",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Navigation",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  j / ↓         Scroll down one line"),
+        Line::from("  k / ↑         Scroll up one line"),
+        Line::from("  PageDown      Scroll down one page"),
+        Line::from("  PageUp        Scroll up one page"),
+        Line::from("  g             Jump to start"),
+        Line::from("  G             Jump to end"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Filtering",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  /             Start live filter"),
+        Line::from("  Enter         Close filter input (keep filter)"),
+        Line::from("  Esc           Clear filter / Cancel input"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Modes",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  f             Toggle follow mode"),
+        Line::from("                (auto-scroll to new content)"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Other",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  ?             Show this help"),
+        Line::from("  q / Ctrl+C    Quit"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Press any key to close this help",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        )]),
+    ];
+
+    let help_paragraph = Paragraph::new(help_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Help ")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+
+    f.render_widget(help_paragraph, popup_area);
 }
