@@ -133,27 +133,29 @@ impl App {
         self.selected_line = self.selected_line.saturating_sub(page_size);
     }
 
-    /// Mouse scroll down - moves viewport, keeps selection in view
+    /// Mouse scroll down - moves viewport and selection together
     pub fn mouse_scroll_down(&mut self, lines: usize, visible_height: usize) {
         let max_scroll = self.line_indices.len().saturating_sub(visible_height);
+        let old_scroll = self.scroll_position;
         self.scroll_position = (self.scroll_position + lines).min(max_scroll);
 
-        // If selection is above viewport, move it to top of viewport
-        if self.selected_line < self.scroll_position {
-            self.selected_line = self.scroll_position;
+        // Move selection by the same amount the viewport moved
+        let actual_scroll = self.scroll_position - old_scroll;
+        if actual_scroll > 0 {
+            let max_selection = self.line_indices.len().saturating_sub(1);
+            self.selected_line = (self.selected_line + actual_scroll).min(max_selection);
         }
     }
 
-    /// Mouse scroll up - moves viewport, keeps selection in view
-    pub fn mouse_scroll_up(&mut self, lines: usize, visible_height: usize) {
+    /// Mouse scroll up - moves viewport and selection together
+    pub fn mouse_scroll_up(&mut self, lines: usize, _visible_height: usize) {
+        let old_scroll = self.scroll_position;
         self.scroll_position = self.scroll_position.saturating_sub(lines);
 
-        // If selection is below viewport, move it to bottom of viewport
-        let viewport_end = self.scroll_position + visible_height;
-        if self.selected_line >= viewport_end {
-            self.selected_line = viewport_end
-                .saturating_sub(1)
-                .min(self.line_indices.len() - 1);
+        // Move selection by the same amount the viewport moved
+        let actual_scroll = old_scroll - self.scroll_position;
+        if actual_scroll > 0 {
+            self.selected_line = self.selected_line.saturating_sub(actual_scroll);
         }
     }
 
@@ -920,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mouse_scroll_down_moves_viewport() {
+    fn test_mouse_scroll_down_moves_viewport_and_selection() {
         let mut app = App::new(100);
         let visible_height = 20;
 
@@ -933,12 +935,12 @@ mod tests {
 
         // Viewport should move down
         assert_eq!(app.scroll_position, 3);
-        // Selection should stay at same position (not moved above viewport)
-        assert_eq!(app.selected_line, 5);
+        // Selection should move down by the same amount
+        assert_eq!(app.selected_line, 8);
     }
 
     #[test]
-    fn test_mouse_scroll_down_moves_selection_when_above_viewport() {
+    fn test_mouse_scroll_down_with_selection_at_top() {
         let mut app = App::new(100);
         let visible_height = 20;
 
@@ -951,12 +953,12 @@ mod tests {
 
         // Viewport moved to 5
         assert_eq!(app.scroll_position, 5);
-        // Selection should move to top of viewport (was above)
-        assert_eq!(app.selected_line, 5);
+        // Selection should move down by 5 as well
+        assert_eq!(app.selected_line, 7);
     }
 
     #[test]
-    fn test_mouse_scroll_up_moves_viewport() {
+    fn test_mouse_scroll_up_moves_viewport_and_selection() {
         let mut app = App::new(100);
         let visible_height = 20;
 
@@ -969,12 +971,12 @@ mod tests {
 
         // Viewport should move up
         assert_eq!(app.scroll_position, 17);
-        // Selection should stay at same position (still in viewport)
-        assert_eq!(app.selected_line, 25);
+        // Selection should move up by the same amount
+        assert_eq!(app.selected_line, 22);
     }
 
     #[test]
-    fn test_mouse_scroll_up_moves_selection_when_below_viewport() {
+    fn test_mouse_scroll_up_with_selection_near_bottom() {
         let mut app = App::new(100);
         let visible_height = 20;
 
@@ -987,8 +989,7 @@ mod tests {
 
         // Viewport moved to 10
         assert_eq!(app.scroll_position, 10);
-        // Selection should move to bottom of viewport (was below)
-        // Viewport end = 10 + 20 = 30, selection should be at 29
+        // Selection should move up by 10 as well
         assert_eq!(app.selected_line, 29);
     }
 
@@ -1004,8 +1005,9 @@ mod tests {
         // Try to scroll further down
         app.mouse_scroll_down(10, visible_height);
 
-        // Should not scroll past max
+        // Viewport should not scroll past max (stays at 30)
         assert_eq!(app.scroll_position, 30);
+        // Since viewport didn't move, selection shouldn't move either
         assert_eq!(app.selected_line, 40);
     }
 
@@ -1044,7 +1046,7 @@ mod tests {
 
         // Viewport should move
         assert_eq!(app.scroll_position, 2);
-        // Selection still in viewport, should not move
-        assert_eq!(app.selected_line, 5);
+        // Selection should follow the scroll
+        assert_eq!(app.selected_line, 7);
     }
 }
