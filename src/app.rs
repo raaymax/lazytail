@@ -61,6 +61,9 @@ pub struct App {
 
     /// Help overlay visible
     pub show_help: bool,
+
+    /// Skip scroll adjustment on next render (set by mouse scroll)
+    skip_scroll_adjustment: bool,
 }
 
 impl App {
@@ -81,6 +84,7 @@ impl App {
             follow_mode: false,
             last_filtered_line: 0,
             show_help: false,
+            skip_scroll_adjustment: false,
         }
     }
 
@@ -105,6 +109,12 @@ impl App {
 
     /// Ensure the selected line is visible in the viewport
     pub fn adjust_scroll(&mut self, viewport_height: usize) {
+        // Skip adjustment if mouse scroll just happened (prevents interference)
+        if self.skip_scroll_adjustment {
+            self.skip_scroll_adjustment = false;
+            return;
+        }
+
         // Add some padding at the edges for better UX
         let padding = 3.min(viewport_height / 4);
 
@@ -145,6 +155,9 @@ impl App {
             let max_selection = self.line_indices.len().saturating_sub(1);
             self.selected_line = (self.selected_line + actual_scroll).min(max_selection);
         }
+
+        // Skip scroll adjustment on next render to prevent padding interference
+        self.skip_scroll_adjustment = true;
     }
 
     /// Mouse scroll up - moves viewport and selection together
@@ -157,6 +170,9 @@ impl App {
         if actual_scroll > 0 {
             self.selected_line = self.selected_line.saturating_sub(actual_scroll);
         }
+
+        // Skip scroll adjustment on next render to prevent padding interference
+        self.skip_scroll_adjustment = true;
     }
 
     /// Apply filter results (for full filtering)
@@ -1048,5 +1064,50 @@ mod tests {
         assert_eq!(app.scroll_position, 2);
         // Selection should follow the scroll
         assert_eq!(app.selected_line, 7);
+    }
+
+    #[test]
+    fn test_mouse_scroll_skips_adjust_scroll() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Position selection at top with some scroll
+        app.selected_line = 5;
+        app.scroll_position = 5;
+
+        // Mouse scroll down - this would normally trigger adjust_scroll
+        // because selection is at top of viewport (within padding zone)
+        app.mouse_scroll_down(3, visible_height);
+
+        // Check flag was set
+        assert!(app.skip_scroll_adjustment);
+
+        // After mouse scroll: viewport=8, selection=8
+        assert_eq!(app.scroll_position, 8);
+        assert_eq!(app.selected_line, 8);
+
+        // Call adjust_scroll - it should skip and clear flag
+        app.adjust_scroll(visible_height);
+        assert!(!app.skip_scroll_adjustment);
+
+        // Scroll position should NOT have changed (no padding adjustment)
+        assert_eq!(app.scroll_position, 8);
+        assert_eq!(app.selected_line, 8);
+    }
+
+    #[test]
+    fn test_adjust_scroll_works_normally_without_mouse() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Position selection at top with some scroll
+        app.selected_line = 5;
+        app.scroll_position = 5;
+
+        // Call adjust_scroll without mouse scroll
+        app.adjust_scroll(visible_height);
+
+        // Should apply padding adjustment (selection is at top, should add padding)
+        assert_eq!(app.scroll_position, 2); // 5 - 3 (padding)
     }
 }
