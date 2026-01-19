@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -239,5 +239,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         )
         .style(Style::default().bg(Color::Black).fg(Color::White));
 
+    // Clear the area first to remove background content
+    f.render_widget(Clear, popup_area);
     f.render_widget(help_paragraph, popup_area);
 }
