@@ -54,6 +54,9 @@ pub struct App {
 
     /// Follow mode - auto-scroll to latest logs
     pub follow_mode: bool,
+
+    /// Last line number that was filtered (for incremental filtering)
+    pub last_filtered_line: usize,
 }
 
 impl App {
@@ -72,6 +75,7 @@ impl App {
             should_quit: false,
             filter_pattern: None,
             follow_mode: false,
+            last_filtered_line: 0,
         }
     }
 
@@ -129,7 +133,7 @@ impl App {
         self.line_indices.get(self.selected_line).copied()
     }
 
-    /// Apply filter results
+    /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         let was_filtered = self.mode == ViewMode::Filtered;
         let old_selection = self.selected_line;
@@ -138,6 +142,7 @@ impl App {
         self.mode = ViewMode::Filtered;
         self.filter_pattern = Some(pattern);
         self.filter_state = FilterState::Complete { matches: self.line_indices.len() };
+        self.last_filtered_line = self.total_lines;
 
         // Preserve selection position when updating an existing filter (unless follow mode will handle it)
         if was_filtered && !self.follow_mode {
@@ -150,6 +155,14 @@ impl App {
             self.scroll_position = 0;
         }
         // If follow mode is active, don't set selection or scroll here - let follow mode handle it
+    }
+
+    /// Append incremental filter results (for new logs only)
+    pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
+        self.line_indices.extend(new_matching_indices);
+        self.filter_state = FilterState::Complete { matches: self.line_indices.len() };
+        self.last_filtered_line = self.total_lines;
+        // Don't change selection - let follow mode or user control it
     }
 
     /// Clear filter and return to normal view

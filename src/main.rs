@@ -66,6 +66,9 @@ fn main() -> Result<()> {
     // Track filter receiver
     let mut filter_receiver: Option<std::sync::mpsc::Receiver<filter::engine::FilterProgress>> = None;
 
+    // Track whether the current filter operation is incremental (only new logs) vs full (entire file)
+    let mut is_incremental_filter = false;
+
     // Create file watcher if enabled
     let watcher = if args.watch {
         Some(FileWatcher::new(&file_path)?)
@@ -74,7 +77,7 @@ fn main() -> Result<()> {
     };
 
     // Main loop
-    let res = run_app(&mut terminal, &mut app, reader.clone(), &mut filter_receiver, watcher);
+    let res = run_app(&mut terminal, &mut app, reader.clone(), &mut filter_receiver, &mut is_incremental_filter, watcher);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -97,6 +100,7 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
     reader: Arc<Mutex<dyn LogReader + Send>>,
     filter_receiver: &mut Option<std::sync::mpsc::Receiver<filter::engine::FilterProgress>>,
+    is_incremental_filter: &mut bool,
     watcher: Option<FileWatcher>,
 ) -> Result<()> {
     loop {
@@ -126,6 +130,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             eprintln!("Failed to reload file: {}", e);
                         } else {
                             let new_total = reader_guard.total_lines();
+                            let old_total = app.total_lines;
                             app.total_lines = new_total;
 
                             // If no filter is active, update line indices
@@ -133,18 +138,27 @@ fn run_app<B: ratatui::backend::Backend>(
                                 app.line_indices = (0..new_total).collect();
                                 false
                             } else {
-                                // Re-apply filter on new content
+                                // Apply filter on new content only (incremental filtering)
                                 if let Some(pattern) = app.filter_pattern.clone() {
-                                    let filter: Arc<dyn Filter> = Arc::new(
-                                        StringFilter::new(&pattern, false)
-                                    );
-                                    app.filter_state = app::FilterState::Processing { progress: 0 };
-                                    *filter_receiver = Some(FilterEngine::run_filter(
-                                        reader.clone(),
-                                        filter,
-                                        1000,
-                                    ));
-                                    true
+                                    // Only filter NEW lines that were added
+                                    let start_line = app.last_filtered_line;
+                                    if start_line < new_total {
+                                        let filter: Arc<dyn Filter> = Arc::new(
+                                            StringFilter::new(&pattern, false)
+                                        );
+                                        app.filter_state = app::FilterState::Processing { progress: start_line };
+                                        *is_incremental_filter = true;
+                                        *filter_receiver = Some(FilterEngine::run_filter_range(
+                                            reader.clone(),
+                                            filter,
+                                            1000,
+                                            start_line,
+                                            new_total,
+                                        ));
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
@@ -172,8 +186,14 @@ fn run_app<B: ratatui::backend::Backend>(
                         app.filter_state = app::FilterState::Processing { progress: lines_processed };
                     }
                     filter::engine::FilterProgress::Complete(matching_indices) => {
-                        let pattern = app.filter_pattern.clone().unwrap_or_default();
-                        app.apply_filter(matching_indices, pattern);
+                        if *is_incremental_filter {
+                            // Incremental filtering - append new results to existing filtered lines
+                            app.append_filter_results(matching_indices);
+                        } else {
+                            // Full filtering - replace all filtered lines
+                            let pattern = app.filter_pattern.clone().unwrap_or_default();
+                            app.apply_filter(matching_indices, pattern);
+                        }
                         *filter_receiver = None;
 
                         // If follow mode is enabled, jump to end after filter completes
@@ -205,6 +225,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                 );
                                 app.filter_state = app::FilterState::Processing { progress: 0 };
                                 app.filter_pattern = Some(pattern);
+                                *is_incremental_filter = false;
                                 *filter_receiver = Some(FilterEngine::run_filter(
                                     reader.clone(),
                                     filter,
@@ -226,6 +247,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                 );
                                 app.filter_state = app::FilterState::Processing { progress: 0 };
                                 app.filter_pattern = Some(pattern);
+                                *is_incremental_filter = false;
                                 *filter_receiver = Some(FilterEngine::run_filter(
                                     reader.clone(),
                                     filter,

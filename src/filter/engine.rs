@@ -34,7 +34,31 @@ impl FilterEngine {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            if let Err(e) = Self::process_filter(reader, filter, tx.clone(), progress_interval) {
+            if let Err(e) = Self::process_filter(reader, filter, tx.clone(), progress_interval, 0, None) {
+                let _ = tx.send(FilterProgress::Error(e.to_string()));
+            }
+        });
+
+        rx
+    }
+
+    /// Run a filter on a specific range of lines (for incremental filtering)
+    /// Returns a receiver for progress updates
+    pub fn run_filter_range<R, F>(
+        reader: Arc<Mutex<R>>,
+        filter: Arc<F>,
+        progress_interval: usize,
+        start_line: usize,
+        end_line: usize,
+    ) -> Receiver<FilterProgress>
+    where
+        R: LogReader + Send + 'static + ?Sized,
+        F: Filter + 'static + ?Sized,
+    {
+        let (tx, rx) = channel();
+
+        thread::spawn(move || {
+            if let Err(e) = Self::process_filter(reader, filter, tx.clone(), progress_interval, start_line, Some(end_line)) {
                 let _ = tx.send(FilterProgress::Error(e.to_string()));
             }
         });
@@ -48,6 +72,8 @@ impl FilterEngine {
         filter: Arc<F>,
         tx: Sender<FilterProgress>,
         progress_interval: usize,
+        start_line: usize,
+        end_line: Option<usize>,
     ) -> Result<()>
     where
         R: LogReader + Send + 'static + ?Sized,
@@ -58,9 +84,10 @@ impl FilterEngine {
             reader.total_lines()
         };
 
+        let end = end_line.unwrap_or(total_lines);
         let mut matching_indices = Vec::new();
 
-        for line_idx in 0..total_lines {
+        for line_idx in start_line..end {
             // Get the line
             let line = {
                 let mut reader = reader.lock().unwrap();
