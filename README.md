@@ -9,12 +9,15 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 - **TUI interface** - Clean terminal UI with ratatui
 - **Line selection** - Navigate through logs with keyboard controls
 - **Live filtering** - See results instantly as you type your search string
+- **Filter history** - Navigate previous filter patterns with Up/Down arrows
 - **Background filtering** - Non-blocking regex and string matching filters
 - **File watching** - Auto-reload when log file is modified (using inotify on Linux)
 - **Follow mode** - Auto-scroll to show latest logs as they arrive (like `tail -f`)
 - **ANSI color support** - Parses and renders ANSI escape codes in full color
 - **Raw view mode** - Display logs in their original format with line numbers
 - **Memory efficient** - Viewport-based rendering keeps RAM usage low
+- **Help overlay** - Built-in keyboard shortcut reference (`?` key)
+- **Vim-style navigation** - Line jumping (`:123`), vim keybindings, mouse scroll
 
 ### Keyboard Controls
 
@@ -25,17 +28,21 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 - `PgDn` - Scroll down one page
 - `g` - Jump to start (first line)
 - `G` - Jump to end (last line)
+- `:123` - Jump to line 123 (vim-style)
 - `f` - Toggle follow mode (auto-scroll to new logs)
+- Mouse wheel - Scroll up/down (selection follows scroll)
 
 **Filtering:**
 - `/` - Enter live filter mode
 - Type any text - Results update instantly as you type
+- `↑`/`↓` - Navigate filter history (in filter mode)
 - `Backspace` - Delete characters
 - `Enter` - Close filter prompt (keeps filter active, shown in title bar)
 - `Esc` - Clear filter and close prompt
 - Active filter phrase is always visible in the window title
 
 **General:**
+- `?` - Show help overlay with all keyboard shortcuts
 - `q` or `Ctrl+C` - Quit
 
 ## Installation
@@ -94,6 +101,22 @@ Options:
 6. Press `Esc` (in normal mode) to clear the filter
 
 The filter searches through all lines in the background without blocking the UI, so even with large files the interface remains responsive.
+
+**Filter History:**
+- Press `↑` while in filter mode to recall previous filter patterns
+- Press `↓` to navigate forward through history
+- Up to 50 recent filter patterns are saved
+- Selecting from history immediately applies the filter
+
+### Jumping to Line Numbers
+
+You can jump directly to any line number using vim-style syntax:
+1. Press `:` to enter line jump mode
+2. Type the line number - e.g., `:150`
+3. Press `Enter` to jump to that line
+4. Press `Esc` to cancel
+
+This works in both normal and filtered views. In filtered view, it jumps to the nearest matching line.
 
 ### Using Follow Mode
 
@@ -156,12 +179,15 @@ Any plain text log file works - from development logs to production system logs,
 - [x] Interactive filter input
 - [x] Live filter preview
 - [x] Follow mode (tail -f style)
+- [x] Line number jump (vim-style `:number`)
+- [x] Filter history navigation
+- [x] Mouse scroll support
+- [x] Help overlay
 - [ ] STDIN support for piping logs
 - [ ] Regex filter mode (regex parsing already implemented)
 - [ ] JSON log parsing and formatting
 - [ ] Multiple display modes
 - [ ] Search highlighting
-- [ ] Line number jump
 - [ ] Copy selected line
 - [ ] Case-sensitive filter toggle
 - [ ] Bookmark lines
