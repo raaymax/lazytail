@@ -272,7 +272,10 @@ fn run_app<B: ratatui::backend::Backend>(
                     ));
                     *is_incremental_filter = *incremental;
                 }
-                AppEvent::FilterInputChar(_) | AppEvent::FilterInputBackspace => {
+                AppEvent::FilterInputChar(_)
+                | AppEvent::FilterInputBackspace
+                | AppEvent::HistoryUp
+                | AppEvent::HistoryDown => {
                     // Apply the event first
                     app.apply_event(event.clone());
 
