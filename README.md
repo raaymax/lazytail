@@ -1,4 +1,4 @@
-# LogViewer - TUI Log Viewer for Rust
+# LazyTail - TUI Log Viewer for Rust
 
 A terminal-based log viewer with filtering capabilities, built with Rust and ratatui.
 
@@ -69,13 +69,13 @@ Or build and run the binary:
 
 ```bash
 cargo build --release
-./target/release/logviewer test.log
+./target/release/lazytail test.log
 ```
 
 ### Command Line Options
 
 ```bash
-logviewer [OPTIONS] <FILE>
+lazytail [OPTIONS] <FILE>
 
 Options:
   -s, --stdin              Read from stdin instead of a file

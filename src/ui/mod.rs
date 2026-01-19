@@ -89,10 +89,10 @@ fn render_log_view<R: LogReader + ?Sized>(
     }
 
     let title = match (&app.mode, &app.filter_pattern) {
-        (ViewMode::Normal, None) => "Log Viewer".to_string(),
-        (ViewMode::Filtered, Some(pattern)) => format!("Log Viewer (Filter: \"{}\")", pattern),
-        (ViewMode::Filtered, None) => "Log Viewer (Filtered)".to_string(),
-        (ViewMode::Normal, Some(_)) => "Log Viewer".to_string(),
+        (ViewMode::Normal, None) => "LazyTail".to_string(),
+        (ViewMode::Filtered, Some(pattern)) => format!("LazyTail (Filter: \"{}\")", pattern),
+        (ViewMode::Filtered, None) => "LazyTail (Filtered)".to_string(),
+        (ViewMode::Normal, Some(_)) => "LazyTail".to_string(),
     };
 
     let list = List::new(items)
