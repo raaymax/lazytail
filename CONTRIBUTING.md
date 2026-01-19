@@ -88,6 +88,29 @@ cargo fmt
 
 ## Testing
 
+### Running Tests
+
+```bash
+# Run all fast tests (default - takes ~0.1s)
+cargo test
+
+# Run all tests including slow/integration tests
+cargo test -- --include-ignored
+
+# Run only slow tests
+cargo test -- --ignored
+
+# Run tests for a specific module
+cargo test filter
+cargo test watcher
+```
+
+**Fast vs Slow Tests:**
+- **Fast tests** (default): Unit tests that run in milliseconds
+- **Slow tests** (marked with `#[ignore]`): Integration tests involving real file system operations, timing-sensitive tests, or stress tests
+- CI runs fast tests by default to keep builds quick
+- Developers can optionally run slow tests locally for thorough validation
+
 ### Test Log Files
 
 The repository includes test log files and generators:
