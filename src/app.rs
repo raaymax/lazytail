@@ -133,6 +133,30 @@ impl App {
         self.selected_line = self.selected_line.saturating_sub(page_size);
     }
 
+    /// Mouse scroll down - moves viewport, keeps selection in view
+    pub fn mouse_scroll_down(&mut self, lines: usize, visible_height: usize) {
+        let max_scroll = self.line_indices.len().saturating_sub(visible_height);
+        self.scroll_position = (self.scroll_position + lines).min(max_scroll);
+
+        // If selection is above viewport, move it to top of viewport
+        if self.selected_line < self.scroll_position {
+            self.selected_line = self.scroll_position;
+        }
+    }
+
+    /// Mouse scroll up - moves viewport, keeps selection in view
+    pub fn mouse_scroll_up(&mut self, lines: usize, visible_height: usize) {
+        self.scroll_position = self.scroll_position.saturating_sub(lines);
+
+        // If selection is below viewport, move it to bottom of viewport
+        let viewport_end = self.scroll_position + visible_height;
+        if self.selected_line >= viewport_end {
+            self.selected_line = viewport_end
+                .saturating_sub(1)
+                .min(self.line_indices.len() - 1);
+        }
+    }
+
     /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         let was_filtered = self.mode == ViewMode::Filtered;
@@ -313,6 +337,12 @@ impl App {
             AppEvent::PageUp(page_size) => self.page_up(page_size),
             AppEvent::JumpToStart => self.jump_to_start(),
             AppEvent::JumpToEnd => self.jump_to_end(),
+            AppEvent::MouseScrollDown(_lines) => {
+                // Mouse scroll events will be handled in main loop with visible_height
+            }
+            AppEvent::MouseScrollUp(_lines) => {
+                // Mouse scroll events will be handled in main loop with visible_height
+            }
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
@@ -887,5 +917,134 @@ mod tests {
         // Follow mode should be disabled
         assert!(!app.follow_mode);
         assert_eq!(app.selected_line, 49); // Line 50 is at index 49
+    }
+
+    #[test]
+    fn test_mouse_scroll_down_moves_viewport() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Start at top
+        app.selected_line = 5;
+        app.scroll_position = 0;
+
+        // Scroll down by 3 lines
+        app.mouse_scroll_down(3, visible_height);
+
+        // Viewport should move down
+        assert_eq!(app.scroll_position, 3);
+        // Selection should stay at same position (not moved above viewport)
+        assert_eq!(app.selected_line, 5);
+    }
+
+    #[test]
+    fn test_mouse_scroll_down_moves_selection_when_above_viewport() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Selection at line 2, viewport at 0
+        app.selected_line = 2;
+        app.scroll_position = 0;
+
+        // Scroll down by 5 lines
+        app.mouse_scroll_down(5, visible_height);
+
+        // Viewport moved to 5
+        assert_eq!(app.scroll_position, 5);
+        // Selection should move to top of viewport (was above)
+        assert_eq!(app.selected_line, 5);
+    }
+
+    #[test]
+    fn test_mouse_scroll_up_moves_viewport() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Start scrolled down
+        app.selected_line = 25;
+        app.scroll_position = 20;
+
+        // Scroll up by 3 lines
+        app.mouse_scroll_up(3, visible_height);
+
+        // Viewport should move up
+        assert_eq!(app.scroll_position, 17);
+        // Selection should stay at same position (still in viewport)
+        assert_eq!(app.selected_line, 25);
+    }
+
+    #[test]
+    fn test_mouse_scroll_up_moves_selection_when_below_viewport() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Selection at line 39, viewport at 20
+        app.selected_line = 39;
+        app.scroll_position = 20;
+
+        // Scroll up by 10 lines
+        app.mouse_scroll_up(10, visible_height);
+
+        // Viewport moved to 10
+        assert_eq!(app.scroll_position, 10);
+        // Selection should move to bottom of viewport (was below)
+        // Viewport end = 10 + 20 = 30, selection should be at 29
+        assert_eq!(app.selected_line, 29);
+    }
+
+    #[test]
+    fn test_mouse_scroll_down_at_bottom() {
+        let mut app = App::new(50);
+        let visible_height = 20;
+
+        // Scroll to near bottom
+        app.scroll_position = 30; // Max is 50 - 20 = 30
+        app.selected_line = 40;
+
+        // Try to scroll further down
+        app.mouse_scroll_down(10, visible_height);
+
+        // Should not scroll past max
+        assert_eq!(app.scroll_position, 30);
+        assert_eq!(app.selected_line, 40);
+    }
+
+    #[test]
+    fn test_mouse_scroll_up_at_top() {
+        let mut app = App::new(100);
+        let visible_height = 20;
+
+        // Start at top
+        app.scroll_position = 0;
+        app.selected_line = 5;
+
+        // Try to scroll further up
+        app.mouse_scroll_up(10, visible_height);
+
+        // Should stay at 0
+        assert_eq!(app.scroll_position, 0);
+        assert_eq!(app.selected_line, 5);
+    }
+
+    #[test]
+    fn test_mouse_scroll_with_filtered_view() {
+        let mut app = App::new(100);
+        let visible_height = 10;
+
+        // Apply filter with 20 matching lines
+        let filtered_lines: Vec<usize> = (0..20).map(|i| i * 5).collect();
+        app.apply_filter(filtered_lines, "test".to_string());
+
+        // Start at top with selection in middle of visible area
+        app.selected_line = 5;
+        app.scroll_position = 0;
+
+        // Scroll down by 2
+        app.mouse_scroll_down(2, visible_height);
+
+        // Viewport should move
+        assert_eq!(app.scroll_position, 2);
+        // Selection still in viewport, should not move
+        assert_eq!(app.selected_line, 5);
     }
 }

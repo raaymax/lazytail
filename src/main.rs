@@ -214,20 +214,39 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Handle input
         if crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
-            if let Event::Key(key) = crossterm_event::read()? {
-                // Handle keyboard input and convert to events
-                let mut input_events = handlers::input::handle_input_event(key, app);
+            match crossterm_event::read()? {
+                Event::Key(key) => {
+                    // Handle keyboard input and convert to events
+                    let mut input_events = handlers::input::handle_input_event(key, app);
 
-                // Handle PageDown/PageUp - need terminal size
-                if matches!(key.code, KeyCode::PageDown) {
-                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                    input_events.push(AppEvent::PageDown(page_size));
-                } else if matches!(key.code, KeyCode::PageUp) {
-                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                    input_events.push(AppEvent::PageUp(page_size));
+                    // Handle PageDown/PageUp - need terminal size
+                    if matches!(key.code, KeyCode::PageDown) {
+                        let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                        input_events.push(AppEvent::PageDown(page_size));
+                    } else if matches!(key.code, KeyCode::PageUp) {
+                        let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                        input_events.push(AppEvent::PageUp(page_size));
+                    }
+
+                    events.extend(input_events);
                 }
+                Event::Mouse(mouse_event) => {
+                    use crossterm_event::MouseEventKind;
 
-                events.extend(input_events);
+                    // Handle mouse scroll events
+                    match mouse_event.kind {
+                        MouseEventKind::ScrollDown => {
+                            events.push(AppEvent::MouseScrollDown(3));
+                            events.push(AppEvent::DisableFollowMode);
+                        }
+                        MouseEventKind::ScrollUp => {
+                            events.push(AppEvent::MouseScrollUp(3));
+                            events.push(AppEvent::DisableFollowMode);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -275,6 +294,18 @@ fn run_app<B: ratatui::backend::Backend>(
                         *filter_receiver = None;
                     }
                     continue; // Event already applied above
+                }
+                AppEvent::MouseScrollDown(lines) => {
+                    // Calculate visible height from terminal size
+                    let visible_height = terminal.size()?.height as usize - PAGE_SIZE_OFFSET - 1;
+                    app.mouse_scroll_down(*lines, visible_height);
+                    continue; // Event already applied
+                }
+                AppEvent::MouseScrollUp(lines) => {
+                    // Calculate visible height from terminal size
+                    let visible_height = terminal.size()?.height as usize - PAGE_SIZE_OFFSET - 1;
+                    app.mouse_scroll_up(*lines, visible_height);
+                    continue; // Event already applied
                 }
                 AppEvent::ClearFilter => {
                     *filter_receiver = None;

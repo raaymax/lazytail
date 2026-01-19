@@ -9,6 +9,8 @@ pub enum AppEvent {
     PageUp(usize),
     JumpToStart,
     JumpToEnd,
+    MouseScrollDown(usize), // scroll amount (lines)
+    MouseScrollUp(usize),   // scroll amount (lines)
 
     // Filter events
     StartFilterInput,
