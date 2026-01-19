@@ -9,16 +9,12 @@ use ratatui::{
     Frame,
 };
 
-pub fn render<R: LogReader + ?Sized>(
-    f: &mut Frame,
-    app: &mut App,
-    reader: &mut R,
-) -> Result<()> {
+pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut R) -> Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),      // Main content
-            Constraint::Length(3),   // Status bar
+            Constraint::Min(1),                                               // Main content
+            Constraint::Length(3),                                            // Status bar
             Constraint::Length(if app.is_entering_filter() { 3 } else { 0 }), // Input prompt
         ])
         .split(f.area());
@@ -70,10 +66,9 @@ fn render_log_view<R: LogReader + ?Sized>(
             // Make sure all spans are owned (convert Cow to String)
             if let Some(first_line) = parsed_text.lines.first() {
                 for span in &first_line.spans {
-                    final_line.spans.push(Span::styled(
-                        span.content.to_string(),
-                        span.style,
-                    ));
+                    final_line
+                        .spans
+                        .push(Span::styled(span.content.to_string(), span.style));
                 }
             }
 
@@ -95,8 +90,7 @@ fn render_log_view<R: LogReader + ?Sized>(
         (ViewMode::Normal, Some(_)) => "LazyTail".to_string(),
     };
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
 
     f.render_widget(list, area);
 
@@ -115,7 +109,8 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         },
         match &app.filter_state {
             FilterState::Inactive => String::new(),
-            FilterState::Processing { progress } => format!("| Filtering: {}/{}", progress, app.total_lines),
+            FilterState::Processing { progress } =>
+                format!("| Filtering: {}/{}", progress, app.total_lines),
             FilterState::Complete { matches } => format!("| Matches: {}", matches),
         },
         if app.follow_mode { " | FOLLOW" } else { "" }
@@ -124,16 +119,18 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let help_text = " q: Quit | ↑↓: Navigate | g/G: Start/End | f: Follow | /: Filter | Esc: Clear";
 
     let status_lines = vec![
-        Line::from(vec![
-            Span::styled(status_text, Style::default().add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(vec![
-            Span::styled(help_text, Style::default().fg(Color::DarkGray)),
-        ]),
+        Line::from(vec![Span::styled(
+            status_text,
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![Span::styled(
+            help_text,
+            Style::default().fg(Color::DarkGray),
+        )]),
     ];
 
-    let paragraph = Paragraph::new(status_lines)
-        .block(Block::default().borders(Borders::ALL).title("Status"));
+    let paragraph =
+        Paragraph::new(status_lines).block(Block::default().borders(Borders::ALL).title("Status"));
 
     f.render_widget(paragraph, area);
 }
@@ -143,9 +140,11 @@ fn render_input_prompt(f: &mut Frame, area: Rect, app: &App) {
 
     let input = Paragraph::new(input_text)
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("Live Filter (Enter to close, Esc to clear)"));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Live Filter (Enter to close, Esc to clear)"),
+        );
 
     f.render_widget(input, area);
 

@@ -2,27 +2,21 @@ use super::Filter;
 use regex::Regex;
 
 /// Regex-based filter
+#[allow(dead_code)]
 pub struct RegexFilter {
     regex: Regex,
-    pattern: String,
 }
 
+#[allow(dead_code)]
 impl RegexFilter {
     pub fn new(pattern: &str) -> Result<Self, regex::Error> {
         let regex = Regex::new(pattern)?;
-        Ok(Self {
-            regex,
-            pattern: pattern.to_string(),
-        })
+        Ok(Self { regex })
     }
 }
 
 impl Filter for RegexFilter {
     fn matches(&self, line: &str) -> bool {
         self.regex.is_match(line)
-    }
-
-    fn description(&self) -> String {
-        format!("Regex: {}", self.pattern)
     }
 }

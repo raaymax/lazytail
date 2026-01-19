@@ -2,7 +2,6 @@ use anyhow::Result;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
 
 /// File change notification
 #[derive(Debug, Clone)]
@@ -51,10 +50,5 @@ impl FileWatcher {
     /// Check if there are any pending file events (non-blocking)
     pub fn try_recv(&self) -> Option<FileEvent> {
         self.receiver.try_recv().ok()
-    }
-
-    /// Wait for a file event with timeout
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<FileEvent> {
-        self.receiver.recv_timeout(timeout).ok()
     }
 }

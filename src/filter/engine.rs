@@ -34,7 +34,9 @@ impl FilterEngine {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            if let Err(e) = Self::process_filter(reader, filter, tx.clone(), progress_interval, 0, None) {
+            if let Err(e) =
+                Self::process_filter(reader, filter, tx.clone(), progress_interval, 0, None)
+            {
                 let _ = tx.send(FilterProgress::Error(e.to_string()));
             }
         });
@@ -58,7 +60,14 @@ impl FilterEngine {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            if let Err(e) = Self::process_filter(reader, filter, tx.clone(), progress_interval, start_line, Some(end_line)) {
+            if let Err(e) = Self::process_filter(
+                reader,
+                filter,
+                tx.clone(),
+                progress_interval,
+                start_line,
+                Some(end_line),
+            ) {
                 let _ = tx.send(FilterProgress::Error(e.to_string()));
             }
         });

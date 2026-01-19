@@ -119,18 +119,13 @@ impl App {
 
     /// Scroll down by page
     pub fn page_down(&mut self, page_size: usize) {
-        self.selected_line = (self.selected_line + page_size)
-            .min(self.line_indices.len().saturating_sub(1));
+        self.selected_line =
+            (self.selected_line + page_size).min(self.line_indices.len().saturating_sub(1));
     }
 
     /// Scroll up by page
     pub fn page_up(&mut self, page_size: usize) {
         self.selected_line = self.selected_line.saturating_sub(page_size);
-    }
-
-    /// Get the actual line number for the currently selected line
-    pub fn get_selected_line_number(&self) -> Option<usize> {
-        self.line_indices.get(self.selected_line).copied()
     }
 
     /// Apply filter results (for full filtering)
@@ -141,7 +136,9 @@ impl App {
         self.line_indices = matching_indices;
         self.mode = ViewMode::Filtered;
         self.filter_pattern = Some(pattern);
-        self.filter_state = FilterState::Complete { matches: self.line_indices.len() };
+        self.filter_state = FilterState::Complete {
+            matches: self.line_indices.len(),
+        };
         self.last_filtered_line = self.total_lines;
 
         // Preserve selection position when updating an existing filter (unless follow mode will handle it)
@@ -160,7 +157,9 @@ impl App {
     /// Append incremental filter results (for new logs only)
     pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
         self.line_indices.extend(new_matching_indices);
-        self.filter_state = FilterState::Complete { matches: self.line_indices.len() };
+        self.filter_state = FilterState::Complete {
+            matches: self.line_indices.len(),
+        };
         self.last_filtered_line = self.total_lines;
         // Don't change selection - let follow mode or user control it
     }

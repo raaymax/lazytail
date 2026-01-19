@@ -27,12 +27,4 @@ impl Filter for StringFilter {
             line.to_lowercase().contains(&self.pattern)
         }
     }
-
-    fn description(&self) -> String {
-        format!(
-            "String: {} ({})",
-            self.pattern,
-            if self.case_sensitive { "case-sensitive" } else { "case-insensitive" }
-        )
-    }
 }

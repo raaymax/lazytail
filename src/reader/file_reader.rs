@@ -24,8 +24,7 @@ impl FileReader {
     /// Create a new FileReader and build the line index
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(&path)
-            .context(format!("Failed to open file: {}", path.display()))?;
+        let file = File::open(&path).context(format!("Failed to open file: {}", path.display()))?;
 
         let mut reader = Self {
             path,
@@ -95,11 +94,6 @@ impl FileReader {
 
         Ok(line)
     }
-
-    /// Get the file path
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl LogReader for FileReader {
@@ -115,19 +109,6 @@ impl LogReader for FileReader {
         let offset = self.line_index[index];
         let line = self.read_line_at_offset(offset)?;
         Ok(Some(line))
-    }
-
-    fn get_lines(&mut self, start: usize, count: usize) -> Result<Vec<String>> {
-        let mut lines = Vec::new();
-        let end = (start + count).min(self.total_lines);
-
-        for i in start..end {
-            if let Some(line) = self.get_line(i)? {
-                lines.push(line);
-            }
-        }
-
-        Ok(lines)
     }
 
     fn reload(&mut self) -> Result<()> {
