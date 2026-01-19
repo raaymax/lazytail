@@ -57,6 +57,41 @@ src/
 └── watcher.rs          # File watching with inotify
 ```
 
+## Installation
+
+### Download Pre-built Binaries
+
+Download the latest release for your platform from the [Releases page](https://github.com/raaymax/lazytail/releases):
+
+```bash
+# Linux (x86_64)
+wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-linux-x86_64.tar.gz
+tar xzf lazytail-linux-x86_64.tar.gz
+chmod +x lazytail
+sudo mv lazytail /usr/local/bin/
+
+# macOS (Intel)
+wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-macos-x86_64.tar.gz
+tar xzf lazytail-macos-x86_64.tar.gz
+chmod +x lazytail
+sudo mv lazytail /usr/local/bin/
+
+# macOS (Apple Silicon)
+wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-macos-aarch64.tar.gz
+tar xzf lazytail-macos-aarch64.tar.gz
+chmod +x lazytail
+sudo mv lazytail /usr/local/bin/
+```
+
+### Build from Source
+
+```bash
+git clone https://github.com/raaymax/lazytail.git
+cd lazytail
+cargo build --release
+sudo cp target/release/lazytail /usr/local/bin/
+```
+
 ## Usage
 
 Run the application with a log file:
@@ -175,3 +210,33 @@ The viewer is designed to handle large log files efficiently:
 - **clap** - CLI argument parsing
 - **anyhow** - Error handling
 - **ansi-to-tui** - ANSI escape code parsing and color rendering
+
+## CI/CD
+
+The project uses GitHub Actions for continuous integration and releases:
+
+- **CI Workflow** (`.github/workflows/ci.yml`): Runs on every push and pull request
+  - Tests on Linux and macOS
+  - Runs clippy for linting
+  - Checks code formatting
+  - Builds artifacts for all supported platforms
+
+- **Release Workflow** (`.github/workflows/release.yml`): Triggered on version tags
+  - Builds optimized binaries for Linux (x86_64) and macOS (x86_64, aarch64)
+  - Strips debug symbols to reduce binary size
+  - Creates a GitHub release with compressed binaries
+
+### Creating a Release
+
+To create a new release:
+
+```bash
+# Tag the commit
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow will automatically:
+1. Build binaries for all platforms
+2. Create a GitHub release
+3. Upload the compressed binaries as release assets
