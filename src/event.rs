@@ -56,10 +56,8 @@ pub enum AppEvent {
     LineJumpInputSubmit,
     LineJumpInputCancel,
 
-    // Future events (placeholders for roadmap features)
-    #[allow(dead_code)]
+    // Filter history navigation
     HistoryUp,
-    #[allow(dead_code)]
     HistoryDown,
 
     // System events

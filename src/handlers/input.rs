@@ -36,6 +36,8 @@ fn handle_filter_input_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Backspace => vec![AppEvent::FilterInputBackspace],
         KeyCode::Enter => vec![AppEvent::FilterInputSubmit],
         KeyCode::Esc => vec![AppEvent::FilterInputCancel, AppEvent::ClearFilter],
+        KeyCode::Up => vec![AppEvent::HistoryUp],
+        KeyCode::Down => vec![AppEvent::HistoryDown],
         _ => vec![],
     }
 }
@@ -271,5 +273,23 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::LineJumpInputCancel]);
+    }
+
+    #[test]
+    fn test_filter_input_history_up() {
+        let mut app = App::new(10);
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::HistoryUp]);
+    }
+
+    #[test]
+    fn test_filter_input_history_down() {
+        let mut app = App::new(10);
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::HistoryDown]);
     }
 }

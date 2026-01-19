@@ -64,6 +64,12 @@ pub struct App {
 
     /// Skip scroll adjustment on next render (set by mouse scroll)
     skip_scroll_adjustment: bool,
+
+    /// Filter history (up to 50 entries)
+    filter_history: Vec<String>,
+
+    /// Current position in filter history (None = not navigating)
+    history_index: Option<usize>,
 }
 
 impl App {
@@ -85,6 +91,8 @@ impl App {
             last_filtered_line: 0,
             show_help: false,
             skip_scroll_adjustment: false,
+            filter_history: Vec::new(),
+            history_index: None,
         }
     }
 
@@ -254,6 +262,86 @@ impl App {
     pub fn cancel_filter_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
+        self.history_index = None;
+    }
+
+    /// Add filter pattern to history (called on filter submit)
+    pub fn add_to_history(&mut self, pattern: String) {
+        if pattern.is_empty() {
+            return;
+        }
+
+        // Don't add if it's the same as the last entry
+        if let Some(last) = self.filter_history.last() {
+            if last == &pattern {
+                return;
+            }
+        }
+
+        // Add to history
+        self.filter_history.push(pattern);
+
+        // Limit history to 50 entries
+        if self.filter_history.len() > 50 {
+            self.filter_history.remove(0);
+        }
+
+        // Reset history navigation
+        self.history_index = None;
+    }
+
+    /// Navigate up in filter history (older entries)
+    pub fn history_up(&mut self) {
+        if self.filter_history.is_empty() {
+            return;
+        }
+
+        let new_index = match self.history_index {
+            None => {
+                // First time navigating - save current input and go to most recent
+                Some(self.filter_history.len() - 1)
+            }
+            Some(idx) => {
+                // Already navigating - go to older entry
+                if idx > 0 {
+                    Some(idx - 1)
+                } else {
+                    Some(idx) // At oldest, stay there
+                }
+            }
+        };
+
+        self.history_index = new_index;
+        if let Some(idx) = new_index {
+            self.input_buffer = self.filter_history[idx].clone();
+        }
+    }
+
+    /// Navigate down in filter history (newer entries)
+    pub fn history_down(&mut self) {
+        if self.filter_history.is_empty() {
+            return;
+        }
+
+        let new_index = match self.history_index {
+            None => None, // Not navigating, do nothing
+            Some(idx) => {
+                if idx < self.filter_history.len() - 1 {
+                    Some(idx + 1)
+                } else {
+                    // At newest entry, go back to empty input
+                    None
+                }
+            }
+        };
+
+        self.history_index = new_index;
+        if let Some(idx) = new_index {
+            self.input_buffer = self.filter_history[idx].clone();
+        } else {
+            // Back to empty
+            self.input_buffer.clear();
+        }
     }
 
     /// Add a character to the input buffer
@@ -366,7 +454,12 @@ impl App {
             AppEvent::StartFilterInput => self.start_filter_input(),
             AppEvent::FilterInputChar(c) => self.input_char(c),
             AppEvent::FilterInputBackspace => self.input_backspace(),
-            AppEvent::FilterInputSubmit => self.cancel_filter_input(),
+            AppEvent::FilterInputSubmit => {
+                // Save current filter to history before closing
+                let pattern = self.input_buffer.clone();
+                self.add_to_history(pattern);
+                self.cancel_filter_input();
+            }
             AppEvent::FilterInputCancel => self.cancel_filter_input(),
             AppEvent::ClearFilter => self.clear_filter(),
 
@@ -466,12 +559,13 @@ impl App {
             }
             AppEvent::LineJumpInputCancel => self.cancel_line_jump_input(),
 
+            // Filter history navigation
+            AppEvent::HistoryUp => self.history_up(),
+            AppEvent::HistoryDown => self.history_down(),
+
             // Future events - not yet implemented
             AppEvent::StartFilter { .. } => {
                 // Will be handled in main loop to trigger background filter
-            }
-            AppEvent::HistoryUp | AppEvent::HistoryDown => {
-                // Not yet implemented - placeholders for future features
             }
         }
     }
@@ -1109,5 +1203,196 @@ mod tests {
 
         // Should apply padding adjustment (selection is at top, should add padding)
         assert_eq!(app.scroll_position, 2); // 5 - 3 (padding)
+    }
+
+    #[test]
+    fn test_add_to_history() {
+        let mut app = App::new(10);
+
+        // Add patterns to history
+        app.add_to_history("ERROR".to_string());
+        app.add_to_history("WARN".to_string());
+        app.add_to_history("INFO".to_string());
+
+        assert_eq!(app.filter_history.len(), 3);
+        assert_eq!(app.filter_history[0], "ERROR");
+        assert_eq!(app.filter_history[1], "WARN");
+        assert_eq!(app.filter_history[2], "INFO");
+    }
+
+    #[test]
+    fn test_add_to_history_skips_duplicates() {
+        let mut app = App::new(10);
+
+        app.add_to_history("ERROR".to_string());
+        app.add_to_history("ERROR".to_string()); // Duplicate - should not add
+
+        assert_eq!(app.filter_history.len(), 1);
+    }
+
+    #[test]
+    fn test_add_to_history_skips_empty() {
+        let mut app = App::new(10);
+
+        app.add_to_history("".to_string());
+
+        assert_eq!(app.filter_history.len(), 0);
+    }
+
+    #[test]
+    fn test_history_limit() {
+        let mut app = App::new(10);
+
+        // Add 52 entries to exceed limit of 50
+        for i in 0..52 {
+            app.add_to_history(format!("pattern{}", i));
+        }
+
+        // Should only keep 50 most recent
+        assert_eq!(app.filter_history.len(), 50);
+        // Oldest should be removed
+        assert_eq!(app.filter_history[0], "pattern2");
+        assert_eq!(app.filter_history[49], "pattern51");
+    }
+
+    #[test]
+    fn test_history_up_navigation() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        app.add_to_history("ERROR".to_string());
+        app.add_to_history("WARN".to_string());
+        app.add_to_history("INFO".to_string());
+
+        // Start filter input
+        app.start_filter_input();
+
+        // Navigate up (most recent)
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "INFO");
+        assert_eq!(app.history_index, Some(2));
+
+        // Navigate up again (older)
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "WARN");
+        assert_eq!(app.history_index, Some(1));
+
+        // Navigate up again
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "ERROR");
+        assert_eq!(app.history_index, Some(0));
+
+        // Try to go up past oldest (should stay)
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "ERROR");
+        assert_eq!(app.history_index, Some(0));
+    }
+
+    #[test]
+    fn test_history_down_navigation() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        app.add_to_history("ERROR".to_string());
+        app.add_to_history("WARN".to_string());
+        app.add_to_history("INFO".to_string());
+
+        app.start_filter_input();
+
+        // Navigate up to oldest
+        app.apply_event(AppEvent::HistoryUp);
+        app.apply_event(AppEvent::HistoryUp);
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "ERROR");
+
+        // Navigate down (newer)
+        app.apply_event(AppEvent::HistoryDown);
+        assert_eq!(app.input_buffer, "WARN");
+        assert_eq!(app.history_index, Some(1));
+
+        // Navigate down again
+        app.apply_event(AppEvent::HistoryDown);
+        assert_eq!(app.input_buffer, "INFO");
+        assert_eq!(app.history_index, Some(2));
+
+        // Navigate down past newest (should clear)
+        app.apply_event(AppEvent::HistoryDown);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.history_index, None);
+    }
+
+    #[test]
+    fn test_history_down_when_not_navigating() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        app.add_to_history("ERROR".to_string());
+        app.start_filter_input();
+
+        // Down arrow when not navigating should do nothing
+        app.apply_event(AppEvent::HistoryDown);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.history_index, None);
+    }
+
+    #[test]
+    fn test_filter_submit_saves_to_history() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        // Start filter and type
+        app.start_filter_input();
+        app.input_char('E');
+        app.input_char('R');
+        app.input_char('R');
+
+        // Submit filter
+        app.apply_event(AppEvent::FilterInputSubmit);
+
+        // Should be saved to history
+        assert_eq!(app.filter_history.len(), 1);
+        assert_eq!(app.filter_history[0], "ERR");
+    }
+
+    #[test]
+    fn test_cancel_filter_resets_history_index() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        app.add_to_history("ERROR".to_string());
+        app.start_filter_input();
+
+        // Navigate history
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.history_index, Some(0));
+
+        // Cancel filter
+        app.cancel_filter_input();
+
+        // History index should be reset
+        assert_eq!(app.history_index, None);
+    }
+
+    #[test]
+    fn test_history_empty() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(10);
+
+        app.start_filter_input();
+
+        // Try to navigate empty history
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.history_index, None);
+
+        app.apply_event(AppEvent::HistoryDown);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.history_index, None);
     }
 }

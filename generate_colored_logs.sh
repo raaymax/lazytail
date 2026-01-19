@@ -111,5 +111,5 @@ while true; do
     echo -e "[$COUNTER] $COLORED_TIMESTAMP $COLORED_LEVEL $COLORED_MESSAGE"
 
     # Sleep for 1 second
-    sleep 1
+    sleep 0.1
 done
