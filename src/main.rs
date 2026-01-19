@@ -1,5 +1,7 @@
 mod app;
+mod event;
 mod filter;
+mod handlers;
 mod reader;
 mod ui;
 mod watcher;
@@ -8,7 +10,7 @@ use anyhow::{Context, Result};
 use app::App;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -141,6 +143,8 @@ fn run_app<B: ratatui::backend::Backend>(
     is_incremental_filter: &mut bool,
     watcher: Option<FileWatcher>,
 ) -> Result<()> {
+    use event::AppEvent;
+
     loop {
         // Render
         terminal.draw(|f| {
@@ -157,85 +161,32 @@ fn run_app<B: ratatui::backend::Backend>(
             terminal.hide_cursor()?;
         }
 
+        // Collect events from different sources
+        let mut events = Vec::new();
+
         // Check for file changes
         if let Some(ref watcher) = watcher {
-            if let Some(event) = watcher.try_recv() {
-                match event {
+            if let Some(file_event) = watcher.try_recv() {
+                match file_event {
                     watcher::FileEvent::Modified => {
                         // Reload the file reader
                         let mut reader_guard = reader.lock().unwrap();
                         if let Err(e) = reader_guard.reload() {
-                            eprintln!("Failed to reload file: {}", e);
+                            events
+                                .push(AppEvent::FileError(format!("Failed to reload file: {}", e)));
                         } else {
                             let new_total = reader_guard.total_lines();
                             let old_total = app.total_lines;
-                            app.total_lines = new_total;
+                            drop(reader_guard);
 
-                            // Detect file truncation (file got smaller)
-                            if new_total < old_total {
-                                eprintln!("File truncated: {} -> {} lines", old_total, new_total);
-                                // Reset state on truncation
-                                app.line_indices = (0..new_total).collect();
-                                app.mode = app::ViewMode::Normal;
-                                app.filter_pattern = None;
-                                app.filter_state = app::FilterState::Inactive;
-                                app.last_filtered_line = 0;
-                                // Cancel any in-progress filter
-                                *filter_receiver = None;
-                                *is_incremental_filter = false;
-                                // Ensure selection is valid
-                                if app.selected_line >= new_total && new_total > 0 {
-                                    app.selected_line = new_total - 1;
-                                } else if new_total == 0 {
-                                    app.selected_line = 0;
-                                }
-                                // Don't reapply filters on truncation
-                                let is_reapplying_filter = false;
-
-                                if app.follow_mode && !is_reapplying_filter {
-                                    app.jump_to_end();
-                                }
-                            } else if app.mode == app::ViewMode::Normal {
-                                // File grew or stayed same size, no filter active
-                                app.line_indices = (0..new_total).collect();
-                                let is_reapplying_filter = false;
-
-                                if app.follow_mode && !is_reapplying_filter {
-                                    app.jump_to_end();
-                                }
-                            } else {
-                                // File grew with active filter - apply filter on new content only (incremental filtering)
-                                let is_reapplying_filter =
-                                    if let Some(pattern) = app.filter_pattern.clone() {
-                                        // Only filter NEW lines that were added
-                                        let start_line = app.last_filtered_line;
-                                        if start_line < new_total {
-                                            *filter_receiver = Some(trigger_filter(
-                                                app,
-                                                reader.clone(),
-                                                pattern,
-                                                is_incremental_filter,
-                                                Some(start_line),
-                                                Some(new_total),
-                                            ));
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    };
-
-                                // If follow mode is enabled and we're not re-applying a filter, jump to end
-                                // (if we're re-applying, the filter completion will handle the jump)
-                                if app.follow_mode && !is_reapplying_filter {
-                                    app.jump_to_end();
-                                }
-                            }
+                            // Generate events based on file modification
+                            events.extend(handlers::file_events::process_file_modification(
+                                new_total, old_total, app,
+                            ));
                         }
                     }
                     watcher::FileEvent::Error(err) => {
-                        eprintln!("File watcher error: {}", err);
+                        events.push(AppEvent::FileError(err));
                     }
                 }
             }
@@ -244,147 +195,125 @@ fn run_app<B: ratatui::backend::Backend>(
         // Check for filter progress
         if let Some(rx) = filter_receiver {
             if let Ok(progress) = rx.try_recv() {
-                match progress {
-                    filter::engine::FilterProgress::Processing(lines_processed) => {
-                        app.filter_state = app::FilterState::Processing {
-                            progress: lines_processed,
-                        };
-                    }
-                    filter::engine::FilterProgress::Complete(matching_indices) => {
-                        if *is_incremental_filter {
-                            // Incremental filtering - append new results to existing filtered lines
-                            app.append_filter_results(matching_indices);
-                        } else {
-                            // Full filtering - replace all filtered lines
-                            let pattern = app.filter_pattern.clone().unwrap_or_default();
-                            app.apply_filter(matching_indices, pattern);
-                        }
-                        *filter_receiver = None;
+                // Handle filter progress and convert to events
+                let filter_events =
+                    handlers::filter::handle_filter_progress(progress, *is_incremental_filter);
+                events.extend(filter_events);
 
-                        // If follow mode is enabled, jump to end after filter completes
-                        if app.follow_mode {
-                            app.jump_to_end();
-                        }
-                    }
-                    filter::engine::FilterProgress::Error(err) => {
-                        eprintln!("Filter error: {}", err);
-                        *filter_receiver = None;
-                    }
+                // Check if filter completed (to clear receiver)
+                if events.iter().any(|e| {
+                    matches!(
+                        e,
+                        AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
+                    )
+                }) {
+                    *filter_receiver = None;
                 }
             }
         }
 
         // Handle input
-        if event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
-            if let Event::Key(key) = event::read()? {
-                if app.is_entering_filter() {
-                    // Handle filter input mode
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            app.input_char(c);
-                            // Trigger live filter preview
-                            let pattern = app.get_input().to_string();
-                            if !pattern.is_empty() {
-                                app.filter_pattern = Some(pattern.clone());
-                                *filter_receiver = Some(trigger_filter(
-                                    app,
-                                    reader.clone(),
-                                    pattern,
-                                    is_incremental_filter,
-                                    None,
-                                    None,
-                                ));
-                            } else {
-                                // Empty input - show all lines
-                                app.clear_filter();
-                                *filter_receiver = None;
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            app.input_backspace();
-                            // Trigger live filter preview
-                            let pattern = app.get_input().to_string();
-                            if !pattern.is_empty() {
-                                app.filter_pattern = Some(pattern.clone());
-                                *filter_receiver = Some(trigger_filter(
-                                    app,
-                                    reader.clone(),
-                                    pattern,
-                                    is_incremental_filter,
-                                    None,
-                                    None,
-                                ));
-                            } else {
-                                // Empty input - show all lines
-                                app.clear_filter();
-                                *filter_receiver = None;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            // Just exit input mode, keep the current filter active
-                            app.cancel_filter_input();
-                        }
-                        KeyCode::Esc => {
-                            // Cancel input and clear filter
-                            app.cancel_filter_input();
-                            app.clear_filter();
-                            *filter_receiver = None;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    // Handle normal navigation mode
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            app.should_quit = true;
-                        }
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.should_quit = true;
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            app.scroll_down();
-                            // Disable follow mode on manual scroll
-                            app.follow_mode = false;
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            app.scroll_up();
-                            // Disable follow mode on manual scroll
-                            app.follow_mode = false;
-                        }
-                        KeyCode::PageDown => {
-                            let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                            app.page_down(page_size);
-                            // Disable follow mode on manual scroll
-                            app.follow_mode = false;
-                        }
-                        KeyCode::PageUp => {
-                            let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                            app.page_up(page_size);
-                            // Disable follow mode on manual scroll
-                            app.follow_mode = false;
-                        }
-                        KeyCode::Char('g') => {
-                            app.jump_to_start();
-                            app.follow_mode = false;
-                        }
-                        KeyCode::Char('G') => {
-                            app.jump_to_end();
-                            app.follow_mode = false;
-                        }
-                        KeyCode::Char('f') => {
-                            app.toggle_follow_mode();
-                        }
-                        KeyCode::Char('/') => {
-                            app.start_filter_input();
-                        }
-                        KeyCode::Esc => {
-                            app.clear_filter();
-                            *filter_receiver = None;
-                        }
-                        _ => {}
-                    }
+        if crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
+            if let Event::Key(key) = crossterm_event::read()? {
+                // Handle keyboard input and convert to events
+                let mut input_events = handlers::input::handle_input_event(key, app);
+
+                // Handle PageDown/PageUp - need terminal size
+                if matches!(key.code, KeyCode::PageDown) {
+                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                    input_events.push(AppEvent::PageDown(page_size));
+                } else if matches!(key.code, KeyCode::PageUp) {
+                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                    input_events.push(AppEvent::PageUp(page_size));
                 }
+
+                events.extend(input_events);
             }
+        }
+
+        // Process all collected events
+        for event in events.clone() {
+            // Handle special events that need side effects (like starting filters)
+            match &event {
+                AppEvent::StartFilter {
+                    pattern,
+                    incremental,
+                    range,
+                } => {
+                    // Set filter pattern before triggering
+                    app.filter_pattern = Some(pattern.clone());
+
+                    *filter_receiver = Some(trigger_filter(
+                        app,
+                        reader.clone(),
+                        pattern.clone(),
+                        is_incremental_filter,
+                        range.map(|(start, _)| start),
+                        range.map(|(_, end)| end),
+                    ));
+                    *is_incremental_filter = *incremental;
+                }
+                AppEvent::FilterInputChar(_) | AppEvent::FilterInputBackspace => {
+                    // Apply the event first
+                    app.apply_event(event.clone());
+
+                    // Then trigger live filter preview
+                    let pattern = app.get_input().to_string();
+                    if !pattern.is_empty() {
+                        app.filter_pattern = Some(pattern.clone());
+                        *filter_receiver = Some(trigger_filter(
+                            app,
+                            reader.clone(),
+                            pattern,
+                            is_incremental_filter,
+                            None,
+                            None,
+                        ));
+                    } else {
+                        // Empty input - clear filter
+                        app.clear_filter();
+                        *filter_receiver = None;
+                    }
+                    continue; // Event already applied above
+                }
+                AppEvent::ClearFilter => {
+                    *filter_receiver = None;
+                }
+                AppEvent::FileTruncated { .. } => {
+                    // Cancel any in-progress filter on truncation
+                    *filter_receiver = None;
+                    *is_incremental_filter = false;
+                }
+                AppEvent::FilterComplete { .. } => {
+                    // Apply the event first
+                    app.apply_event(event.clone());
+
+                    // Then handle follow mode jump
+                    if app.follow_mode {
+                        app.jump_to_end();
+                    }
+                    continue; // Event already applied above
+                }
+                AppEvent::FileModified { .. } | AppEvent::FileError(_) => {
+                    // For file events, check if we need to jump to end in follow mode
+                    let should_jump_follow = app.follow_mode
+                        && app.mode == app::ViewMode::Normal
+                        && !events
+                            .iter()
+                            .any(|e| matches!(e, AppEvent::StartFilter { .. }));
+
+                    app.apply_event(event.clone());
+
+                    if should_jump_follow {
+                        app.jump_to_end();
+                    }
+                    continue; // Event already applied above
+                }
+                _ => {}
+            }
+
+            // Apply the event to app state
+            app.apply_event(event);
         }
 
         if app.should_quit {

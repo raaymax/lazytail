@@ -131,7 +131,8 @@ impl App {
     /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         let was_filtered = self.mode == ViewMode::Filtered;
-        let old_selection = self.selected_line;
+        // Remember which actual line was selected before changing filter
+        let actual_line_number = self.line_indices.get(self.selected_line).copied();
 
         self.line_indices = matching_indices;
         self.mode = ViewMode::Filtered;
@@ -141,10 +142,22 @@ impl App {
         };
         self.last_filtered_line = self.total_lines;
 
-        // Preserve selection position when updating an existing filter (unless follow mode will handle it)
+        // Preserve selection when updating an existing filter (unless follow mode will handle it)
         if was_filtered && !self.follow_mode {
-            // Try to keep selection at the same position, but clamp to new bounds
-            self.selected_line = old_selection.min(self.line_indices.len().saturating_sub(1));
+            // Try to keep selection on the same actual line
+            if let Some(line_num) = actual_line_number {
+                // Find where this line is in the new filtered results
+                if let Some(new_index) = self.line_indices.iter().position(|&l| l == line_num) {
+                    self.selected_line = new_index;
+                } else {
+                    // Line not in new results, try to keep similar position
+                    self.selected_line = self
+                        .selected_line
+                        .min(self.line_indices.len().saturating_sub(1));
+                }
+            } else {
+                self.selected_line = 0;
+            }
             // Don't reset scroll_position - let adjust_scroll handle it based on the preserved selection
         } else if !self.follow_mode {
             // New filter - start at the top
@@ -234,6 +247,110 @@ impl App {
     /// Jump to the beginning of the log
     pub fn jump_to_start(&mut self) {
         self.selected_line = 0;
+    }
+
+    /// Apply an event to the application state
+    /// This is the central event handler that modifies app state based on events
+    pub fn apply_event(&mut self, event: crate::event::AppEvent) {
+        use crate::event::AppEvent;
+
+        match event {
+            // Navigation events
+            AppEvent::ScrollDown => self.scroll_down(),
+            AppEvent::ScrollUp => self.scroll_up(),
+            AppEvent::PageDown(page_size) => self.page_down(page_size),
+            AppEvent::PageUp(page_size) => self.page_up(page_size),
+            AppEvent::JumpToStart => self.jump_to_start(),
+            AppEvent::JumpToEnd => self.jump_to_end(),
+
+            // Filter input events
+            AppEvent::StartFilterInput => self.start_filter_input(),
+            AppEvent::FilterInputChar(c) => self.input_char(c),
+            AppEvent::FilterInputBackspace => self.input_backspace(),
+            AppEvent::FilterInputSubmit => self.cancel_filter_input(),
+            AppEvent::FilterInputCancel => self.cancel_filter_input(),
+            AppEvent::ClearFilter => self.clear_filter(),
+
+            // Filter progress events
+            AppEvent::FilterProgress(lines_processed) => {
+                self.filter_state = FilterState::Processing {
+                    progress: lines_processed,
+                };
+            }
+            AppEvent::FilterComplete {
+                indices,
+                incremental,
+            } => {
+                if incremental {
+                    self.append_filter_results(indices);
+                } else {
+                    let pattern = self.filter_pattern.clone().unwrap_or_default();
+                    self.apply_filter(indices, pattern);
+                }
+                // Follow mode jump will be handled separately in main loop
+            }
+            AppEvent::FilterError(err) => {
+                eprintln!("Filter error: {}", err);
+                self.filter_state = FilterState::Inactive;
+            }
+
+            // File events
+            AppEvent::FileModified {
+                new_total,
+                old_total: _,
+            } => {
+                self.total_lines = new_total;
+                if self.mode == ViewMode::Normal {
+                    self.line_indices = (0..new_total).collect();
+                }
+                // Incremental filter will be handled by StartFilter event
+            }
+            AppEvent::FileTruncated { new_total } => {
+                eprintln!(
+                    "File truncated: {} -> {} lines",
+                    self.total_lines, new_total
+                );
+                // Reset state on truncation
+                self.total_lines = new_total;
+                self.line_indices = (0..new_total).collect();
+                self.mode = ViewMode::Normal;
+                self.filter_pattern = None;
+                self.filter_state = FilterState::Inactive;
+                self.last_filtered_line = 0;
+                // Ensure selection is valid
+                if self.selected_line >= new_total && new_total > 0 {
+                    self.selected_line = new_total - 1;
+                } else if new_total == 0 {
+                    self.selected_line = 0;
+                }
+            }
+            AppEvent::FileError(err) => {
+                eprintln!("File watcher error: {}", err);
+            }
+
+            // Mode toggles
+            AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
+            AppEvent::DisableFollowMode => {
+                self.follow_mode = false;
+            }
+
+            // System events
+            AppEvent::Quit => {
+                self.should_quit = true;
+            }
+
+            // Future events - not yet implemented
+            AppEvent::StartFilter { .. } => {
+                // Will be handled in main loop to trigger background filter
+            }
+            AppEvent::ShowHelp
+            | AppEvent::HideHelp
+            | AppEvent::HistoryUp
+            | AppEvent::HistoryDown
+            | AppEvent::JumpToLineInput(_) => {
+                // Not yet implemented - placeholders for future features
+            }
+        }
     }
 }
 
@@ -333,17 +450,34 @@ mod tests {
 
     #[test]
     fn test_filter_preserves_selection_on_update() {
-        let mut app = App::new(10);
+        let mut app = App::new(20);
 
         // Apply initial filter
         app.apply_filter(vec![1, 3, 5, 7, 9], "test".to_string());
-        app.selected_line = 2; // Select line 5 (index 2 in filtered view)
+        app.selected_line = 2; // Select index 2, which is actual line 5
 
-        // Update filter with new matches
-        app.apply_filter(vec![1, 3, 5, 7, 9, 11], "test".to_string());
+        // Update filter - line 5 is still in results but at different index
+        app.apply_filter(vec![1, 5, 9], "test".to_string());
 
-        // Selection should be preserved
-        assert_eq!(app.selected_line, 2);
+        // Selection should stay on line 5 (now at index 1)
+        assert_eq!(app.selected_line, 1);
+        assert_eq!(app.line_indices[app.selected_line], 5);
+    }
+
+    #[test]
+    fn test_filter_update_when_selected_line_not_in_results() {
+        let mut app = App::new(20);
+
+        // Apply initial filter
+        app.apply_filter(vec![1, 3, 5, 7, 9], "test".to_string());
+        app.selected_line = 2; // Select index 2, which is actual line 5
+
+        // Update filter - line 5 is NOT in new results
+        app.apply_filter(vec![1, 3, 7], "test".to_string());
+
+        // Selection should be clamped to valid range (keeps similar position)
+        assert_eq!(app.selected_line, 2); // Index 2 is now line 7
+        assert_eq!(app.line_indices[app.selected_line], 7);
     }
 
     #[test]
