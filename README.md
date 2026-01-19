@@ -1,6 +1,6 @@
-# LazyTail - TUI Log Viewer for Rust
+# LazyTail - Terminal-Based Log Viewer
 
-A terminal-based log viewer with filtering capabilities, built with Rust and ratatui.
+A fast, universal terminal-based log viewer with live filtering and follow mode. Works with any text log files from applications, services, containers, or systems.
 
 ## Features
 
@@ -107,12 +107,48 @@ File watching is enabled by default, so new log lines will appear automatically 
 
 ### ANSI Color Support
 
-LazyTail parses ANSI escape codes and renders them in full color! Colored logs from other tools (like `docker logs`, `kubectl logs`, or application logs with color formatting) display beautifully:
-- **Green** for INFO
-- **Cyan** for DEBUG
-- **Yellow** for WARN
-- **Red** for ERROR
-- Plus all other ANSI colors and styles (bold, dim, etc.)
+LazyTail parses ANSI escape codes and renders them in full color! Colored logs from other tools display beautifully with their original formatting preserved.
+
+### Use Cases
+
+LazyTail works with any text-based log files:
+
+**Application Logs:**
+```bash
+lazytail /var/log/myapp/application.log
+lazytail ~/.pm2/logs/app-out.log
+```
+
+**System Logs:**
+```bash
+lazytail /var/log/syslog
+lazytail /var/log/auth.log
+```
+
+**Container Logs:**
+```bash
+# Docker
+docker logs my-container > container.log
+lazytail container.log
+
+# Kubernetes
+kubectl logs pod-name > pod.log
+lazytail pod.log
+```
+
+**Web Server Logs:**
+```bash
+lazytail /var/log/nginx/access.log
+lazytail /var/log/apache2/error.log
+```
+
+**Build/CI Logs:**
+```bash
+lazytail build-output.log
+lazytail ci-pipeline.log
+```
+
+Any plain text log file works - from development logs to production system logs, with or without ANSI colors.
 
 ## Upcoming Features
 
