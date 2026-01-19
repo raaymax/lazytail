@@ -47,13 +47,18 @@ pub enum AppEvent {
     ShowHelp,
     HideHelp,
 
+    // Line jump events
+    StartLineJumpInput,
+    LineJumpInputChar(char),
+    LineJumpInputBackspace,
+    LineJumpInputSubmit,
+    LineJumpInputCancel,
+
     // Future events (placeholders for roadmap features)
     #[allow(dead_code)]
     HistoryUp,
     #[allow(dead_code)]
     HistoryDown,
-    #[allow(dead_code)]
-    JumpToLineInput(String),
 
     // System events
     Quit,

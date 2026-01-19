@@ -18,6 +18,7 @@ pub enum FilterState {
 pub enum InputMode {
     Normal,
     EnteringFilter,
+    EnteringLineJump,
 }
 
 /// Main application state
@@ -233,6 +234,52 @@ impl App {
         self.input_mode == InputMode::EnteringFilter
     }
 
+    /// Enter line jump input mode
+    pub fn start_line_jump_input(&mut self) {
+        self.input_mode = InputMode::EnteringLineJump;
+        self.input_buffer.clear();
+    }
+
+    /// Cancel line jump input and return to normal mode
+    pub fn cancel_line_jump_input(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+    }
+
+    /// Check if currently entering line jump input
+    pub fn is_entering_line_jump(&self) -> bool {
+        self.input_mode == InputMode::EnteringLineJump
+    }
+
+    /// Jump to a specific line number (1-indexed)
+    pub fn jump_to_line(&mut self, line_number: usize) {
+        if line_number == 0 || self.line_indices.is_empty() {
+            return;
+        }
+
+        // Convert 1-indexed line number to actual file line index (0-indexed)
+        let target_line = line_number.saturating_sub(1);
+
+        // Find the position in line_indices that contains this line number
+        if let Some(position) = self.line_indices.iter().position(|&l| l == target_line) {
+            self.selected_line = position;
+        } else if target_line >= self.total_lines {
+            // If line number is beyond total lines, jump to end
+            self.selected_line = self.line_indices.len().saturating_sub(1);
+        } else {
+            // Line exists in file but not in current view (filtered out)
+            // Jump to nearest line that exists in view
+            let nearest = self
+                .line_indices
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &l)| l.abs_diff(target_line))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.selected_line = nearest;
+        }
+    }
+
     /// Toggle follow mode
     pub fn toggle_follow_mode(&mut self) {
         self.follow_mode = !self.follow_mode;
@@ -351,11 +398,31 @@ impl App {
                 self.show_help = false;
             }
 
+            // Line jump events
+            AppEvent::StartLineJumpInput => self.start_line_jump_input(),
+            AppEvent::LineJumpInputChar(c) => {
+                // Only allow digits in line jump input
+                if c.is_ascii_digit() {
+                    self.input_char(c);
+                }
+            }
+            AppEvent::LineJumpInputBackspace => self.input_backspace(),
+            AppEvent::LineJumpInputSubmit => {
+                // Parse the input and jump to the line
+                if let Ok(line_num) = self.input_buffer.parse::<usize>() {
+                    self.jump_to_line(line_num);
+                    // Disable follow mode when explicitly jumping to a line
+                    self.follow_mode = false;
+                }
+                self.cancel_line_jump_input();
+            }
+            AppEvent::LineJumpInputCancel => self.cancel_line_jump_input(),
+
             // Future events - not yet implemented
             AppEvent::StartFilter { .. } => {
                 // Will be handled in main loop to trigger background filter
             }
-            AppEvent::HistoryUp | AppEvent::HistoryDown | AppEvent::JumpToLineInput(_) => {
+            AppEvent::HistoryUp | AppEvent::HistoryDown => {
                 // Not yet implemented - placeholders for future features
             }
         }
@@ -677,5 +744,148 @@ mod tests {
     fn test_help_mode_initial_state() {
         let app = App::new(10);
         assert!(!app.show_help); // Help should be hidden initially
+    }
+
+    #[test]
+    fn test_line_jump_input_mode() {
+        let mut app = App::new(10);
+
+        // Start line jump input
+        app.start_line_jump_input();
+        assert!(app.is_entering_line_jump());
+        assert_eq!(app.get_input(), "");
+
+        // Cancel line jump input
+        app.cancel_line_jump_input();
+        assert!(!app.is_entering_line_jump());
+        assert_eq!(app.get_input(), "");
+    }
+
+    #[test]
+    fn test_jump_to_line_basic() {
+        let mut app = App::new(100);
+
+        // Jump to line 50 (1-indexed)
+        app.jump_to_line(50);
+        assert_eq!(app.selected_line, 49); // 0-indexed
+
+        // Jump to line 1
+        app.jump_to_line(1);
+        assert_eq!(app.selected_line, 0);
+
+        // Jump to line 100
+        app.jump_to_line(100);
+        assert_eq!(app.selected_line, 99);
+    }
+
+    #[test]
+    fn test_jump_to_line_out_of_bounds() {
+        let mut app = App::new(50);
+
+        // Jump to line beyond total lines - should go to end
+        app.jump_to_line(200);
+        assert_eq!(app.selected_line, 49);
+
+        // Jump to line 0 - should do nothing
+        let old_selection = app.selected_line;
+        app.jump_to_line(0);
+        assert_eq!(app.selected_line, old_selection);
+    }
+
+    #[test]
+    fn test_jump_to_line_with_filter() {
+        let mut app = App::new(100);
+
+        // Apply filter (only lines 10, 30, 50, 70, 90 visible)
+        app.apply_filter(vec![10, 30, 50, 70, 90], "test".to_string());
+
+        // Jump to line 31 (1-indexed) which maps to index 30 (0-indexed)
+        app.jump_to_line(31);
+        assert_eq!(app.selected_line, 1); // Should be at position 1 in filtered results
+
+        // Jump to line 91 (last filtered line)
+        app.jump_to_line(91);
+        assert_eq!(app.selected_line, 4); // Position 4 in filtered results
+
+        // Jump to line 20 (not in filtered results) - should find nearest
+        app.jump_to_line(20);
+        // Should jump to nearest visible line (10 or 30)
+        let selected_actual_line = app.line_indices[app.selected_line];
+        assert!(selected_actual_line == 10 || selected_actual_line == 30);
+    }
+
+    #[test]
+    fn test_jump_to_line_empty_file() {
+        let mut app = App::new(0);
+
+        // Jump to any line in empty file - should do nothing
+        app.jump_to_line(1);
+        assert_eq!(app.selected_line, 0);
+    }
+
+    #[test]
+    fn test_line_jump_input_events() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(100);
+
+        // Start line jump input
+        app.apply_event(AppEvent::StartLineJumpInput);
+        assert!(app.is_entering_line_jump());
+
+        // Add digits
+        app.apply_event(AppEvent::LineJumpInputChar('5'));
+        app.apply_event(AppEvent::LineJumpInputChar('0'));
+        assert_eq!(app.get_input(), "50");
+
+        // Non-digit should not be added
+        app.apply_event(AppEvent::LineJumpInputChar('a'));
+        assert_eq!(app.get_input(), "50"); // Unchanged
+
+        // Backspace
+        app.apply_event(AppEvent::LineJumpInputBackspace);
+        assert_eq!(app.get_input(), "5");
+
+        // Submit
+        app.apply_event(AppEvent::LineJumpInputSubmit);
+        assert!(!app.is_entering_line_jump());
+        assert_eq!(app.selected_line, 4); // Line 5 is at index 4
+    }
+
+    #[test]
+    fn test_line_jump_input_cancel() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(100);
+        app.selected_line = 10;
+
+        // Start and enter some input
+        app.apply_event(AppEvent::StartLineJumpInput);
+        app.apply_event(AppEvent::LineJumpInputChar('5'));
+        app.apply_event(AppEvent::LineJumpInputChar('0'));
+
+        // Cancel without jumping
+        app.apply_event(AppEvent::LineJumpInputCancel);
+        assert!(!app.is_entering_line_jump());
+        assert_eq!(app.selected_line, 10); // Should not have moved
+        assert_eq!(app.get_input(), ""); // Input buffer cleared
+    }
+
+    #[test]
+    fn test_line_jump_disables_follow_mode() {
+        use crate::event::AppEvent;
+
+        let mut app = App::new(100);
+        app.follow_mode = true;
+
+        // Jump to a line
+        app.apply_event(AppEvent::StartLineJumpInput);
+        app.apply_event(AppEvent::LineJumpInputChar('5'));
+        app.apply_event(AppEvent::LineJumpInputChar('0'));
+        app.apply_event(AppEvent::LineJumpInputSubmit);
+
+        // Follow mode should be disabled
+        assert!(!app.follow_mode);
+        assert_eq!(app.selected_line, 49); // Line 50 is at index 49
     }
 }

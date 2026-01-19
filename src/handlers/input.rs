@@ -12,6 +12,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
 
     match app.input_mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
+        InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -39,6 +40,17 @@ fn handle_filter_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     }
 }
 
+/// Handle keyboard input in line jump input mode
+fn handle_line_jump_input_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char(c) => vec![AppEvent::LineJumpInputChar(c)],
+        KeyCode::Backspace => vec![AppEvent::LineJumpInputBackspace],
+        KeyCode::Enter => vec![AppEvent::LineJumpInputSubmit],
+        KeyCode::Esc => vec![AppEvent::LineJumpInputCancel],
+        _ => vec![],
+    }
+}
+
 /// Handle keyboard input in normal navigation mode
 fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
@@ -62,6 +74,7 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('G') => vec![AppEvent::JumpToEnd, AppEvent::DisableFollowMode],
         KeyCode::Char('f') => vec![AppEvent::ToggleFollowMode],
         KeyCode::Char('/') => vec![AppEvent::StartFilterInput],
+        KeyCode::Char(':') => vec![AppEvent::StartLineJumpInput],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         _ => vec![],
@@ -214,5 +227,49 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::Quit]);
+    }
+
+    #[test]
+    fn test_start_line_jump_input() {
+        let app = App::new(10);
+        let key = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::StartLineJumpInput]);
+    }
+
+    #[test]
+    fn test_line_jump_input_char() {
+        let mut app = App::new(10);
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::LineJumpInputChar('5')]);
+    }
+
+    #[test]
+    fn test_line_jump_input_backspace() {
+        let mut app = App::new(10);
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::LineJumpInputBackspace]);
+    }
+
+    #[test]
+    fn test_line_jump_input_submit() {
+        let mut app = App::new(10);
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::LineJumpInputSubmit]);
+    }
+
+    #[test]
+    fn test_line_jump_input_cancel() {
+        let mut app = App::new(10);
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::LineJumpInputCancel]);
     }
 }

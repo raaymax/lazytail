@@ -13,9 +13,13 @@ pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),                                               // Main content
-            Constraint::Length(3),                                            // Status bar
-            Constraint::Length(if app.is_entering_filter() { 3 } else { 0 }), // Input prompt
+            Constraint::Min(1),    // Main content
+            Constraint::Length(4), // Status bar (2 lines + borders)
+            Constraint::Length(if app.is_entering_filter() || app.is_entering_line_jump() {
+                3
+            } else {
+                0
+            }), // Input prompt
         ])
         .split(f.area());
 
@@ -23,7 +27,9 @@ pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut 
     render_status_bar(f, chunks[1], app);
 
     if app.is_entering_filter() {
-        render_input_prompt(f, chunks[2], app);
+        render_filter_input_prompt(f, chunks[2], app);
+    } else if app.is_entering_line_jump() {
+        render_line_jump_prompt(f, chunks[2], app);
     }
 
     // Render help overlay on top of everything if active
@@ -122,7 +128,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     );
 
     let help_text =
-        " q: Quit | ↑↓: Navigate | g/G: Start/End | f: Follow | /: Filter | Esc: Clear | ?: Help";
+        " q - Quit | ↑↓ - Navigate | g/G - Start/End | : - Jump | f - Follow | / - Filter | ? - Help";
 
     let status_lines = vec![
         Line::from(vec![Span::styled(
@@ -141,7 +147,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(paragraph, area);
 }
 
-fn render_input_prompt(f: &mut Frame, area: Rect, app: &App) {
+fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     let input_text = format!("Filter: {}", app.get_input());
 
     let input = Paragraph::new(input_text)
@@ -156,6 +162,23 @@ fn render_input_prompt(f: &mut Frame, area: Rect, app: &App) {
 
     // Show cursor at the end of input
     f.set_cursor_position((area.x + 9 + app.get_input().len() as u16, area.y + 1));
+}
+
+fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
+    let input_text = format!(":{}", app.get_input());
+
+    let input = Paragraph::new(input_text)
+        .style(Style::default().fg(Color::Cyan))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Jump to Line (Enter to jump, Esc to cancel)"),
+        );
+
+    f.render_widget(input, area);
+
+    // Show cursor at the end of input
+    f.set_cursor_position((area.x + 2 + app.get_input().len() as u16, area.y + 1));
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
@@ -193,6 +216,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  PageUp        Scroll up one page"),
         Line::from("  g             Jump to start"),
         Line::from("  G             Jump to end"),
+        Line::from("  :123          Jump to line 123"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Filtering",
