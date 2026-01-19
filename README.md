@@ -38,28 +38,7 @@ A terminal-based log viewer with filtering capabilities, built with Rust and rat
 **General:**
 - `q` or `Ctrl+C` - Quit
 
-## Architecture
-
-```
-src/
-├── main.rs              # Entry point, CLI, and main event loop
-├── app.rs               # Application state management
-├── reader/
-│   ├── mod.rs          # LogReader trait
-│   └── file_reader.rs  # Lazy file reader with line indexing
-├── filter/
-│   ├── mod.rs          # Filter trait
-│   ├── engine.rs       # Background filtering engine
-│   ├── regex_filter.rs # Regex filter implementation
-│   └── string_filter.rs# String matching filter
-├── ui/
-│   └── mod.rs          # ratatui rendering logic
-└── watcher.rs          # File watching with inotify
-```
-
 ## Installation
-
-### Download Pre-built Binaries
 
 Download the latest release for your platform from the [Releases page](https://github.com/raaymax/lazytail/releases):
 
@@ -83,28 +62,14 @@ chmod +x lazytail
 sudo mv lazytail /usr/local/bin/
 ```
 
-### Build from Source
-
-```bash
-git clone https://github.com/raaymax/lazytail.git
-cd lazytail
-cargo build --release
-sudo cp target/release/lazytail /usr/local/bin/
-```
+For building from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 
-Run the application with a log file:
+Run LazyTail with a log file:
 
 ```bash
-cargo run --release -- test.log
-```
-
-Or build and run the binary:
-
-```bash
-cargo build --release
-./target/release/lazytail test.log
+lazytail /path/to/your/logfile.log
 ```
 
 ### Command Line Options
@@ -130,59 +95,24 @@ Options:
 
 The filter searches through all lines in the background without blocking the UI, so even with large files the interface remains responsive.
 
-### Testing Live Reload and Follow Mode
+### Using Follow Mode
 
-Test the file watching feature with the included log generator:
-
-```bash
-# Terminal 1: Start generating logs
-./generate_logs.sh live_test.log
-
-# Terminal 2: Watch the logs in real-time
-cargo run --release -- live_test.log
-```
-
-**Using Follow Mode:**
+**Follow Mode** allows you to automatically scroll to new log lines as they're written to the file (like `tail -f`):
 1. Press `f` to enable follow mode - the status bar will show "FOLLOW"
 2. New log lines will automatically scroll into view as they arrive
 3. Press `f` again to disable follow mode and manually navigate
 4. Any manual scroll action (↑/↓/PgUp/PgDn/g/G) automatically disables follow mode
 
-New log lines will appear automatically as they're written to the file. File watching is enabled by default, but you can disable it with `--no-watch` if needed.
+File watching is enabled by default, so new log lines will appear automatically as they're written to the file. You can disable it with `--no-watch` if needed.
 
-### Testing with Colored Logs
+### ANSI Color Support
 
-Test with ANSI-colored logs using the colored log generator:
-
-```bash
-# Terminal 1: Generate colored logs
-./generate_colored_logs.sh live_test_colored.log
-
-# Terminal 2: View the logs with full color rendering
-cargo run --release -- live_test_colored.log
-```
-
-The viewer parses ANSI escape codes and renders them in full color! Colored logs from other tools (like `docker logs`, `kubectl logs`, or application logs with color formatting) display beautifully:
+LazyTail parses ANSI escape codes and renders them in full color! Colored logs from other tools (like `docker logs`, `kubectl logs`, or application logs with color formatting) display beautifully:
 - **Green** for INFO
 - **Cyan** for DEBUG
 - **Yellow** for WARN
 - **Red** for ERROR
 - Plus all other ANSI colors and styles (bold, dim, etc.)
-
-## Testing
-
-Test log files are included:
-- `test.log` - Plain text logs with various log levels (INFO, DEBUG, WARN, ERROR)
-- `generate_logs.sh` - Script to generate plain text logs
-- `generate_colored_logs.sh` - Script to generate ANSI-colored logs
-
-## Performance
-
-The viewer is designed to handle large log files efficiently:
-- **Line indexing**: O(n) one-time indexing, then O(1) random access
-- **Viewport rendering**: Only renders visible lines
-- **Background filtering**: Non-blocking filter execution in separate thread
-- **Memory usage**: ~constant regardless of file size (only viewport buffer in RAM)
 
 ## Upcoming Features
 
@@ -200,17 +130,6 @@ The viewer is designed to handle large log files efficiently:
 - [ ] Case-sensitive filter toggle
 - [ ] Bookmark lines
 
-## Dependencies
-
-- **ratatui** - TUI framework
-- **crossterm** - Cross-platform terminal manipulation
-- **notify** - File system watching
-- **regex** - Regular expression support
-- **serde_json** - JSON parsing
-- **clap** - CLI argument parsing
-- **anyhow** - Error handling
-- **ansi-to-tui** - ANSI escape code parsing and color rendering
-
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
@@ -219,3 +138,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - CI/CD workflow documentation
 - Release process
 - Pull request guidelines
+
+## License
+
+LazyTail is licensed under the [MIT License](LICENSE).

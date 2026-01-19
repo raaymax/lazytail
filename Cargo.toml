@@ -1,7 +1,13 @@
 [package]
 name = "lazytail"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["raaymax"]
+license = "MIT"
+description = "A terminal-based log viewer with filtering capabilities"
+repository = "https://github.com/raaymax/lazytail"
+keywords = ["log", "viewer", "tui", "terminal", "tail"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.29"

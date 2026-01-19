@@ -27,7 +27,51 @@ cargo test
 
 # Run with a log file
 cargo run -- test.log
+
+# Run in release mode with a log file
+cargo run --release -- test.log
 ```
+
+## Project Architecture
+
+```
+src/
+├── main.rs              # Entry point, CLI, and main event loop
+├── app.rs               # Application state management
+├── reader/
+│   ├── mod.rs          # LogReader trait
+│   └── file_reader.rs  # Lazy file reader with line indexing
+├── filter/
+│   ├── mod.rs          # Filter trait
+│   ├── engine.rs       # Background filtering engine
+│   ├── regex_filter.rs # Regex filter implementation
+│   └── string_filter.rs# String matching filter
+├── ui/
+│   └── mod.rs          # ratatui rendering logic
+└── watcher.rs          # File watching with inotify
+```
+
+For detailed architecture documentation, see `CLAUDE.md`.
+
+## Performance Characteristics
+
+The viewer is designed to handle large log files efficiently:
+- **Line indexing**: O(n) one-time indexing, then O(1) random access
+- **Viewport rendering**: Only renders visible lines
+- **Background filtering**: Non-blocking filter execution in separate thread
+- **Memory usage**: ~constant regardless of file size (only viewport buffer in RAM)
+- **Incremental filtering**: Only filters new log lines when file grows
+
+## Dependencies
+
+- **ratatui** - TUI framework
+- **crossterm** - Cross-platform terminal manipulation
+- **notify** - File system watching
+- **regex** - Regular expression support
+- **serde_json** - JSON parsing
+- **clap** - CLI argument parsing
+- **anyhow** - Error handling
+- **ansi-to-tui** - ANSI escape code parsing and color rendering
 
 ### Development Tools
 
@@ -40,10 +84,41 @@ cargo fmt -- --check
 
 # Format code
 cargo fmt
+```
 
-# Generate test logs
+## Testing
+
+### Test Log Files
+
+The repository includes test log files and generators:
+- `test.log` - Plain text logs with various log levels (INFO, DEBUG, WARN, ERROR)
+- `generate_logs.sh` - Script to generate plain text logs continuously
+- `generate_colored_logs.sh` - Script to generate ANSI-colored logs continuously
+
+### Testing Live Reload and Follow Mode
+
+Test the file watching feature:
+
+```bash
+# Terminal 1: Start generating logs
 ./generate_logs.sh live_test.log
+
+# Terminal 2: Watch the logs in real-time
+cargo run --release -- live_test.log
+```
+
+Press `f` to enable follow mode and watch new lines scroll into view automatically.
+
+### Testing with Colored Logs
+
+Test ANSI color support:
+
+```bash
+# Terminal 1: Generate colored logs
 ./generate_colored_logs.sh live_test_colored.log
+
+# Terminal 2: View the logs with full color rendering
+cargo run --release -- live_test_colored.log
 ```
 
 ## Commit Convention
