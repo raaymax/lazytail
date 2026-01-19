@@ -13,6 +13,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   build-and-upload:
     name: Build and Upload
