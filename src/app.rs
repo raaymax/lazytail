@@ -236,3 +236,282 @@ impl App {
         self.selected_line = 0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_initialization() {
+        let app = App::new(100);
+
+        assert_eq!(app.total_lines, 100);
+        assert_eq!(app.line_indices.len(), 100);
+        assert_eq!(app.selected_line, 0);
+        assert_eq!(app.scroll_position, 0);
+        assert_eq!(app.mode, ViewMode::Normal);
+        assert!(!app.should_quit);
+        assert!(!app.follow_mode);
+        assert!(app.filter_pattern.is_none());
+    }
+
+    #[test]
+    fn test_navigation_basic() {
+        let mut app = App::new(10);
+
+        // Scroll down
+        app.scroll_down();
+        assert_eq!(app.selected_line, 1);
+
+        // Scroll down multiple times
+        app.scroll_down();
+        app.scroll_down();
+        assert_eq!(app.selected_line, 3);
+
+        // Scroll up
+        app.scroll_up();
+        assert_eq!(app.selected_line, 2);
+
+        // Can't scroll below 0
+        app.selected_line = 0;
+        app.scroll_up();
+        assert_eq!(app.selected_line, 0);
+
+        // Can't scroll past end
+        app.selected_line = 9;
+        app.scroll_down();
+        assert_eq!(app.selected_line, 9);
+    }
+
+    #[test]
+    fn test_page_navigation() {
+        let mut app = App::new(100);
+
+        // Page down
+        app.page_down(10);
+        assert_eq!(app.selected_line, 10);
+
+        // Page up
+        app.page_up(5);
+        assert_eq!(app.selected_line, 5);
+
+        // Page down past end
+        app.selected_line = 95;
+        app.page_down(10);
+        assert_eq!(app.selected_line, 99); // Last line
+    }
+
+    #[test]
+    fn test_jump_to_start_end() {
+        let mut app = App::new(100);
+
+        // Jump to end
+        app.jump_to_end();
+        assert_eq!(app.selected_line, 99);
+
+        // Jump to start
+        app.jump_to_start();
+        assert_eq!(app.selected_line, 0);
+    }
+
+    #[test]
+    fn test_filter_application() {
+        let mut app = App::new(10);
+        let matching_indices = vec![1, 3, 5, 7, 9];
+
+        app.apply_filter(matching_indices.clone(), "test".to_string());
+
+        assert_eq!(app.mode, ViewMode::Filtered);
+        assert_eq!(app.line_indices, matching_indices);
+        assert_eq!(app.filter_pattern, Some("test".to_string()));
+        assert_eq!(app.selected_line, 0); // Reset to start
+        assert!(matches!(
+            app.filter_state,
+            FilterState::Complete { matches: 5 }
+        ));
+    }
+
+    #[test]
+    fn test_filter_preserves_selection_on_update() {
+        let mut app = App::new(10);
+
+        // Apply initial filter
+        app.apply_filter(vec![1, 3, 5, 7, 9], "test".to_string());
+        app.selected_line = 2; // Select line 5 (index 2 in filtered view)
+
+        // Update filter with new matches
+        app.apply_filter(vec![1, 3, 5, 7, 9, 11], "test".to_string());
+
+        // Selection should be preserved
+        assert_eq!(app.selected_line, 2);
+    }
+
+    #[test]
+    fn test_clear_filter_preserves_actual_line() {
+        let mut app = App::new(20);
+
+        // Apply filter
+        app.apply_filter(vec![2, 5, 10, 15], "test".to_string());
+
+        // Select line at index 2 (actual line 10)
+        app.selected_line = 2;
+
+        // Clear filter
+        app.clear_filter();
+
+        // Should stay on actual line 10
+        assert_eq!(app.selected_line, 10);
+        assert_eq!(app.mode, ViewMode::Normal);
+        assert!(app.filter_pattern.is_none());
+        assert_eq!(app.line_indices.len(), 20);
+    }
+
+    #[test]
+    fn test_clear_filter_empty_selection() {
+        let mut app = App::new(10);
+
+        // Apply filter with no matches
+        app.apply_filter(vec![], "nomatch".to_string());
+
+        // Clear filter
+        app.clear_filter();
+
+        // Should reset to 0
+        assert_eq!(app.selected_line, 0);
+        assert_eq!(app.mode, ViewMode::Normal);
+    }
+
+    #[test]
+    fn test_follow_mode_toggle() {
+        let mut app = App::new(10);
+
+        assert!(!app.follow_mode);
+
+        app.toggle_follow_mode();
+        assert!(app.follow_mode);
+
+        app.toggle_follow_mode();
+        assert!(!app.follow_mode);
+    }
+
+    #[test]
+    fn test_follow_mode_jumps_to_end() {
+        let mut app = App::new(100);
+        app.follow_mode = true;
+
+        app.jump_to_end();
+        assert_eq!(app.selected_line, 99);
+    }
+
+    #[test]
+    fn test_filter_input_mode() {
+        let mut app = App::new(10);
+
+        // Enter filter mode
+        app.start_filter_input();
+        assert!(app.is_entering_filter());
+        assert!(app.get_input().is_empty());
+
+        // Type some input
+        app.input_char('t');
+        app.input_char('e');
+        app.input_char('s');
+        app.input_char('t');
+        assert_eq!(app.get_input(), "test");
+
+        // Backspace
+        app.input_backspace();
+        assert_eq!(app.get_input(), "tes");
+
+        // Cancel input
+        app.cancel_filter_input();
+        assert!(!app.is_entering_filter());
+        assert!(app.get_input().is_empty());
+    }
+
+    #[test]
+    fn test_input_backspace_empty() {
+        let mut app = App::new(10);
+
+        app.start_filter_input();
+        app.input_backspace(); // Should not panic on empty input
+        assert!(app.get_input().is_empty());
+    }
+
+    #[test]
+    fn test_append_filter_results() {
+        let mut app = App::new(10);
+
+        // Apply initial filter
+        app.apply_filter(vec![1, 3, 5], "test".to_string());
+        assert_eq!(app.line_indices.len(), 3);
+
+        // Append new results (incremental filtering)
+        app.append_filter_results(vec![7, 9]);
+        assert_eq!(app.line_indices.len(), 5);
+        assert_eq!(app.line_indices, vec![1, 3, 5, 7, 9]);
+    }
+
+    #[test]
+    fn test_scroll_position_adjustment() {
+        let mut app = App::new(100);
+        let viewport_height = 20;
+
+        // Scroll near bottom
+        app.selected_line = 90;
+        app.adjust_scroll(viewport_height);
+
+        // Scroll position should adjust to keep selection visible
+        // This ensures selection is visible with padding
+        assert!(app.scroll_position <= app.selected_line);
+    }
+
+    #[test]
+    fn test_empty_file_handling() {
+        let app = App::new(0);
+
+        assert_eq!(app.total_lines, 0);
+        assert_eq!(app.line_indices.len(), 0);
+        assert_eq!(app.selected_line, 0);
+    }
+
+    #[test]
+    fn test_filter_with_follow_mode() {
+        let mut app = App::new(10);
+        app.follow_mode = true;
+
+        // Apply filter (follow mode should NOT affect filter application)
+        app.apply_filter(vec![1, 3, 5], "test".to_string());
+
+        assert!(app.follow_mode); // Follow mode stays enabled
+        assert_eq!(app.mode, ViewMode::Filtered);
+    }
+
+    #[test]
+    fn test_navigation_bounds_with_filter() {
+        let mut app = App::new(100);
+
+        // Apply filter (only 5 lines visible)
+        app.apply_filter(vec![10, 20, 30, 40, 50], "test".to_string());
+
+        // Try to scroll past filtered end
+        app.selected_line = 4; // Last filtered line
+        app.scroll_down();
+        assert_eq!(app.selected_line, 4); // Should not go past end
+
+        // Jump to end should go to last filtered line
+        app.jump_to_end();
+        assert_eq!(app.selected_line, 4);
+    }
+
+    #[test]
+    fn test_last_filtered_line_tracking() {
+        let mut app = App::new(10);
+
+        // Apply filter
+        app.apply_filter(vec![1, 3, 5], "test".to_string());
+
+        // last_filtered_line should be updated
+        assert_eq!(app.last_filtered_line, 10);
+    }
+}

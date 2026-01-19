@@ -168,39 +168,69 @@ fn run_app<B: ratatui::backend::Backend>(
                             eprintln!("Failed to reload file: {}", e);
                         } else {
                             let new_total = reader_guard.total_lines();
+                            let old_total = app.total_lines;
                             app.total_lines = new_total;
 
-                            // If no filter is active, update line indices
-                            let is_reapplying_filter = if app.mode == app::ViewMode::Normal {
+                            // Detect file truncation (file got smaller)
+                            if new_total < old_total {
+                                eprintln!("File truncated: {} -> {} lines", old_total, new_total);
+                                // Reset state on truncation
                                 app.line_indices = (0..new_total).collect();
-                                false
+                                app.mode = app::ViewMode::Normal;
+                                app.filter_pattern = None;
+                                app.filter_state = app::FilterState::Inactive;
+                                app.last_filtered_line = 0;
+                                // Cancel any in-progress filter
+                                *filter_receiver = None;
+                                *is_incremental_filter = false;
+                                // Ensure selection is valid
+                                if app.selected_line >= new_total && new_total > 0 {
+                                    app.selected_line = new_total - 1;
+                                } else if new_total == 0 {
+                                    app.selected_line = 0;
+                                }
+                                // Don't reapply filters on truncation
+                                let is_reapplying_filter = false;
+
+                                if app.follow_mode && !is_reapplying_filter {
+                                    app.jump_to_end();
+                                }
+                            } else if app.mode == app::ViewMode::Normal {
+                                // File grew or stayed same size, no filter active
+                                app.line_indices = (0..new_total).collect();
+                                let is_reapplying_filter = false;
+
+                                if app.follow_mode && !is_reapplying_filter {
+                                    app.jump_to_end();
+                                }
                             } else {
-                                // Apply filter on new content only (incremental filtering)
-                                if let Some(pattern) = app.filter_pattern.clone() {
-                                    // Only filter NEW lines that were added
-                                    let start_line = app.last_filtered_line;
-                                    if start_line < new_total {
-                                        *filter_receiver = Some(trigger_filter(
-                                            app,
-                                            reader.clone(),
-                                            pattern,
-                                            is_incremental_filter,
-                                            Some(start_line),
-                                            Some(new_total),
-                                        ));
-                                        true
+                                // File grew with active filter - apply filter on new content only (incremental filtering)
+                                let is_reapplying_filter =
+                                    if let Some(pattern) = app.filter_pattern.clone() {
+                                        // Only filter NEW lines that were added
+                                        let start_line = app.last_filtered_line;
+                                        if start_line < new_total {
+                                            *filter_receiver = Some(trigger_filter(
+                                                app,
+                                                reader.clone(),
+                                                pattern,
+                                                is_incremental_filter,
+                                                Some(start_line),
+                                                Some(new_total),
+                                            ));
+                                            true
+                                        } else {
+                                            false
+                                        }
                                     } else {
                                         false
-                                    }
-                                } else {
-                                    false
-                                }
-                            };
+                                    };
 
-                            // If follow mode is enabled and we're not re-applying a filter, jump to end
-                            // (if we're re-applying, the filter completion will handle the jump)
-                            if app.follow_mode && !is_reapplying_filter {
-                                app.jump_to_end();
+                                // If follow mode is enabled and we're not re-applying a filter, jump to end
+                                // (if we're re-applying, the filter completion will handle the jump)
+                                if app.follow_mode && !is_reapplying_filter {
+                                    app.jump_to_end();
+                                }
                             }
                         }
                     }
