@@ -211,32 +211,11 @@ The viewer is designed to handle large log files efficiently:
 - **anyhow** - Error handling
 - **ansi-to-tui** - ANSI escape code parsing and color rendering
 
-## CI/CD
+## Contributing
 
-The project uses GitHub Actions for continuous integration and releases:
-
-- **CI Workflow** (`.github/workflows/ci.yml`): Runs on every push and pull request
-  - Tests on Linux and macOS
-  - Runs clippy for linting
-  - Checks code formatting
-  - Builds artifacts for all supported platforms
-
-- **Release Workflow** (`.github/workflows/release.yml`): Triggered on version tags
-  - Builds optimized binaries for Linux (x86_64) and macOS (x86_64, aarch64)
-  - Strips debug symbols to reduce binary size
-  - Creates a GitHub release with compressed binaries
-
-### Creating a Release
-
-To create a new release:
-
-```bash
-# Tag the commit
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The release workflow will automatically:
-1. Build binaries for all platforms
-2. Create a GitHub release
-3. Upload the compressed binaries as release assets
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup and guidelines
+- Commit message conventions
+- CI/CD workflow documentation
+- Release process
+- Pull request guidelines
