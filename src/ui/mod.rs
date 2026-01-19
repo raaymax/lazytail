@@ -86,7 +86,15 @@ fn render_log_view<R: LogReader + ?Sized>(
             // Apply selection background if this is the selected line
             if i == app.selected_line {
                 for span in &mut final_line.spans {
-                    span.style = span.style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                    // Remap foreground colors that would be invisible on dark gray background
+                    let new_style = match span.style.fg {
+                        Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
+                            // Remap to white for visibility
+                            span.style.fg(Color::White)
+                        }
+                        _ => span.style,
+                    };
+                    span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
                 }
             }
 
