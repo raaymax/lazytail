@@ -166,10 +166,20 @@ impl App {
 
     /// Clear filter and return to normal view
     pub fn clear_filter(&mut self) {
+        // Remember which actual line was selected before clearing filter
+        let actual_line_number = self.line_indices.get(self.selected_line).copied();
+
         self.line_indices = (0..self.total_lines).collect();
         self.mode = ViewMode::Normal;
-        self.selected_line = 0;
-        self.scroll_position = 0;
+
+        // Restore selection to the same actual line number
+        if let Some(line_num) = actual_line_number {
+            self.selected_line = line_num.min(self.total_lines.saturating_sub(1));
+        } else {
+            self.selected_line = 0;
+        }
+
+        // Don't reset scroll_position - let adjust_scroll handle it
         self.filter_pattern = None;
         self.filter_state = FilterState::Inactive;
     }
