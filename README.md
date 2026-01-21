@@ -173,25 +173,6 @@ lazytail ci-pipeline.log
 
 Any plain text log file works - from development logs to production system logs, with or without ANSI colors.
 
-## Upcoming Features
-
-- [x] File watching with auto-reload (inotify)
-- [x] Interactive filter input
-- [x] Live filter preview
-- [x] Follow mode (tail -f style)
-- [x] Line number jump (vim-style `:number`)
-- [x] Filter history navigation
-- [x] Mouse scroll support
-- [x] Help overlay
-- [ ] STDIN support for piping logs
-- [ ] Regex filter mode (regex parsing already implemented)
-- [ ] JSON log parsing and formatting
-- [ ] Multiple display modes
-- [ ] Search highlighting
-- [ ] Copy selected line
-- [ ] Case-sensitive filter toggle
-- [ ] Bookmark lines
-
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:

@@ -1,4 +1,5 @@
 pub mod file_reader;
+pub mod stream_reader;
 
 use anyhow::Result;
 

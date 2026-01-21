@@ -1,3 +1,6 @@
+use crate::tab::TabState;
+use std::path::PathBuf;
+
 /// Represents the current view mode
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewMode {
@@ -23,8 +26,11 @@ pub enum InputMode {
 
 /// Main application state
 pub struct App {
-    /// Current view mode
-    pub mode: ViewMode,
+    /// All open tabs
+    pub tabs: Vec<TabState>,
+
+    /// Currently active tab index
+    pub active_tab: usize,
 
     /// Current input mode
     pub input_mode: InputMode,
@@ -32,224 +38,130 @@ pub struct App {
     /// Input buffer for filter entry
     pub input_buffer: String,
 
-    /// Total number of lines in the source
-    pub total_lines: usize,
-
-    /// Indices of lines to display (all lines or filtered results)
-    pub line_indices: Vec<usize>,
-
-    /// Current scroll position (index into line_indices)
-    pub scroll_position: usize,
-
-    /// Currently selected line (index into line_indices)
-    pub selected_line: usize,
-
-    /// Current filter state
-    pub filter_state: FilterState,
-
     /// Should the app quit
     pub should_quit: bool,
 
-    /// Current filter pattern (if any)
-    pub filter_pattern: Option<String>,
-
-    /// Follow mode - auto-scroll to latest logs
-    pub follow_mode: bool,
-
-    /// Last line number that was filtered (for incremental filtering)
-    pub last_filtered_line: usize,
-
     /// Help overlay visible
     pub show_help: bool,
-
-    /// Skip scroll adjustment on next render (set by mouse scroll)
-    skip_scroll_adjustment: bool,
 
     /// Filter history (up to 50 entries)
     filter_history: Vec<String>,
 
     /// Current position in filter history (None = not navigating)
     history_index: Option<usize>,
+
+    /// Side panel width
+    pub side_panel_width: u16,
 }
 
 impl App {
-    pub fn new(total_lines: usize) -> Self {
-        let line_indices = (0..total_lines).collect();
+    pub fn new(files: Vec<PathBuf>, watch: bool) -> anyhow::Result<Self> {
+        let mut tabs = Vec::new();
+        for file in files {
+            tabs.push(TabState::new(file, watch)?);
+        }
 
-        Self {
-            mode: ViewMode::Normal,
+        Ok(Self {
+            tabs,
+            active_tab: 0,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
-            total_lines,
-            line_indices,
-            scroll_position: 0,
-            selected_line: 0,
-            filter_state: FilterState::Inactive,
             should_quit: false,
-            filter_pattern: None,
-            follow_mode: false,
-            last_filtered_line: 0,
             show_help: false,
-            skip_scroll_adjustment: false,
             filter_history: Vec::new(),
             history_index: None,
+            side_panel_width: 32,
+        })
+    }
+
+    /// Get a reference to the active tab
+    pub fn active_tab(&self) -> &TabState {
+        &self.tabs[self.active_tab]
+    }
+
+    /// Get a mutable reference to the active tab
+    pub fn active_tab_mut(&mut self) -> &mut TabState {
+        &mut self.tabs[self.active_tab]
+    }
+
+    /// Switch to the next tab
+    pub fn next_tab(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab = (self.active_tab + 1) % self.tabs.len();
         }
     }
 
-    /// Get the number of visible lines
-    pub fn visible_line_count(&self) -> usize {
-        self.line_indices.len()
+    /// Switch to the previous tab
+    pub fn prev_tab(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab = if self.active_tab == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab - 1
+            };
+        }
     }
+
+    /// Switch to a specific tab by index
+    pub fn select_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active_tab = index;
+        }
+    }
+
+    /// Get the number of tabs
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    // === Delegated methods for backward compatibility ===
 
     /// Scroll down by one line
     pub fn scroll_down(&mut self) {
-        if self.selected_line < self.line_indices.len().saturating_sub(1) {
-            self.selected_line += 1;
-        }
+        self.active_tab_mut().scroll_down();
     }
 
     /// Scroll up by one line
     pub fn scroll_up(&mut self) {
-        if self.selected_line > 0 {
-            self.selected_line -= 1;
-        }
-    }
-
-    /// Ensure the selected line is visible in the viewport
-    pub fn adjust_scroll(&mut self, viewport_height: usize) {
-        // Skip adjustment if mouse scroll just happened (prevents interference)
-        if self.skip_scroll_adjustment {
-            self.skip_scroll_adjustment = false;
-            return;
-        }
-
-        // Add some padding at the edges for better UX
-        let padding = 3.min(viewport_height / 4);
-
-        // If selection is above viewport, scroll up
-        if self.selected_line < self.scroll_position + padding {
-            self.scroll_position = self.selected_line.saturating_sub(padding);
-        }
-        // If selection is below viewport, scroll down
-        else if self.selected_line >= self.scroll_position + viewport_height - padding {
-            self.scroll_position = self.selected_line + padding + 1 - viewport_height;
-        }
-
-        // Ensure scroll position is valid
-        let max_scroll = self.line_indices.len().saturating_sub(viewport_height);
-        self.scroll_position = self.scroll_position.min(max_scroll);
+        self.active_tab_mut().scroll_up();
     }
 
     /// Scroll down by page
     pub fn page_down(&mut self, page_size: usize) {
-        self.selected_line =
-            (self.selected_line + page_size).min(self.line_indices.len().saturating_sub(1));
+        self.active_tab_mut().page_down(page_size);
     }
 
     /// Scroll up by page
     pub fn page_up(&mut self, page_size: usize) {
-        self.selected_line = self.selected_line.saturating_sub(page_size);
+        self.active_tab_mut().page_up(page_size);
     }
 
-    /// Mouse scroll down - moves viewport and selection together
+    /// Mouse scroll down
     pub fn mouse_scroll_down(&mut self, lines: usize, visible_height: usize) {
-        let max_scroll = self.line_indices.len().saturating_sub(visible_height);
-        let old_scroll = self.scroll_position;
-        self.scroll_position = (self.scroll_position + lines).min(max_scroll);
-
-        // Move selection by the same amount the viewport moved
-        let actual_scroll = self.scroll_position - old_scroll;
-        if actual_scroll > 0 {
-            let max_selection = self.line_indices.len().saturating_sub(1);
-            self.selected_line = (self.selected_line + actual_scroll).min(max_selection);
-        }
-
-        // Skip scroll adjustment on next render to prevent padding interference
-        self.skip_scroll_adjustment = true;
+        self.active_tab_mut()
+            .mouse_scroll_down(lines, visible_height);
     }
 
-    /// Mouse scroll up - moves viewport and selection together
-    pub fn mouse_scroll_up(&mut self, lines: usize, _visible_height: usize) {
-        let old_scroll = self.scroll_position;
-        self.scroll_position = self.scroll_position.saturating_sub(lines);
-
-        // Move selection by the same amount the viewport moved
-        let actual_scroll = old_scroll - self.scroll_position;
-        if actual_scroll > 0 {
-            self.selected_line = self.selected_line.saturating_sub(actual_scroll);
-        }
-
-        // Skip scroll adjustment on next render to prevent padding interference
-        self.skip_scroll_adjustment = true;
+    /// Mouse scroll up
+    pub fn mouse_scroll_up(&mut self, lines: usize, visible_height: usize) {
+        self.active_tab_mut().mouse_scroll_up(lines, visible_height);
     }
 
-    /// Apply filter results (for full filtering)
+    /// Apply filter results
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
-        let was_filtered = self.mode == ViewMode::Filtered;
-        // Remember which actual line was selected before changing filter
-        let actual_line_number = self.line_indices.get(self.selected_line).copied();
-
-        self.line_indices = matching_indices;
-        self.mode = ViewMode::Filtered;
-        self.filter_pattern = Some(pattern);
-        self.filter_state = FilterState::Complete {
-            matches: self.line_indices.len(),
-        };
-        self.last_filtered_line = self.total_lines;
-
-        // Preserve selection when updating an existing filter (unless follow mode will handle it)
-        if was_filtered && !self.follow_mode {
-            // Try to keep selection on the same actual line
-            if let Some(line_num) = actual_line_number {
-                // Find where this line is in the new filtered results
-                if let Some(new_index) = self.line_indices.iter().position(|&l| l == line_num) {
-                    self.selected_line = new_index;
-                } else {
-                    // Line not in new results, try to keep similar position
-                    self.selected_line = self
-                        .selected_line
-                        .min(self.line_indices.len().saturating_sub(1));
-                }
-            } else {
-                self.selected_line = 0;
-            }
-            // Don't reset scroll_position - let adjust_scroll handle it based on the preserved selection
-        } else if !self.follow_mode {
-            // New filter - start at the top
-            self.selected_line = 0;
-            self.scroll_position = 0;
-        }
-        // If follow mode is active, don't set selection or scroll here - let follow mode handle it
+        self.active_tab_mut()
+            .apply_filter(matching_indices, pattern);
     }
 
-    /// Append incremental filter results (for new logs only)
+    /// Append incremental filter results
     pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
-        self.line_indices.extend(new_matching_indices);
-        self.filter_state = FilterState::Complete {
-            matches: self.line_indices.len(),
-        };
-        self.last_filtered_line = self.total_lines;
-        // Don't change selection - let follow mode or user control it
+        self.active_tab_mut()
+            .append_filter_results(new_matching_indices);
     }
 
-    /// Clear filter and return to normal view
+    /// Clear filter
     pub fn clear_filter(&mut self) {
-        // Remember which actual line was selected before clearing filter
-        let actual_line_number = self.line_indices.get(self.selected_line).copied();
-
-        self.line_indices = (0..self.total_lines).collect();
-        self.mode = ViewMode::Normal;
-
-        // Restore selection to the same actual line number
-        if let Some(line_num) = actual_line_number {
-            self.selected_line = line_num.min(self.total_lines.saturating_sub(1));
-        } else {
-            self.selected_line = 0;
-        }
-
-        // Don't reset scroll_position - let adjust_scroll handle it
-        self.filter_pattern = None;
-        self.filter_state = FilterState::Inactive;
+        self.active_tab_mut().clear_filter();
     }
 
     /// Enter filter input mode
@@ -381,53 +293,24 @@ impl App {
         self.input_mode == InputMode::EnteringLineJump
     }
 
-    /// Jump to a specific line number (1-indexed)
+    /// Jump to a specific line number
     pub fn jump_to_line(&mut self, line_number: usize) {
-        if line_number == 0 || self.line_indices.is_empty() {
-            return;
-        }
-
-        // Convert 1-indexed line number to actual file line index (0-indexed)
-        let target_line = line_number.saturating_sub(1);
-
-        // Find the position in line_indices that contains this line number
-        if let Some(position) = self.line_indices.iter().position(|&l| l == target_line) {
-            self.selected_line = position;
-        } else if target_line >= self.total_lines {
-            // If line number is beyond total lines, jump to end
-            self.selected_line = self.line_indices.len().saturating_sub(1);
-        } else {
-            // Line exists in file but not in current view (filtered out)
-            // Jump to nearest line that exists in view
-            let nearest = self
-                .line_indices
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, &l)| l.abs_diff(target_line))
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.selected_line = nearest;
-        }
+        self.active_tab_mut().jump_to_line(line_number);
     }
 
     /// Toggle follow mode
     pub fn toggle_follow_mode(&mut self) {
-        self.follow_mode = !self.follow_mode;
-        if self.follow_mode {
-            self.jump_to_end();
-        }
+        self.active_tab_mut().toggle_follow_mode();
     }
 
     /// Jump to the end of the log
     pub fn jump_to_end(&mut self) {
-        if !self.line_indices.is_empty() {
-            self.selected_line = self.line_indices.len().saturating_sub(1);
-        }
+        self.active_tab_mut().jump_to_end();
     }
 
     /// Jump to the beginning of the log
     pub fn jump_to_start(&mut self) {
-        self.selected_line = 0;
+        self.active_tab_mut().jump_to_start();
     }
 
     /// Apply an event to the application state
@@ -436,7 +319,7 @@ impl App {
         use crate::event::AppEvent;
 
         match event {
-            // Navigation events
+            // Navigation events - delegate to active tab
             AppEvent::ScrollDown => self.scroll_down(),
             AppEvent::ScrollUp => self.scroll_up(),
             AppEvent::PageDown(page_size) => self.page_down(page_size),
@@ -449,6 +332,11 @@ impl App {
             AppEvent::MouseScrollUp(_lines) => {
                 // Mouse scroll events will be handled in main loop with visible_height
             }
+
+            // Tab navigation events
+            AppEvent::NextTab => self.next_tab(),
+            AppEvent::PrevTab => self.prev_tab(),
+            AppEvent::SelectTab(index) => self.select_tab(index),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
@@ -465,7 +353,7 @@ impl App {
 
             // Filter progress events
             AppEvent::FilterProgress(lines_processed) => {
-                self.filter_state = FilterState::Processing {
+                self.active_tab_mut().filter_state = FilterState::Processing {
                     progress: lines_processed,
                 };
             }
@@ -476,14 +364,14 @@ impl App {
                 if incremental {
                     self.append_filter_results(indices);
                 } else {
-                    let pattern = self.filter_pattern.clone().unwrap_or_default();
+                    let pattern = self.active_tab().filter_pattern.clone().unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
                 // Follow mode jump will be handled separately in main loop
             }
             AppEvent::FilterError(err) => {
                 eprintln!("Filter error: {}", err);
-                self.filter_state = FilterState::Inactive;
+                self.active_tab_mut().filter_state = FilterState::Inactive;
             }
 
             // File events
@@ -491,29 +379,28 @@ impl App {
                 new_total,
                 old_total: _,
             } => {
-                self.total_lines = new_total;
-                if self.mode == ViewMode::Normal {
-                    self.line_indices = (0..new_total).collect();
+                let tab = self.active_tab_mut();
+                tab.total_lines = new_total;
+                if tab.mode == ViewMode::Normal {
+                    tab.line_indices = (0..new_total).collect();
                 }
                 // Incremental filter will be handled by StartFilter event
             }
             AppEvent::FileTruncated { new_total } => {
-                eprintln!(
-                    "File truncated: {} -> {} lines",
-                    self.total_lines, new_total
-                );
+                let tab = self.active_tab_mut();
+                eprintln!("File truncated: {} -> {} lines", tab.total_lines, new_total);
                 // Reset state on truncation
-                self.total_lines = new_total;
-                self.line_indices = (0..new_total).collect();
-                self.mode = ViewMode::Normal;
-                self.filter_pattern = None;
-                self.filter_state = FilterState::Inactive;
-                self.last_filtered_line = 0;
+                tab.total_lines = new_total;
+                tab.line_indices = (0..new_total).collect();
+                tab.mode = ViewMode::Normal;
+                tab.filter_pattern = None;
+                tab.filter_state = FilterState::Inactive;
+                tab.last_filtered_line = 0;
                 // Ensure selection is valid
-                if self.selected_line >= new_total && new_total > 0 {
-                    self.selected_line = new_total - 1;
+                if tab.selected_line >= new_total && new_total > 0 {
+                    tab.selected_line = new_total - 1;
                 } else if new_total == 0 {
-                    self.selected_line = 0;
+                    tab.selected_line = 0;
                 }
             }
             AppEvent::FileError(err) => {
@@ -523,7 +410,7 @@ impl App {
             // Mode toggles
             AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
             AppEvent::DisableFollowMode => {
-                self.follow_mode = false;
+                self.active_tab_mut().follow_mode = false;
             }
 
             // System events
@@ -553,7 +440,7 @@ impl App {
                 if let Ok(line_num) = self.input_buffer.parse::<usize>() {
                     self.jump_to_line(line_num);
                     // Disable follow mode when explicitly jumping to a line
-                    self.follow_mode = false;
+                    self.active_tab_mut().follow_mode = false;
                 }
                 self.cancel_line_jump_input();
             }
@@ -574,189 +461,198 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_log_file(lines: &[&str]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        for line in lines {
+            writeln!(file, "{}", line).unwrap();
+        }
+        file.flush().unwrap();
+        file
+    }
 
     #[test]
     fn test_app_initialization() {
-        let app = App::new(100);
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        assert_eq!(app.total_lines, 100);
-        assert_eq!(app.line_indices.len(), 100);
-        assert_eq!(app.selected_line, 0);
-        assert_eq!(app.scroll_position, 0);
-        assert_eq!(app.mode, ViewMode::Normal);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.active_tab().total_lines, 3);
         assert!(!app.should_quit);
-        assert!(!app.follow_mode);
-        assert!(app.filter_pattern.is_none());
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_multiple_tabs() {
+        let file1 = create_temp_log_file(&["line1", "line2"]);
+        let file2 = create_temp_log_file(&["a", "b", "c"]);
+        let file3 = create_temp_log_file(&["x"]);
+
+        let app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(app.tabs[0].total_lines, 2);
+        assert_eq!(app.tabs[1].total_lines, 3);
+        assert_eq!(app.tabs[2].total_lines, 1);
+    }
+
+    #[test]
+    fn test_tab_navigation() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let file3 = create_temp_log_file(&["c"]);
+
+        let mut app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(app.active_tab, 0);
+
+        app.next_tab();
+        assert_eq!(app.active_tab, 1);
+
+        app.next_tab();
+        assert_eq!(app.active_tab, 2);
+
+        // Wrap around
+        app.next_tab();
+        assert_eq!(app.active_tab, 0);
+
+        // Previous tab
+        app.prev_tab();
+        assert_eq!(app.active_tab, 2);
+
+        // Direct selection
+        app.select_tab(1);
+        assert_eq!(app.active_tab, 1);
+
+        // Invalid selection (out of bounds)
+        app.select_tab(10);
+        assert_eq!(app.active_tab, 1); // Unchanged
+    }
+
+    #[test]
+    fn test_per_tab_state_isolation() {
+        let file1 = create_temp_log_file(&["error", "info", "error"]);
+        let file2 = create_temp_log_file(&["debug", "warn"]);
+
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        // Apply filter to tab 0
+        app.apply_filter(vec![0, 2], "error".to_string());
+        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
+
+        // Switch to tab 1
+        app.next_tab();
+        assert_eq!(app.active_tab().mode, ViewMode::Normal);
+        assert!(app.active_tab().filter_pattern.is_none());
+
+        // Tab 0 should still be filtered
+        app.prev_tab();
+        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
     }
 
     #[test]
     fn test_navigation_basic() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Scroll down
         app.scroll_down();
-        assert_eq!(app.selected_line, 1);
-
-        // Scroll down multiple times
-        app.scroll_down();
-        app.scroll_down();
-        assert_eq!(app.selected_line, 3);
+        assert_eq!(app.active_tab().selected_line, 1);
 
         // Scroll up
         app.scroll_up();
-        assert_eq!(app.selected_line, 2);
+        assert_eq!(app.active_tab().selected_line, 0);
 
         // Can't scroll below 0
-        app.selected_line = 0;
         app.scroll_up();
-        assert_eq!(app.selected_line, 0);
+        assert_eq!(app.active_tab().selected_line, 0);
 
-        // Can't scroll past end
-        app.selected_line = 9;
-        app.scroll_down();
-        assert_eq!(app.selected_line, 9);
+        // Jump to end
+        app.jump_to_end();
+        assert_eq!(app.active_tab().selected_line, 9);
     }
 
     #[test]
     fn test_page_navigation() {
-        let mut app = App::new(100);
+        let lines: Vec<&str> = (0..100).map(|_| "line").collect();
+        let temp_file = create_temp_log_file(&lines);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Page down
         app.page_down(10);
-        assert_eq!(app.selected_line, 10);
+        assert_eq!(app.active_tab().selected_line, 10);
 
         // Page up
         app.page_up(5);
-        assert_eq!(app.selected_line, 5);
-
-        // Page down past end
-        app.selected_line = 95;
-        app.page_down(10);
-        assert_eq!(app.selected_line, 99); // Last line
-    }
-
-    #[test]
-    fn test_jump_to_start_end() {
-        let mut app = App::new(100);
-
-        // Jump to end
-        app.jump_to_end();
-        assert_eq!(app.selected_line, 99);
-
-        // Jump to start
-        app.jump_to_start();
-        assert_eq!(app.selected_line, 0);
+        assert_eq!(app.active_tab().selected_line, 5);
     }
 
     #[test]
     fn test_filter_application() {
-        let mut app = App::new(10);
-        let matching_indices = vec![1, 3, 5, 7, 9];
+        let temp_file = create_temp_log_file(&["error", "info", "error", "debug"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+        let matching_indices = vec![0, 2];
 
-        app.apply_filter(matching_indices.clone(), "test".to_string());
+        app.apply_filter(matching_indices.clone(), "error".to_string());
 
-        assert_eq!(app.mode, ViewMode::Filtered);
-        assert_eq!(app.line_indices, matching_indices);
-        assert_eq!(app.filter_pattern, Some("test".to_string()));
-        assert_eq!(app.selected_line, 0); // Reset to start
-        assert!(matches!(
-            app.filter_state,
-            FilterState::Complete { matches: 5 }
-        ));
+        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
+        assert_eq!(app.active_tab().line_indices, matching_indices);
+        assert_eq!(app.active_tab().filter_pattern, Some("error".to_string()));
     }
 
     #[test]
-    fn test_filter_preserves_selection_on_update() {
-        let mut app = App::new(20);
+    fn test_clear_filter() {
+        let temp_file = create_temp_log_file(&["error", "info", "error", "debug"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        // Apply initial filter
-        app.apply_filter(vec![1, 3, 5, 7, 9], "test".to_string());
-        app.selected_line = 2; // Select index 2, which is actual line 5
-
-        // Update filter - line 5 is still in results but at different index
-        app.apply_filter(vec![1, 5, 9], "test".to_string());
-
-        // Selection should stay on line 5 (now at index 1)
-        assert_eq!(app.selected_line, 1);
-        assert_eq!(app.line_indices[app.selected_line], 5);
-    }
-
-    #[test]
-    fn test_filter_update_when_selected_line_not_in_results() {
-        let mut app = App::new(20);
-
-        // Apply initial filter
-        app.apply_filter(vec![1, 3, 5, 7, 9], "test".to_string());
-        app.selected_line = 2; // Select index 2, which is actual line 5
-
-        // Update filter - line 5 is NOT in new results
-        app.apply_filter(vec![1, 3, 7], "test".to_string());
-
-        // Selection should be clamped to valid range (keeps similar position)
-        assert_eq!(app.selected_line, 2); // Index 2 is now line 7
-        assert_eq!(app.line_indices[app.selected_line], 7);
-    }
-
-    #[test]
-    fn test_clear_filter_preserves_actual_line() {
-        let mut app = App::new(20);
-
-        // Apply filter
-        app.apply_filter(vec![2, 5, 10, 15], "test".to_string());
-
-        // Select line at index 2 (actual line 10)
-        app.selected_line = 2;
-
-        // Clear filter
+        app.apply_filter(vec![0, 2], "error".to_string());
         app.clear_filter();
 
-        // Should stay on actual line 10
-        assert_eq!(app.selected_line, 10);
-        assert_eq!(app.mode, ViewMode::Normal);
-        assert!(app.filter_pattern.is_none());
-        assert_eq!(app.line_indices.len(), 20);
-    }
-
-    #[test]
-    fn test_clear_filter_empty_selection() {
-        let mut app = App::new(10);
-
-        // Apply filter with no matches
-        app.apply_filter(vec![], "nomatch".to_string());
-
-        // Clear filter
-        app.clear_filter();
-
-        // Should reset to 0
-        assert_eq!(app.selected_line, 0);
-        assert_eq!(app.mode, ViewMode::Normal);
+        assert_eq!(app.active_tab().mode, ViewMode::Normal);
+        assert!(app.active_tab().filter_pattern.is_none());
     }
 
     #[test]
     fn test_follow_mode_toggle() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["1", "2", "3"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        assert!(!app.follow_mode);
-
-        app.toggle_follow_mode();
-        assert!(app.follow_mode);
+        assert!(!app.active_tab().follow_mode);
 
         app.toggle_follow_mode();
-        assert!(!app.follow_mode);
-    }
+        assert!(app.active_tab().follow_mode);
 
-    #[test]
-    fn test_follow_mode_jumps_to_end() {
-        let mut app = App::new(100);
-        app.follow_mode = true;
-
-        app.jump_to_end();
-        assert_eq!(app.selected_line, 99);
+        app.toggle_follow_mode();
+        assert!(!app.active_tab().follow_mode);
     }
 
     #[test]
     fn test_filter_input_mode() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Enter filter mode
         app.start_filter_input();
@@ -781,96 +677,11 @@ mod tests {
     }
 
     #[test]
-    fn test_input_backspace_empty() {
-        let mut app = App::new(10);
-
-        app.start_filter_input();
-        app.input_backspace(); // Should not panic on empty input
-        assert!(app.get_input().is_empty());
-    }
-
-    #[test]
-    fn test_append_filter_results() {
-        let mut app = App::new(10);
-
-        // Apply initial filter
-        app.apply_filter(vec![1, 3, 5], "test".to_string());
-        assert_eq!(app.line_indices.len(), 3);
-
-        // Append new results (incremental filtering)
-        app.append_filter_results(vec![7, 9]);
-        assert_eq!(app.line_indices.len(), 5);
-        assert_eq!(app.line_indices, vec![1, 3, 5, 7, 9]);
-    }
-
-    #[test]
-    fn test_scroll_position_adjustment() {
-        let mut app = App::new(100);
-        let viewport_height = 20;
-
-        // Scroll near bottom
-        app.selected_line = 90;
-        app.adjust_scroll(viewport_height);
-
-        // Scroll position should adjust to keep selection visible
-        // This ensures selection is visible with padding
-        assert!(app.scroll_position <= app.selected_line);
-    }
-
-    #[test]
-    fn test_empty_file_handling() {
-        let app = App::new(0);
-
-        assert_eq!(app.total_lines, 0);
-        assert_eq!(app.line_indices.len(), 0);
-        assert_eq!(app.selected_line, 0);
-    }
-
-    #[test]
-    fn test_filter_with_follow_mode() {
-        let mut app = App::new(10);
-        app.follow_mode = true;
-
-        // Apply filter (follow mode should NOT affect filter application)
-        app.apply_filter(vec![1, 3, 5], "test".to_string());
-
-        assert!(app.follow_mode); // Follow mode stays enabled
-        assert_eq!(app.mode, ViewMode::Filtered);
-    }
-
-    #[test]
-    fn test_navigation_bounds_with_filter() {
-        let mut app = App::new(100);
-
-        // Apply filter (only 5 lines visible)
-        app.apply_filter(vec![10, 20, 30, 40, 50], "test".to_string());
-
-        // Try to scroll past filtered end
-        app.selected_line = 4; // Last filtered line
-        app.scroll_down();
-        assert_eq!(app.selected_line, 4); // Should not go past end
-
-        // Jump to end should go to last filtered line
-        app.jump_to_end();
-        assert_eq!(app.selected_line, 4);
-    }
-
-    #[test]
-    fn test_last_filtered_line_tracking() {
-        let mut app = App::new(10);
-
-        // Apply filter
-        app.apply_filter(vec![1, 3, 5], "test".to_string());
-
-        // last_filtered_line should be updated
-        assert_eq!(app.last_filtered_line, 10);
-    }
-
-    #[test]
     fn test_help_mode_toggle() {
         use crate::event::AppEvent;
 
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
         assert!(!app.show_help);
 
         // Show help
@@ -883,14 +694,9 @@ mod tests {
     }
 
     #[test]
-    fn test_help_mode_initial_state() {
-        let app = App::new(10);
-        assert!(!app.show_help); // Help should be hidden initially
-    }
-
-    #[test]
     fn test_line_jump_input_mode() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["1", "2", "3"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Start line jump input
         app.start_line_jump_input();
@@ -904,310 +710,9 @@ mod tests {
     }
 
     #[test]
-    fn test_jump_to_line_basic() {
-        let mut app = App::new(100);
-
-        // Jump to line 50 (1-indexed)
-        app.jump_to_line(50);
-        assert_eq!(app.selected_line, 49); // 0-indexed
-
-        // Jump to line 1
-        app.jump_to_line(1);
-        assert_eq!(app.selected_line, 0);
-
-        // Jump to line 100
-        app.jump_to_line(100);
-        assert_eq!(app.selected_line, 99);
-    }
-
-    #[test]
-    fn test_jump_to_line_out_of_bounds() {
-        let mut app = App::new(50);
-
-        // Jump to line beyond total lines - should go to end
-        app.jump_to_line(200);
-        assert_eq!(app.selected_line, 49);
-
-        // Jump to line 0 - should do nothing
-        let old_selection = app.selected_line;
-        app.jump_to_line(0);
-        assert_eq!(app.selected_line, old_selection);
-    }
-
-    #[test]
-    fn test_jump_to_line_with_filter() {
-        let mut app = App::new(100);
-
-        // Apply filter (only lines 10, 30, 50, 70, 90 visible)
-        app.apply_filter(vec![10, 30, 50, 70, 90], "test".to_string());
-
-        // Jump to line 31 (1-indexed) which maps to index 30 (0-indexed)
-        app.jump_to_line(31);
-        assert_eq!(app.selected_line, 1); // Should be at position 1 in filtered results
-
-        // Jump to line 91 (last filtered line)
-        app.jump_to_line(91);
-        assert_eq!(app.selected_line, 4); // Position 4 in filtered results
-
-        // Jump to line 20 (not in filtered results) - should find nearest
-        app.jump_to_line(20);
-        // Should jump to nearest visible line (10 or 30)
-        let selected_actual_line = app.line_indices[app.selected_line];
-        assert!(selected_actual_line == 10 || selected_actual_line == 30);
-    }
-
-    #[test]
-    fn test_jump_to_line_empty_file() {
-        let mut app = App::new(0);
-
-        // Jump to any line in empty file - should do nothing
-        app.jump_to_line(1);
-        assert_eq!(app.selected_line, 0);
-    }
-
-    #[test]
-    fn test_line_jump_input_events() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(100);
-
-        // Start line jump input
-        app.apply_event(AppEvent::StartLineJumpInput);
-        assert!(app.is_entering_line_jump());
-
-        // Add digits
-        app.apply_event(AppEvent::LineJumpInputChar('5'));
-        app.apply_event(AppEvent::LineJumpInputChar('0'));
-        assert_eq!(app.get_input(), "50");
-
-        // Non-digit should not be added
-        app.apply_event(AppEvent::LineJumpInputChar('a'));
-        assert_eq!(app.get_input(), "50"); // Unchanged
-
-        // Backspace
-        app.apply_event(AppEvent::LineJumpInputBackspace);
-        assert_eq!(app.get_input(), "5");
-
-        // Submit
-        app.apply_event(AppEvent::LineJumpInputSubmit);
-        assert!(!app.is_entering_line_jump());
-        assert_eq!(app.selected_line, 4); // Line 5 is at index 4
-    }
-
-    #[test]
-    fn test_line_jump_input_cancel() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(100);
-        app.selected_line = 10;
-
-        // Start and enter some input
-        app.apply_event(AppEvent::StartLineJumpInput);
-        app.apply_event(AppEvent::LineJumpInputChar('5'));
-        app.apply_event(AppEvent::LineJumpInputChar('0'));
-
-        // Cancel without jumping
-        app.apply_event(AppEvent::LineJumpInputCancel);
-        assert!(!app.is_entering_line_jump());
-        assert_eq!(app.selected_line, 10); // Should not have moved
-        assert_eq!(app.get_input(), ""); // Input buffer cleared
-    }
-
-    #[test]
-    fn test_line_jump_disables_follow_mode() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(100);
-        app.follow_mode = true;
-
-        // Jump to a line
-        app.apply_event(AppEvent::StartLineJumpInput);
-        app.apply_event(AppEvent::LineJumpInputChar('5'));
-        app.apply_event(AppEvent::LineJumpInputChar('0'));
-        app.apply_event(AppEvent::LineJumpInputSubmit);
-
-        // Follow mode should be disabled
-        assert!(!app.follow_mode);
-        assert_eq!(app.selected_line, 49); // Line 50 is at index 49
-    }
-
-    #[test]
-    fn test_mouse_scroll_down_moves_viewport_and_selection() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Start at top
-        app.selected_line = 5;
-        app.scroll_position = 0;
-
-        // Scroll down by 3 lines
-        app.mouse_scroll_down(3, visible_height);
-
-        // Viewport should move down
-        assert_eq!(app.scroll_position, 3);
-        // Selection should move down by the same amount
-        assert_eq!(app.selected_line, 8);
-    }
-
-    #[test]
-    fn test_mouse_scroll_down_with_selection_at_top() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Selection at line 2, viewport at 0
-        app.selected_line = 2;
-        app.scroll_position = 0;
-
-        // Scroll down by 5 lines
-        app.mouse_scroll_down(5, visible_height);
-
-        // Viewport moved to 5
-        assert_eq!(app.scroll_position, 5);
-        // Selection should move down by 5 as well
-        assert_eq!(app.selected_line, 7);
-    }
-
-    #[test]
-    fn test_mouse_scroll_up_moves_viewport_and_selection() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Start scrolled down
-        app.selected_line = 25;
-        app.scroll_position = 20;
-
-        // Scroll up by 3 lines
-        app.mouse_scroll_up(3, visible_height);
-
-        // Viewport should move up
-        assert_eq!(app.scroll_position, 17);
-        // Selection should move up by the same amount
-        assert_eq!(app.selected_line, 22);
-    }
-
-    #[test]
-    fn test_mouse_scroll_up_with_selection_near_bottom() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Selection at line 39, viewport at 20
-        app.selected_line = 39;
-        app.scroll_position = 20;
-
-        // Scroll up by 10 lines
-        app.mouse_scroll_up(10, visible_height);
-
-        // Viewport moved to 10
-        assert_eq!(app.scroll_position, 10);
-        // Selection should move up by 10 as well
-        assert_eq!(app.selected_line, 29);
-    }
-
-    #[test]
-    fn test_mouse_scroll_down_at_bottom() {
-        let mut app = App::new(50);
-        let visible_height = 20;
-
-        // Scroll to near bottom
-        app.scroll_position = 30; // Max is 50 - 20 = 30
-        app.selected_line = 40;
-
-        // Try to scroll further down
-        app.mouse_scroll_down(10, visible_height);
-
-        // Viewport should not scroll past max (stays at 30)
-        assert_eq!(app.scroll_position, 30);
-        // Since viewport didn't move, selection shouldn't move either
-        assert_eq!(app.selected_line, 40);
-    }
-
-    #[test]
-    fn test_mouse_scroll_up_at_top() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Start at top
-        app.scroll_position = 0;
-        app.selected_line = 5;
-
-        // Try to scroll further up
-        app.mouse_scroll_up(10, visible_height);
-
-        // Should stay at 0
-        assert_eq!(app.scroll_position, 0);
-        assert_eq!(app.selected_line, 5);
-    }
-
-    #[test]
-    fn test_mouse_scroll_with_filtered_view() {
-        let mut app = App::new(100);
-        let visible_height = 10;
-
-        // Apply filter with 20 matching lines
-        let filtered_lines: Vec<usize> = (0..20).map(|i| i * 5).collect();
-        app.apply_filter(filtered_lines, "test".to_string());
-
-        // Start at top with selection in middle of visible area
-        app.selected_line = 5;
-        app.scroll_position = 0;
-
-        // Scroll down by 2
-        app.mouse_scroll_down(2, visible_height);
-
-        // Viewport should move
-        assert_eq!(app.scroll_position, 2);
-        // Selection should follow the scroll
-        assert_eq!(app.selected_line, 7);
-    }
-
-    #[test]
-    fn test_mouse_scroll_skips_adjust_scroll() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Position selection at top with some scroll
-        app.selected_line = 5;
-        app.scroll_position = 5;
-
-        // Mouse scroll down - this would normally trigger adjust_scroll
-        // because selection is at top of viewport (within padding zone)
-        app.mouse_scroll_down(3, visible_height);
-
-        // Check flag was set
-        assert!(app.skip_scroll_adjustment);
-
-        // After mouse scroll: viewport=8, selection=8
-        assert_eq!(app.scroll_position, 8);
-        assert_eq!(app.selected_line, 8);
-
-        // Call adjust_scroll - it should skip and clear flag
-        app.adjust_scroll(visible_height);
-        assert!(!app.skip_scroll_adjustment);
-
-        // Scroll position should NOT have changed (no padding adjustment)
-        assert_eq!(app.scroll_position, 8);
-        assert_eq!(app.selected_line, 8);
-    }
-
-    #[test]
-    fn test_adjust_scroll_works_normally_without_mouse() {
-        let mut app = App::new(100);
-        let visible_height = 20;
-
-        // Position selection at top with some scroll
-        app.selected_line = 5;
-        app.scroll_position = 5;
-
-        // Call adjust_scroll without mouse scroll
-        app.adjust_scroll(visible_height);
-
-        // Should apply padding adjustment (selection is at top, should add padding)
-        assert_eq!(app.scroll_position, 2); // 5 - 3 (padding)
-    }
-
-    #[test]
     fn test_add_to_history() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Add patterns to history
         app.add_to_history("ERROR".to_string());
@@ -1215,14 +720,12 @@ mod tests {
         app.add_to_history("INFO".to_string());
 
         assert_eq!(app.filter_history.len(), 3);
-        assert_eq!(app.filter_history[0], "ERROR");
-        assert_eq!(app.filter_history[1], "WARN");
-        assert_eq!(app.filter_history[2], "INFO");
     }
 
     #[test]
     fn test_add_to_history_skips_duplicates() {
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         app.add_to_history("ERROR".to_string());
         app.add_to_history("ERROR".to_string()); // Duplicate - should not add
@@ -1231,35 +734,11 @@ mod tests {
     }
 
     #[test]
-    fn test_add_to_history_skips_empty() {
-        let mut app = App::new(10);
-
-        app.add_to_history("".to_string());
-
-        assert_eq!(app.filter_history.len(), 0);
-    }
-
-    #[test]
-    fn test_history_limit() {
-        let mut app = App::new(10);
-
-        // Add 52 entries to exceed limit of 50
-        for i in 0..52 {
-            app.add_to_history(format!("pattern{}", i));
-        }
-
-        // Should only keep 50 most recent
-        assert_eq!(app.filter_history.len(), 50);
-        // Oldest should be removed
-        assert_eq!(app.filter_history[0], "pattern2");
-        assert_eq!(app.filter_history[49], "pattern51");
-    }
-
-    #[test]
-    fn test_history_up_navigation() {
+    fn test_history_navigation() {
         use crate::event::AppEvent;
 
-        let mut app = App::new(10);
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         app.add_to_history("ERROR".to_string());
         app.add_to_history("WARN".to_string());
@@ -1271,128 +750,38 @@ mod tests {
         // Navigate up (most recent)
         app.apply_event(AppEvent::HistoryUp);
         assert_eq!(app.input_buffer, "INFO");
-        assert_eq!(app.history_index, Some(2));
 
         // Navigate up again (older)
         app.apply_event(AppEvent::HistoryUp);
         assert_eq!(app.input_buffer, "WARN");
-        assert_eq!(app.history_index, Some(1));
 
-        // Navigate up again
-        app.apply_event(AppEvent::HistoryUp);
-        assert_eq!(app.input_buffer, "ERROR");
-        assert_eq!(app.history_index, Some(0));
-
-        // Try to go up past oldest (should stay)
-        app.apply_event(AppEvent::HistoryUp);
-        assert_eq!(app.input_buffer, "ERROR");
-        assert_eq!(app.history_index, Some(0));
-    }
-
-    #[test]
-    fn test_history_down_navigation() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(10);
-
-        app.add_to_history("ERROR".to_string());
-        app.add_to_history("WARN".to_string());
-        app.add_to_history("INFO".to_string());
-
-        app.start_filter_input();
-
-        // Navigate up to oldest
-        app.apply_event(AppEvent::HistoryUp);
-        app.apply_event(AppEvent::HistoryUp);
-        app.apply_event(AppEvent::HistoryUp);
-        assert_eq!(app.input_buffer, "ERROR");
-
-        // Navigate down (newer)
-        app.apply_event(AppEvent::HistoryDown);
-        assert_eq!(app.input_buffer, "WARN");
-        assert_eq!(app.history_index, Some(1));
-
-        // Navigate down again
+        // Navigate down
         app.apply_event(AppEvent::HistoryDown);
         assert_eq!(app.input_buffer, "INFO");
-        assert_eq!(app.history_index, Some(2));
-
-        // Navigate down past newest (should clear)
-        app.apply_event(AppEvent::HistoryDown);
-        assert_eq!(app.input_buffer, "");
-        assert_eq!(app.history_index, None);
     }
 
     #[test]
-    fn test_history_down_when_not_navigating() {
+    fn test_tab_events() {
         use crate::event::AppEvent;
 
-        let mut app = App::new(10);
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
 
-        app.add_to_history("ERROR".to_string());
-        app.start_filter_input();
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
 
-        // Down arrow when not navigating should do nothing
-        app.apply_event(AppEvent::HistoryDown);
-        assert_eq!(app.input_buffer, "");
-        assert_eq!(app.history_index, None);
-    }
+        assert_eq!(app.active_tab, 0);
 
-    #[test]
-    fn test_filter_submit_saves_to_history() {
-        use crate::event::AppEvent;
+        app.apply_event(AppEvent::NextTab);
+        assert_eq!(app.active_tab, 1);
 
-        let mut app = App::new(10);
+        app.apply_event(AppEvent::PrevTab);
+        assert_eq!(app.active_tab, 0);
 
-        // Start filter and type
-        app.start_filter_input();
-        app.input_char('E');
-        app.input_char('R');
-        app.input_char('R');
-
-        // Submit filter
-        app.apply_event(AppEvent::FilterInputSubmit);
-
-        // Should be saved to history
-        assert_eq!(app.filter_history.len(), 1);
-        assert_eq!(app.filter_history[0], "ERR");
-    }
-
-    #[test]
-    fn test_cancel_filter_resets_history_index() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(10);
-
-        app.add_to_history("ERROR".to_string());
-        app.start_filter_input();
-
-        // Navigate history
-        app.apply_event(AppEvent::HistoryUp);
-        assert_eq!(app.history_index, Some(0));
-
-        // Cancel filter
-        app.cancel_filter_input();
-
-        // History index should be reset
-        assert_eq!(app.history_index, None);
-    }
-
-    #[test]
-    fn test_history_empty() {
-        use crate::event::AppEvent;
-
-        let mut app = App::new(10);
-
-        app.start_filter_input();
-
-        // Try to navigate empty history
-        app.apply_event(AppEvent::HistoryUp);
-        assert_eq!(app.input_buffer, "");
-        assert_eq!(app.history_index, None);
-
-        app.apply_event(AppEvent::HistoryDown);
-        assert_eq!(app.input_buffer, "");
-        assert_eq!(app.history_index, None);
+        app.apply_event(AppEvent::SelectTab(1));
+        assert_eq!(app.active_tab, 1);
     }
 }

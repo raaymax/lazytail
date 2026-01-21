@@ -18,10 +18,13 @@ pub fn process_file_modification(new_total: usize, old_total: usize, app: &App) 
         old_total,
     });
 
+    // Access active tab state
+    let tab = app.active_tab();
+
     // If in filtered mode and file grew, trigger incremental filter
-    if app.mode == ViewMode::Filtered && new_total > old_total {
-        if let Some(ref pattern) = app.filter_pattern {
-            let start_line = app.last_filtered_line;
+    if tab.mode == ViewMode::Filtered && new_total > old_total {
+        if let Some(ref pattern) = tab.filter_pattern {
+            let start_line = tab.last_filtered_line;
             if start_line < new_total {
                 events.push(AppEvent::StartFilter {
                     pattern: pattern.clone(),
@@ -38,17 +41,34 @@ pub fn process_file_modification(new_total: usize, old_total: usize, app: &App) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_log_file(lines: &[&str]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        for line in lines {
+            writeln!(file, "{}", line).unwrap();
+        }
+        file.flush().unwrap();
+        file
+    }
 
     #[test]
     fn test_file_truncated() {
-        let app = App::new(100);
+        let lines: Vec<&str> = (0..100).map(|_| "line").collect();
+        let temp_file = create_temp_log_file(&lines);
+        let app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
         let events = process_file_modification(50, 100, &app);
         assert!(events.contains(&AppEvent::FileTruncated { new_total: 50 }));
     }
 
     #[test]
     fn test_file_grew_normal_mode() {
-        let app = App::new(100);
+        let lines: Vec<&str> = (0..100).map(|_| "line").collect();
+        let temp_file = create_temp_log_file(&lines);
+        let app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
         let events = process_file_modification(150, 100, &app);
         assert!(events.contains(&AppEvent::FileModified {
             new_total: 150,
@@ -62,9 +82,12 @@ mod tests {
 
     #[test]
     fn test_file_grew_filtered_mode() {
-        let mut app = App::new(100);
+        let lines: Vec<&str> = (0..100).map(|_| "line").collect();
+        let temp_file = create_temp_log_file(&lines);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
         app.apply_filter(vec![0, 5, 10], "test".to_string());
-        app.last_filtered_line = 100;
+        app.active_tab_mut().last_filtered_line = 100;
 
         let events = process_file_modification(150, 100, &app);
 
@@ -89,7 +112,10 @@ mod tests {
 
     #[test]
     fn test_file_same_size() {
-        let app = App::new(100);
+        let lines: Vec<&str> = (0..100).map(|_| "line").collect();
+        let temp_file = create_temp_log_file(&lines);
+        let app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
         let events = process_file_modification(100, 100, &app);
         assert!(events.contains(&AppEvent::FileModified {
             new_total: 100,
