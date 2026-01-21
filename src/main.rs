@@ -31,13 +31,9 @@ const PAGE_SIZE_OFFSET: usize = 5;
 #[command(name = "lazytail")]
 #[command(about = "A universal terminal-based log viewer with filtering support", long_about = None)]
 struct Args {
-    /// Log files to view (multiple files will open in tabs)
-    #[arg(value_name = "FILE", required = true)]
+    /// Log files to view (multiple files will open in tabs, use - for stdin)
+    #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
-
-    /// Read from stdin instead of a file
-    #[arg(short, long)]
-    stdin: bool,
 
     /// Disable file watching
     #[arg(long = "no-watch")]
@@ -45,22 +41,49 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    use std::io::IsTerminal;
+
     let args = Args::parse();
 
-    if args.stdin {
-        eprintln!("STDIN support not yet implemented");
+    // Auto-detect stdin: if nothing is piped and no files given, show usage
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let has_piped_input = !stdin_is_tty;
+
+    if args.files.is_empty() && !has_piped_input {
+        eprintln!("Usage: lazytail <FILE>...");
+        eprintln!("       command | lazytail");
+        eprintln!("       lazytail -  (explicit stdin)");
         std::process::exit(1);
     }
 
-    if args.files.is_empty() {
-        eprintln!("At least one file path is required");
-        std::process::exit(1);
-    }
-
-    // Create app state BEFORE terminal setup (important for process substitution)
-    // Process substitution FDs may become invalid after terminal operations
+    // Create app state BEFORE terminal setup (important for process substitution and stdin)
+    // These sources may become invalid after terminal operations
     let watch = !args.no_watch;
-    let mut app = App::new(args.files, watch).context("Failed to open log files")?;
+
+    // Build tabs, treating "-" as stdin
+    let mut tabs = Vec::new();
+    let mut stdin_used = false;
+
+    // If stdin has piped data, always include it as the first tab
+    if has_piped_input {
+        tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+        stdin_used = true;
+    }
+
+    for file in args.files {
+        if file.as_os_str() == "-" {
+            if stdin_used {
+                // Already read stdin, skip duplicate
+                continue;
+            }
+            stdin_used = true;
+            tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+        } else {
+            tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
+        }
+    }
+
+    let mut app = App::with_tabs(tabs);
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;

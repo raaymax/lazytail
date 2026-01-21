@@ -1,4 +1,5 @@
 use crate::tab::TabState;
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// Represents the current view mode
@@ -55,13 +56,19 @@ pub struct App {
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new(files: Vec<PathBuf>, watch: bool) -> anyhow::Result<Self> {
         let mut tabs = Vec::new();
         for file in files {
             tabs.push(TabState::new(file, watch)?);
         }
 
-        Ok(Self {
+        Ok(Self::with_tabs(tabs))
+    }
+
+    /// Create an App with pre-created tabs
+    pub fn with_tabs(tabs: Vec<TabState>) -> Self {
+        Self {
             tabs,
             active_tab: 0,
             input_mode: InputMode::Normal,
@@ -71,7 +78,7 @@ impl App {
             filter_history: Vec::new(),
             history_index: None,
             side_panel_width: 32,
-        })
+        }
     }
 
     /// Get a reference to the active tab

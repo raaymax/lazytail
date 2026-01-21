@@ -105,6 +105,35 @@ impl TabState {
         })
     }
 
+    /// Create a new tab from stdin
+    pub fn from_stdin() -> Result<Self> {
+        let stdin = std::io::stdin();
+        let stream_reader =
+            StreamReader::from_reader(stdin.lock()).context("Failed to read from stdin")?;
+
+        let total_lines = stream_reader.total_lines();
+        let line_indices = (0..total_lines).collect();
+
+        Ok(Self {
+            name: "<stdin>".to_string(),
+            path: PathBuf::from("-"),
+            mode: ViewMode::Normal,
+            total_lines,
+            line_indices,
+            scroll_position: 0,
+            selected_line: 0,
+            filter_state: FilterState::Inactive,
+            filter_pattern: None,
+            follow_mode: false,
+            last_filtered_line: 0,
+            skip_scroll_adjustment: false,
+            reader: Arc::new(Mutex::new(stream_reader)),
+            watcher: None,
+            filter_receiver: None,
+            is_incremental_filter: false,
+        })
+    }
+
     /// Get the number of visible lines
     pub fn visible_line_count(&self) -> usize {
         self.line_indices.len()
