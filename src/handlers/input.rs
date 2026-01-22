@@ -13,6 +13,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
     match app.input_mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
+        InputMode::ZPending => handle_z_pending_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -53,6 +54,18 @@ fn handle_line_jump_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     }
 }
 
+/// Handle keyboard input in z pending mode (waiting for zz, zt, zb)
+fn handle_z_pending_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char('z') => vec![AppEvent::CenterView, AppEvent::ExitZMode],
+        KeyCode::Char('t') => vec![AppEvent::ViewToTop, AppEvent::ExitZMode],
+        KeyCode::Char('b') => vec![AppEvent::ViewToBottom, AppEvent::ExitZMode],
+        KeyCode::Esc => vec![AppEvent::ExitZMode],
+        // Any other key cancels z mode
+        _ => vec![AppEvent::ExitZMode],
+    }
+}
+
 /// Handle keyboard input in normal navigation mode
 fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
@@ -78,6 +91,7 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('/') => vec![AppEvent::StartFilterInput],
         KeyCode::Char(':') => vec![AppEvent::StartLineJumpInput],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        KeyCode::Char('z') => vec![AppEvent::EnterZMode],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         // Tab navigation
         KeyCode::Tab => vec![AppEvent::NextTab],

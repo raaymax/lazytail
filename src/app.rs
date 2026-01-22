@@ -23,6 +23,8 @@ pub enum InputMode {
     Normal,
     EnteringFilter,
     EnteringLineJump,
+    /// Waiting for second key after 'z' (for zz, zt, zb commands)
+    ZPending,
 }
 
 /// Main application state
@@ -462,6 +464,23 @@ impl App {
             // Filter history navigation
             AppEvent::HistoryUp => self.history_up(),
             AppEvent::HistoryDown => self.history_down(),
+
+            // View positioning (vim z commands)
+            AppEvent::EnterZMode => {
+                self.input_mode = InputMode::ZPending;
+            }
+            AppEvent::ExitZMode => {
+                self.input_mode = InputMode::Normal;
+            }
+            AppEvent::CenterView => {
+                self.active_tab_mut().center_view();
+            }
+            AppEvent::ViewToTop => {
+                self.active_tab_mut().view_to_top();
+            }
+            AppEvent::ViewToBottom => {
+                self.active_tab_mut().view_to_bottom();
+            }
 
             // Future events - not yet implemented
             AppEvent::StartFilter { .. } => {

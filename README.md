@@ -31,6 +31,9 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 - `g` - Jump to start (first line)
 - `G` - Jump to end (last line)
 - `:123` - Jump to line 123 (vim-style)
+- `zz` - Center selection on screen
+- `zt` - Move selection to top of screen
+- `zb` - Move selection to bottom of screen
 - `f` - Toggle follow mode (auto-scroll to new logs)
 - Mouse wheel - Scroll up/down (selection follows scroll)
 

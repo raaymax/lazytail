@@ -316,6 +316,24 @@ impl TabState {
         self.viewport.jump_to_start(&self.line_indices);
         self.sync_from_viewport();
     }
+
+    /// Center the current selection on screen (zz)
+    pub fn center_view(&mut self) {
+        self.viewport.center(&self.line_indices);
+        self.sync_from_viewport();
+    }
+
+    /// Move current selection to top of viewport (zt)
+    pub fn view_to_top(&mut self) {
+        self.viewport.anchor_to_top(&self.line_indices);
+        self.sync_from_viewport();
+    }
+
+    /// Move current selection to bottom of viewport (zb)
+    pub fn view_to_bottom(&mut self) {
+        self.viewport.anchor_to_bottom(&self.line_indices);
+        self.sync_from_viewport();
+    }
 }
 
 #[cfg(test)]

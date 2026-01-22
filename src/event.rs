@@ -64,6 +64,13 @@ pub enum AppEvent {
     HistoryUp,
     HistoryDown,
 
+    // View positioning (vim z commands)
+    CenterView,   // zz
+    ViewToTop,    // zt
+    ViewToBottom, // zb
+    EnterZMode,   // z pressed, waiting for second key
+    ExitZMode,    // cancel z mode
+
     // System events
     Quit,
 }

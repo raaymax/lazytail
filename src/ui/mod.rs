@@ -305,6 +305,9 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  g             Jump to start"),
         Line::from("  G             Jump to end"),
         Line::from("  :123          Jump to line 123"),
+        Line::from("  zz            Center selection on screen"),
+        Line::from("  zt            Move selection to top"),
+        Line::from("  zb            Move selection to bottom"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Tabs",

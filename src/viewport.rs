@@ -5,7 +5,6 @@
 //! The anchor_line (file line number) is stable across filter changes.
 
 /// Result of resolving the viewport against current content
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedView {
     /// Index into line_indices for the selected line
@@ -15,7 +14,6 @@ pub struct ResolvedView {
 }
 
 /// Viewport manages selection and scrolling with vim-like behavior
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Viewport {
     /// The file line number that is selected (stable across filter changes)
@@ -34,7 +32,6 @@ pub struct Viewport {
     cache: Option<ResolvedView>,
 }
 
-#[allow(dead_code)]
 impl Viewport {
     /// Create a new viewport anchored to the given line
     pub fn new(initial_line: usize) -> Self {
@@ -150,6 +147,7 @@ impl Viewport {
 
     /// Move viewport by delta lines without moving selection
     /// (selection stays on same line, but moves on screen)
+    #[allow(dead_code)] // Future: Ctrl+E/Ctrl+Y vim commands
     pub fn move_viewport(&mut self, delta: i32, line_indices: &[usize]) {
         if line_indices.is_empty() || self.height == 0 {
             return;
@@ -244,6 +242,7 @@ impl Viewport {
     }
 
     /// Jump to a specific index in the current view
+    #[allow(dead_code)] // Future: direct index jumping
     pub fn jump_to_index(&mut self, index: usize, line_indices: &[usize]) {
         if line_indices.is_empty() {
             return;
@@ -344,21 +343,25 @@ impl Viewport {
     }
 
     /// Get the cached selected index (call resolve() first)
+    #[allow(dead_code)] // Public API for future use
     pub fn selected_index(&self) -> usize {
         self.cache.map(|c| c.selected_index).unwrap_or(0)
     }
 
     /// Get the cached scroll position (call resolve() first)
+    #[allow(dead_code)] // Public API for future use
     pub fn scroll_position(&self) -> usize {
         self.cache.map(|c| c.scroll_position).unwrap_or(0)
     }
 
     /// Get current height
+    #[allow(dead_code)] // Public API for future use
     pub fn height(&self) -> usize {
         self.height
     }
 
     /// Set height (usually called during resolve, but can be set explicitly)
+    #[allow(dead_code)] // Public API for future use
     pub fn set_height(&mut self, height: usize) {
         if self.height != height {
             self.height = height;
