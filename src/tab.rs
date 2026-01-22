@@ -13,9 +13,6 @@ use std::sync::{Arc, Mutex};
 pub struct TabState {
     /// Display name (filename)
     pub name: String,
-    /// Full path to the file (used for tooltips, title displays)
-    #[allow(dead_code)]
-    pub path: PathBuf,
     /// Current view mode
     pub mode: ViewMode,
     /// Total number of lines in the source
@@ -34,10 +31,6 @@ pub struct TabState {
     pub follow_mode: bool,
     /// Last line number that was filtered (for incremental filtering)
     pub last_filtered_line: usize,
-    /// Skip scroll adjustment on next render (set by mouse scroll)
-    /// TODO: Remove in Phase 6 - viewport handles this now
-    #[allow(dead_code)]
-    pub skip_scroll_adjustment: bool,
     /// Per-tab reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Per-tab file watcher
@@ -46,8 +39,7 @@ pub struct TabState {
     pub filter_receiver: Option<Receiver<FilterProgress>>,
     /// Whether the current filter operation is incremental
     pub is_incremental_filter: bool,
-    /// Viewport for anchor-based scroll/selection management (Phase 2+)
-    #[allow(dead_code)]
+    /// Viewport for anchor-based scroll/selection management
     pub viewport: Viewport,
     /// Original line when filter mode started (for restoring on Esc)
     pub filter_origin_line: Option<usize>,
@@ -95,7 +87,6 @@ impl TabState {
 
         Ok(Self {
             name,
-            path,
             mode: ViewMode::Normal,
             total_lines,
             line_indices,
@@ -105,7 +96,6 @@ impl TabState {
             filter_pattern: None,
             follow_mode: false,
             last_filtered_line: 0,
-            skip_scroll_adjustment: false,
             reader,
             watcher,
             filter_receiver: None,
@@ -126,7 +116,6 @@ impl TabState {
 
         Ok(Self {
             name: "<stdin>".to_string(),
-            path: PathBuf::from("-"),
             mode: ViewMode::Normal,
             total_lines,
             line_indices,
@@ -136,7 +125,6 @@ impl TabState {
             filter_pattern: None,
             follow_mode: false,
             last_filtered_line: 0,
-            skip_scroll_adjustment: false,
             reader: Arc::new(Mutex::new(stream_reader)),
             watcher: None,
             filter_receiver: None,
@@ -177,33 +165,6 @@ impl TabState {
     pub fn scroll_up(&mut self) {
         self.viewport.move_selection(-1, &self.line_indices);
         self.sync_from_viewport();
-    }
-
-    /// Ensure the selected line is visible in the viewport
-    /// TODO: Remove in Phase 6 - viewport.resolve() handles this now
-    #[allow(dead_code)]
-    pub fn adjust_scroll(&mut self, viewport_height: usize) {
-        // Skip adjustment if mouse scroll just happened (prevents interference)
-        if self.skip_scroll_adjustment {
-            self.skip_scroll_adjustment = false;
-            return;
-        }
-
-        // Add some padding at the edges for better UX
-        let padding = 3.min(viewport_height / 4);
-
-        // If selection is above viewport, scroll up
-        if self.selected_line < self.scroll_position + padding {
-            self.scroll_position = self.selected_line.saturating_sub(padding);
-        }
-        // If selection is below viewport, scroll down
-        else if self.selected_line >= self.scroll_position + viewport_height - padding {
-            self.scroll_position = self.selected_line + padding + 1 - viewport_height;
-        }
-
-        // Ensure scroll position is valid
-        let max_scroll = self.line_indices.len().saturating_sub(viewport_height);
-        self.scroll_position = self.scroll_position.min(max_scroll);
     }
 
     /// Scroll down by page
