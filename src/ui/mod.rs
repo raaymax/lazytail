@@ -109,11 +109,16 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let tab = app.active_tab_mut();
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
-    // Adjust scroll position to keep selection in view
-    tab.adjust_scroll(visible_height);
+    // Use viewport to compute scroll position and selected index
+    let view = tab.viewport.resolve(&tab.line_indices, visible_height);
 
-    // Use the scroll position to determine which lines to display
-    let start_idx = tab.scroll_position;
+    // Sync old fields from viewport (for backward compatibility during migration)
+    tab.scroll_position = view.scroll_position;
+    tab.selected_line = view.selected_index;
+
+    // Use the viewport-computed values for rendering
+    let start_idx = view.scroll_position;
+    let selected_idx = view.selected_index;
     let count = visible_height.min(tab.visible_line_count().saturating_sub(start_idx));
 
     // Get reader access
@@ -148,7 +153,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
             }
 
             // Apply selection background if this is the selected line
-            if i == tab.selected_line {
+            if i == selected_idx {
                 for span in &mut final_line.spans {
                     // Remap foreground colors that would be invisible on dark gray background
                     let new_style = match span.style.fg {

@@ -175,6 +175,11 @@ impl App {
     pub fn start_filter_input(&mut self) {
         self.input_mode = InputMode::EnteringFilter;
         self.input_buffer.clear();
+
+        // Save current line as filter origin (for restoring on Esc)
+        let tab = self.active_tab_mut();
+        let current_line = tab.viewport.selected_line();
+        tab.filter_origin_line = Some(current_line);
     }
 
     /// Cancel filter input and return to normal mode
@@ -182,6 +187,8 @@ impl App {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
         self.history_index = None;
+        // Note: filter_origin_line is NOT cleared here - clear_filter() uses it
+        // to restore the original position when Esc is pressed
     }
 
     /// Add filter pattern to history (called on filter submit)
@@ -353,6 +360,8 @@ impl App {
                 // Save current filter to history before closing
                 let pattern = self.input_buffer.clone();
                 self.add_to_history(pattern);
+                // Clear origin line - user is committing to the filtered position
+                self.active_tab_mut().filter_origin_line = None;
                 self.cancel_filter_input();
             }
             AppEvent::FilterInputCancel => self.cancel_filter_input(),

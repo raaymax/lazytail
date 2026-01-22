@@ -1,6 +1,7 @@
 use crate::app::{FilterState, ViewMode};
 use crate::filter::engine::FilterProgress;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
+use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -34,6 +35,8 @@ pub struct TabState {
     /// Last line number that was filtered (for incremental filtering)
     pub last_filtered_line: usize,
     /// Skip scroll adjustment on next render (set by mouse scroll)
+    /// TODO: Remove in Phase 6 - viewport handles this now
+    #[allow(dead_code)]
     pub skip_scroll_adjustment: bool,
     /// Per-tab reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
@@ -43,6 +46,11 @@ pub struct TabState {
     pub filter_receiver: Option<Receiver<FilterProgress>>,
     /// Whether the current filter operation is incremental
     pub is_incremental_filter: bool,
+    /// Viewport for anchor-based scroll/selection management (Phase 2+)
+    #[allow(dead_code)]
+    pub viewport: Viewport,
+    /// Original line when filter mode started (for restoring on Esc)
+    pub filter_origin_line: Option<usize>,
 }
 
 impl TabState {
@@ -102,6 +110,8 @@ impl TabState {
             watcher,
             filter_receiver: None,
             is_incremental_filter: false,
+            viewport: Viewport::new(0),
+            filter_origin_line: None,
         })
     }
 
@@ -131,6 +141,8 @@ impl TabState {
             watcher: None,
             filter_receiver: None,
             is_incremental_filter: false,
+            viewport: Viewport::new(0),
+            filter_origin_line: None,
         })
     }
 
@@ -139,21 +151,37 @@ impl TabState {
         self.line_indices.len()
     }
 
+    /// Sync old fields from viewport (for backward compatibility during migration)
+    fn sync_from_viewport(&mut self) {
+        // Find the index of viewport's anchor_line in line_indices
+        let anchor_line = self.viewport.selected_line();
+        if let Ok(idx) = self.line_indices.binary_search(&anchor_line) {
+            self.selected_line = idx;
+        } else {
+            // If not found exactly, find nearest
+            self.selected_line = self
+                .line_indices
+                .iter()
+                .position(|&l| l >= anchor_line)
+                .unwrap_or(self.line_indices.len().saturating_sub(1));
+        }
+    }
+
     /// Scroll down by one line
     pub fn scroll_down(&mut self) {
-        if self.selected_line < self.line_indices.len().saturating_sub(1) {
-            self.selected_line += 1;
-        }
+        self.viewport.move_selection(1, &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Scroll up by one line
     pub fn scroll_up(&mut self) {
-        if self.selected_line > 0 {
-            self.selected_line -= 1;
-        }
+        self.viewport.move_selection(-1, &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Ensure the selected line is visible in the viewport
+    /// TODO: Remove in Phase 6 - viewport.resolve() handles this now
+    #[allow(dead_code)]
     pub fn adjust_scroll(&mut self, viewport_height: usize) {
         // Skip adjustment if mouse scroll just happened (prevents interference)
         if self.skip_scroll_adjustment {
@@ -180,52 +208,36 @@ impl TabState {
 
     /// Scroll down by page
     pub fn page_down(&mut self, page_size: usize) {
-        self.selected_line =
-            (self.selected_line + page_size).min(self.line_indices.len().saturating_sub(1));
+        self.viewport
+            .move_selection(page_size as i32, &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Scroll up by page
     pub fn page_up(&mut self, page_size: usize) {
-        self.selected_line = self.selected_line.saturating_sub(page_size);
+        self.viewport
+            .move_selection(-(page_size as i32), &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Mouse scroll down - moves viewport and selection together
-    pub fn mouse_scroll_down(&mut self, lines: usize, visible_height: usize) {
-        let max_scroll = self.line_indices.len().saturating_sub(visible_height);
-        let old_scroll = self.scroll_position;
-        self.scroll_position = (self.scroll_position + lines).min(max_scroll);
-
-        // Move selection by the same amount the viewport moved
-        let actual_scroll = self.scroll_position - old_scroll;
-        if actual_scroll > 0 {
-            let max_selection = self.line_indices.len().saturating_sub(1);
-            self.selected_line = (self.selected_line + actual_scroll).min(max_selection);
-        }
-
-        // Skip scroll adjustment on next render to prevent padding interference
-        self.skip_scroll_adjustment = true;
+    pub fn mouse_scroll_down(&mut self, lines: usize, _visible_height: usize) {
+        self.viewport
+            .scroll_with_selection(lines as i32, &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Mouse scroll up - moves viewport and selection together
     pub fn mouse_scroll_up(&mut self, lines: usize, _visible_height: usize) {
-        let old_scroll = self.scroll_position;
-        self.scroll_position = self.scroll_position.saturating_sub(lines);
-
-        // Move selection by the same amount the viewport moved
-        let actual_scroll = old_scroll - self.scroll_position;
-        if actual_scroll > 0 {
-            self.selected_line = self.selected_line.saturating_sub(actual_scroll);
-        }
-
-        // Skip scroll adjustment on next render to prevent padding interference
-        self.skip_scroll_adjustment = true;
+        self.viewport
+            .scroll_with_selection(-(lines as i32), &self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
-        let was_filtered = self.mode == ViewMode::Filtered;
-        // Remember which actual line was selected before changing filter
-        let actual_line_number = self.line_indices.get(self.selected_line).copied();
+        // Capture screen offset BEFORE changing line_indices
+        let screen_offset = self.viewport.get_screen_offset(&self.line_indices);
 
         self.line_indices = matching_indices;
         self.mode = ViewMode::Filtered;
@@ -235,29 +247,52 @@ impl TabState {
         };
         self.last_filtered_line = self.total_lines;
 
-        // Preserve selection when updating an existing filter (unless follow mode will handle it)
-        if was_filtered && !self.follow_mode {
-            // Try to keep selection on the same actual line
-            if let Some(line_num) = actual_line_number {
-                // Find where this line is in the new filtered results
-                if let Some(new_index) = self.line_indices.iter().position(|&l| l == line_num) {
-                    self.selected_line = new_index;
-                } else {
-                    // Line not in new results, try to keep similar position
-                    self.selected_line = self
-                        .selected_line
-                        .min(self.line_indices.len().saturating_sub(1));
-                }
-            } else {
-                self.selected_line = 0;
+        // If we have an origin line (from when filtering started), select nearest match
+        // while preserving screen position
+        if let Some(origin) = self.filter_origin_line {
+            if !self.line_indices.is_empty() {
+                // Find the match nearest to origin
+                let nearest_line = self.find_nearest_line(origin);
+                // Jump to it while keeping same screen offset
+                self.viewport.jump_to_line_at_offset(
+                    nearest_line,
+                    screen_offset,
+                    &self.line_indices,
+                );
             }
-            // Don't reset scroll_position - let adjust_scroll handle it based on the preserved selection
-        } else if !self.follow_mode {
-            // New filter - start at the top
-            self.selected_line = 0;
-            self.scroll_position = 0;
         }
-        // If follow mode is active, don't set selection or scroll here - let follow mode handle it
+        // Otherwise viewport's anchor_line will find nearest automatically via resolve()
+
+        // Sync old fields from viewport
+        self.sync_from_viewport();
+    }
+
+    /// Find the line in line_indices nearest to target
+    fn find_nearest_line(&self, target: usize) -> usize {
+        if self.line_indices.is_empty() {
+            return target;
+        }
+
+        // Binary search to find insertion point
+        match self.line_indices.binary_search(&target) {
+            Ok(_) => target, // Exact match
+            Err(pos) => {
+                // Find closest between pos-1 and pos
+                if pos == 0 {
+                    self.line_indices[0]
+                } else if pos >= self.line_indices.len() {
+                    self.line_indices[self.line_indices.len() - 1]
+                } else {
+                    let before = self.line_indices[pos - 1];
+                    let after = self.line_indices[pos];
+                    if target - before <= after - target {
+                        before
+                    } else {
+                        after
+                    }
+                }
+            }
+        }
     }
 
     /// Append incremental filter results (for new logs only)
@@ -272,22 +307,19 @@ impl TabState {
 
     /// Clear filter and return to normal view
     pub fn clear_filter(&mut self) {
-        // Remember which actual line was selected before clearing filter
-        let actual_line_number = self.line_indices.get(self.selected_line).copied();
-
         self.line_indices = (0..self.total_lines).collect();
         self.mode = ViewMode::Normal;
-
-        // Restore selection to the same actual line number
-        if let Some(line_num) = actual_line_number {
-            self.selected_line = line_num.min(self.total_lines.saturating_sub(1));
-        } else {
-            self.selected_line = 0;
-        }
-
-        // Don't reset scroll_position - let adjust_scroll handle it
         self.filter_pattern = None;
         self.filter_state = FilterState::Inactive;
+
+        // Restore to origin line if set (where user was before filtering)
+        if let Some(origin) = self.filter_origin_line.take() {
+            self.viewport.jump_to_line(origin);
+        } else {
+            // Preserve screen offset - keep selection at same position on screen
+            self.viewport.preserve_screen_offset(&self.line_indices);
+        }
+        self.sync_from_viewport();
     }
 
     /// Jump to a specific line number (1-indexed)
@@ -299,24 +331,9 @@ impl TabState {
         // Convert 1-indexed line number to actual file line index (0-indexed)
         let target_line = line_number.saturating_sub(1);
 
-        // Find the position in line_indices that contains this line number
-        if let Some(position) = self.line_indices.iter().position(|&l| l == target_line) {
-            self.selected_line = position;
-        } else if target_line >= self.total_lines {
-            // If line number is beyond total lines, jump to end
-            self.selected_line = self.line_indices.len().saturating_sub(1);
-        } else {
-            // Line exists in file but not in current view (filtered out)
-            // Jump to nearest line that exists in view
-            let nearest = self
-                .line_indices
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, &l)| l.abs_diff(target_line))
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.selected_line = nearest;
-        }
+        // Use viewport's jump_to_line - it handles finding nearest if not in view
+        self.viewport.jump_to_line(target_line);
+        self.sync_from_viewport();
     }
 
     /// Toggle follow mode
@@ -329,14 +346,14 @@ impl TabState {
 
     /// Jump to the end of the log
     pub fn jump_to_end(&mut self) {
-        if !self.line_indices.is_empty() {
-            self.selected_line = self.line_indices.len().saturating_sub(1);
-        }
+        self.viewport.jump_to_end(&self.line_indices);
+        self.sync_from_viewport();
     }
 
     /// Jump to the beginning of the log
     pub fn jump_to_start(&mut self) {
-        self.selected_line = 0;
+        self.viewport.jump_to_start(&self.line_indices);
+        self.sync_from_viewport();
     }
 }
 
@@ -479,16 +496,16 @@ mod tests {
         let temp_file = create_temp_log_file(&lines);
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
-        // Mouse scroll down
-        tab.selected_line = 5;
-        tab.scroll_position = 0;
+        // Position selection at line 5 using proper method
+        tab.page_down(5);
+        assert_eq!(tab.selected_line, 5);
+
+        // Mouse scroll down - moves both viewport and selection together
         tab.mouse_scroll_down(3, 20);
-        assert_eq!(tab.scroll_position, 3);
-        assert_eq!(tab.selected_line, 8);
+        assert_eq!(tab.selected_line, 8); // 5 + 3
 
         // Mouse scroll up
         tab.mouse_scroll_up(2, 20);
-        assert_eq!(tab.scroll_position, 1);
-        assert_eq!(tab.selected_line, 6);
+        assert_eq!(tab.selected_line, 6); // 8 - 2
     }
 }

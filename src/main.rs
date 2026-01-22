@@ -5,6 +5,7 @@ mod handlers;
 mod reader;
 mod tab;
 mod ui;
+mod viewport;
 mod watcher;
 
 use anyhow::{Context, Result};
