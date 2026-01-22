@@ -1,7 +1,6 @@
 /// Events that can occur in the application
 /// Handlers return these events instead of mutating app state directly
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // FileError variant used for error handling path
 pub enum AppEvent {
     // Navigation events
     ScrollDown,
@@ -40,7 +39,6 @@ pub enum AppEvent {
     FileTruncated {
         new_total: usize,
     },
-    FileError(String),
 
     // Tab navigation events
     NextTab,

@@ -419,9 +419,6 @@ impl App {
                     tab.selected_line = 0;
                 }
             }
-            AppEvent::FileError(err) => {
-                eprintln!("File watcher error: {}", err);
-            }
 
             // Mode toggles
             AppEvent::ToggleFollowMode => self.toggle_follow_mode(),

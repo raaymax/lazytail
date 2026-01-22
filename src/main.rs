@@ -421,7 +421,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     continue; // Event already applied above
                 }
-                AppEvent::FileModified { .. } | AppEvent::FileError(_) => {
+                AppEvent::FileModified { .. } => {
                     // For file events, check if we need to jump to end in follow mode
                     let should_jump_follow = app.active_tab().follow_mode
                         && app.active_tab().mode == ViewMode::Normal
