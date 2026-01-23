@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.0](https://github.com/raaymax/lazytail/compare/v0.1.0...v0.2.0) (2026-01-23)
+
+
+### Features
+
+* add filter history with arrow key navigation ([0136352](https://github.com/raaymax/lazytail/commit/01363529da6da3406e923d7fa906cc828d403756))
+* add help overlay with keyboard shortcuts ([eda6d1f](https://github.com/raaymax/lazytail/commit/eda6d1f9f311249437374ce5ca16c2192bff955c))
+* add mouse scroll support ([b65f482](https://github.com/raaymax/lazytail/commit/b65f4823df3d83ccb60973d86e608d7716f22f30))
+* add multi-tab support with side panel UI ([c20926c](https://github.com/raaymax/lazytail/commit/c20926ccb512ffb04e4570baa12ef28975048959))
+* add stdin support with auto-detection ([b90ce34](https://github.com/raaymax/lazytail/commit/b90ce347fcec81801341e20d7bb7305ca3359c53))
+* add viewport system for stable filter selection ([28e7837](https://github.com/raaymax/lazytail/commit/28e7837d998afefd3474eab9551da05e2d59cc57))
+* add vim-style line jump with :number command ([4bfdb92](https://github.com/raaymax/lazytail/commit/4bfdb9237085ee33e2814962f835abaea7fb721a))
+* add vim-style z commands for view positioning ([5883c41](https://github.com/raaymax/lazytail/commit/5883c41fbf791195057913720d5d4e8e0b969c2a))
+* multi-tab support with stdin and improved filtering UX ([3678c7d](https://github.com/raaymax/lazytail/commit/3678c7d9d10ea7598dfa768ef89d07f06415ad62))
+
+
+### Bug Fixes
+
+* clear help overlay background to prevent text bleed-through ([c022e4c](https://github.com/raaymax/lazytail/commit/c022e4cbd2b996ea5da4f9a0796809a0e4d706cf))
+* make mouse scroll follow selection like vim ([3aad03b](https://github.com/raaymax/lazytail/commit/3aad03b053efe9ca265031c6eeec798e5827d446))
+* prevent adjust_scroll interference with mouse scrolling ([409d710](https://github.com/raaymax/lazytail/commit/409d710898b572fd723cdf5bdff28244ece90743))
+* remap gray text colors for visibility on selection background ([6c588a0](https://github.com/raaymax/lazytail/commit/6c588a0f02e3ce174ca8f8470d7a022c946e8167))
+* trigger live filter when navigating history ([5453e4e](https://github.com/raaymax/lazytail/commit/5453e4e340b09c844fd22fc3db29e51943d31f37))
+
 ## 0.1.0 (2026-01-19)
 
 
