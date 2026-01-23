@@ -2,6 +2,8 @@
 
 A fast, universal terminal-based log viewer with live filtering and follow mode. Works with any text log files from applications, services, containers, or systems.
 
+![LazyTail Screenshot](screenshot.png)
+
 ## Features
 
 ### Implemented
