@@ -39,7 +39,11 @@ pub enum AppEvent {
     FileTruncated {
         new_total: usize,
     },
-    FileError(String),
+
+    // Tab navigation events
+    NextTab,
+    PrevTab,
+    SelectTab(usize),
 
     // Mode toggles
     ToggleFollowMode,
@@ -59,6 +63,13 @@ pub enum AppEvent {
     // Filter history navigation
     HistoryUp,
     HistoryDown,
+
+    // View positioning (vim z commands)
+    CenterView,   // zz
+    ViewToTop,    // zt
+    ViewToBottom, // zb
+    EnterZMode,   // z pressed, waiting for second key
+    ExitZMode,    // cancel z mode
 
     // System events
     Quit,

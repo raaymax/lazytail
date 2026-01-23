@@ -13,6 +13,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
     match app.input_mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
+        InputMode::ZPending => handle_z_pending_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -53,6 +54,18 @@ fn handle_line_jump_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     }
 }
 
+/// Handle keyboard input in z pending mode (waiting for zz, zt, zb)
+fn handle_z_pending_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char('z') => vec![AppEvent::CenterView, AppEvent::ExitZMode],
+        KeyCode::Char('t') => vec![AppEvent::ViewToTop, AppEvent::ExitZMode],
+        KeyCode::Char('b') => vec![AppEvent::ViewToBottom, AppEvent::ExitZMode],
+        KeyCode::Esc => vec![AppEvent::ExitZMode],
+        // Any other key cancels z mode
+        _ => vec![AppEvent::ExitZMode],
+    }
+}
+
 /// Handle keyboard input in normal navigation mode
 fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
@@ -78,7 +91,16 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('/') => vec![AppEvent::StartFilterInput],
         KeyCode::Char(':') => vec![AppEvent::StartLineJumpInput],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        KeyCode::Char('z') => vec![AppEvent::EnterZMode],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
+        // Tab navigation
+        KeyCode::Tab => vec![AppEvent::NextTab],
+        KeyCode::BackTab => vec![AppEvent::PrevTab],
+        // Direct tab selection (1-9)
+        KeyCode::Char(c @ '1'..='9') => {
+            let index = (c as usize) - ('1' as usize);
+            vec![AppEvent::SelectTab(index)]
+        }
         _ => vec![],
     }
 }
@@ -87,10 +109,22 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
 mod tests {
     use super::*;
     use crate::app::App;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_app() -> (App, NamedTempFile) {
+        let mut file = NamedTempFile::new().unwrap();
+        for i in 0..10 {
+            writeln!(file, "line{}", i).unwrap();
+        }
+        file.flush().unwrap();
+        let app = App::new(vec![file.path().to_path_buf()], false).unwrap();
+        (app, file)
+    }
 
     #[test]
     fn test_quit_on_q() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::Quit]);
@@ -98,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_quit_on_ctrl_c() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::Quit]);
@@ -106,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_scroll_down() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(
@@ -117,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(
@@ -128,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_toggle_follow_mode() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::ToggleFollowMode]);
@@ -136,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_start_filter_input() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::StartFilterInput]);
@@ -144,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_char() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -153,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_backspace() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -162,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_submit() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -171,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_cancel() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -183,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_jump_to_start() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(
@@ -194,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_jump_to_end() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
         let events = handle_input_event(key, &app);
         assert_eq!(
@@ -205,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_show_help() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::ShowHelp]);
@@ -213,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_hide_help_on_any_key() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.show_help = true;
 
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -223,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_quit_from_help_mode() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.show_help = true;
 
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
@@ -233,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_start_line_jump_input() {
-        let app = App::new(10);
+        let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::StartLineJumpInput]);
@@ -241,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_line_jump_input_char() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_line_jump_input();
         let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -250,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_line_jump_input_backspace() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_line_jump_input();
         let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -259,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_line_jump_input_submit() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_line_jump_input();
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -268,7 +302,7 @@ mod tests {
 
     #[test]
     fn test_line_jump_input_cancel() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_line_jump_input();
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -277,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_history_up() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
@@ -286,10 +320,41 @@ mod tests {
 
     #[test]
     fn test_filter_input_history_down() {
-        let mut app = App::new(10);
+        let (mut app, _file) = create_test_app();
         app.start_filter_input();
         let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::HistoryDown]);
+    }
+
+    #[test]
+    fn test_next_tab() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::NextTab]);
+    }
+
+    #[test]
+    fn test_prev_tab() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::PrevTab]);
+    }
+
+    #[test]
+    fn test_select_tab_by_number() {
+        let (app, _file) = create_test_app();
+
+        // Test keys 1-9
+        for i in 1..=9 {
+            let key = KeyEvent::new(
+                KeyCode::Char(char::from_digit(i, 10).unwrap()),
+                KeyModifiers::NONE,
+            );
+            let events = handle_input_event(key, &app);
+            assert_eq!(events, vec![AppEvent::SelectTab((i - 1) as usize)]);
+        }
     }
 }

@@ -1,5 +1,5 @@
 use crate::app::{App, FilterState, ViewMode};
-use crate::reader::LogReader;
+use crate::tab::TabState;
 use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,8 +9,18 @@ use ratatui::{
     Frame,
 };
 
-pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut R) -> Result<()> {
-    let chunks = Layout::default()
+pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
+    // Main horizontal layout: side panel + content area
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(app.side_panel_width), Constraint::Min(1)])
+        .split(f.area());
+
+    // Render side panel with tabs
+    render_side_panel(f, main_chunks[0], app);
+
+    // Content area layout
+    let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),    // Main content
@@ -21,15 +31,15 @@ pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut 
                 0
             }), // Input prompt
         ])
-        .split(f.area());
+        .split(main_chunks[1]);
 
-    render_log_view(f, chunks[0], app, reader)?;
-    render_status_bar(f, chunks[1], app);
+    render_log_view(f, content_chunks[0], app)?;
+    render_status_bar(f, content_chunks[1], app);
 
     if app.is_entering_filter() {
-        render_filter_input_prompt(f, chunks[2], app);
+        render_filter_input_prompt(f, content_chunks[2], app);
     } else if app.is_entering_line_jump() {
-        render_line_jump_prompt(f, chunks[2], app);
+        render_line_jump_prompt(f, content_chunks[2], app);
     }
 
     // Render help overlay on top of everything if active
@@ -40,29 +50,88 @@ pub fn render<R: LogReader + ?Sized>(f: &mut Frame, app: &mut App, reader: &mut 
     Ok(())
 }
 
-fn render_log_view<R: LogReader + ?Sized>(
-    f: &mut Frame,
-    area: Rect,
-    app: &mut App,
-    reader: &mut R,
-) -> Result<()> {
+fn render_side_panel(f: &mut Frame, area: Rect, app: &App) {
+    let mut items: Vec<ListItem> = Vec::new();
+
+    for (idx, tab) in app.tabs.iter().enumerate() {
+        let is_active = idx == app.active_tab;
+
+        // Build the display string
+        let number_prefix = if idx < 9 {
+            format!("{} ", idx + 1)
+        } else {
+            "  ".to_string()
+        };
+
+        // Truncate name to fit in panel width
+        let max_name_len = (area.width as usize).saturating_sub(4); // "N > " prefix
+        let display_name = if tab.name.len() > max_name_len {
+            format!("{}...", &tab.name[..max_name_len.saturating_sub(3)])
+        } else {
+            tab.name.clone()
+        };
+
+        let indicator = if is_active { "> " } else { "  " };
+
+        let line_text = format!("{}{}{}", number_prefix, indicator, display_name);
+
+        let style = if is_active {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let mut line = Line::from(vec![Span::styled(line_text, style)]);
+
+        // Add filter indicator if tab has active filter
+        if tab.filter_pattern.is_some() {
+            line.spans
+                .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
+        }
+
+        // Add follow indicator if tab is in follow mode
+        if tab.follow_mode {
+            line.spans
+                .push(Span::styled(" F", Style::default().fg(Color::Green)));
+        }
+
+        items.push(ListItem::new(line));
+    }
+
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Sources"));
+
+    f.render_widget(list, area);
+}
+
+fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
+    let tab = app.active_tab_mut();
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
-    // Adjust scroll position to keep selection in view
-    app.adjust_scroll(visible_height);
+    // Use viewport to compute scroll position and selected index
+    let view = tab.viewport.resolve(&tab.line_indices, visible_height);
 
-    // Use the scroll position to determine which lines to display
-    let start_idx = app.scroll_position;
-    let count = visible_height.min(app.visible_line_count() - start_idx);
+    // Sync old fields from viewport (for backward compatibility during migration)
+    tab.scroll_position = view.scroll_position;
+    tab.selected_line = view.selected_index;
+
+    // Use the viewport-computed values for rendering
+    let start_idx = view.scroll_position;
+    let selected_idx = view.selected_index;
+    let count = visible_height.min(tab.visible_line_count().saturating_sub(start_idx));
+
+    // Get reader access
+    let mut reader_guard = tab.reader.lock().unwrap();
 
     // Fetch the lines to display
     let mut items = Vec::new();
     for i in start_idx..start_idx + count {
-        if let Some(&line_number) = app.line_indices.get(i) {
-            let line_text = reader.get_line(line_number)?.unwrap_or_default();
+        if let Some(&line_number) = tab.line_indices.get(i) {
+            let line_text = reader_guard.get_line(line_number)?.unwrap_or_default();
 
             // Add line number prefix
-            let line_prefix = format!("{:6} │ ", line_number + 1);
+            let line_prefix = format!("{:6} | ", line_number + 1);
 
             // Parse ANSI codes and convert to ratatui Line with styles
             // Convert to owned text to avoid lifetime issues
@@ -84,7 +153,7 @@ fn render_log_view<R: LogReader + ?Sized>(
             }
 
             // Apply selection background if this is the selected line
-            if i == app.selected_line {
+            if i == selected_idx {
                 for span in &mut final_line.spans {
                     // Remap foreground colors that would be invisible on dark gray background
                     let new_style = match span.style.fg {
@@ -102,12 +171,9 @@ fn render_log_view<R: LogReader + ?Sized>(
         }
     }
 
-    let title = match (&app.mode, &app.filter_pattern) {
-        (ViewMode::Normal, None) => "LazyTail".to_string(),
-        (ViewMode::Filtered, Some(pattern)) => format!("LazyTail (Filter: \"{}\")", pattern),
-        (ViewMode::Filtered, None) => "LazyTail (Filtered)".to_string(),
-        (ViewMode::Normal, Some(_)) => "LazyTail".to_string(),
-    };
+    drop(reader_guard);
+
+    let title = build_title(tab);
 
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
 
@@ -116,27 +182,41 @@ fn render_log_view<R: LogReader + ?Sized>(
     Ok(())
 }
 
+fn build_title(tab: &TabState) -> String {
+    match (&tab.mode, &tab.filter_pattern) {
+        (ViewMode::Normal, None) => tab.name.clone(),
+        (ViewMode::Filtered, Some(pattern)) => format!("{} (Filter: \"{}\")", tab.name, pattern),
+        (ViewMode::Filtered, None) => format!("{} (Filtered)", tab.name),
+        (ViewMode::Normal, Some(_)) => tab.name.clone(),
+    }
+}
+
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
+    let tab = app.active_tab();
+
     let status_text = format!(
         " Line {}/{} | Total: {} | Mode: {} {}{}",
-        app.selected_line + 1,
-        app.visible_line_count(),
-        app.total_lines,
-        match app.mode {
+        tab.selected_line + 1,
+        tab.visible_line_count(),
+        tab.total_lines,
+        match tab.mode {
             ViewMode::Normal => "Normal",
             ViewMode::Filtered => "Filtered",
         },
-        match &app.filter_state {
+        match &tab.filter_state {
             FilterState::Inactive => String::new(),
             FilterState::Processing { progress } =>
-                format!("| Filtering: {}/{}", progress, app.total_lines),
+                format!("| Filtering: {}/{}", progress, tab.total_lines),
             FilterState::Complete { matches } => format!("| Matches: {}", matches),
         },
-        if app.follow_mode { " | FOLLOW" } else { "" }
+        if tab.follow_mode { " | FOLLOW" } else { "" }
     );
 
-    let help_text =
-        " q - Quit | ↑↓ - Navigate | g/G - Start/End | : - Jump | f - Follow | / - Filter | ? - Help";
+    let help_text = if app.tab_count() > 1 {
+        " Tab/Shift+Tab - Switch | 1-9 - Select | ? - Help"
+    } else {
+        " q - Quit | j/k - Navigate | g/G - Start/End | / - Filter | ? - Help"
+    };
 
     let status_lines = vec![
         Line::from(vec![Span::styled(
@@ -190,9 +270,9 @@ fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
-    // Calculate centered popup area (60% width, 70% height)
+    // Calculate centered popup area (60% width, 80% height)
     let popup_width = (area.width as f32 * 0.6) as u16;
-    let popup_height = (area.height as f32 * 0.7) as u16;
+    let popup_height = (area.height as f32 * 0.8) as u16;
     let popup_x = (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = (area.height.saturating_sub(popup_height)) / 2;
 
@@ -218,13 +298,26 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  j / ↓         Scroll down one line"),
-        Line::from("  k / ↑         Scroll up one line"),
+        Line::from("  j / Down      Scroll down one line"),
+        Line::from("  k / Up        Scroll up one line"),
         Line::from("  PageDown      Scroll down one page"),
         Line::from("  PageUp        Scroll up one page"),
         Line::from("  g             Jump to start"),
         Line::from("  G             Jump to end"),
         Line::from("  :123          Jump to line 123"),
+        Line::from("  zz            Center selection on screen"),
+        Line::from("  zt            Move selection to top"),
+        Line::from("  zb            Move selection to bottom"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Tabs",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Tab           Next tab"),
+        Line::from("  Shift+Tab     Previous tab"),
+        Line::from("  1-9           Select tab directly"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Filtering",
@@ -235,6 +328,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  /             Start live filter"),
         Line::from("  Enter         Close filter input (keep filter)"),
         Line::from("  Esc           Clear filter / Cancel input"),
+        Line::from("  Up/Down       Navigate filter history"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Modes",

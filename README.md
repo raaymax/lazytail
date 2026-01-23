@@ -5,6 +5,8 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 ## Features
 
 ### Implemented
+- **Multi-tab support** - Open multiple log files in tabs with side panel navigation
+- **Stdin support** - Pipe logs directly with auto-detection (`cmd | lazytail`)
 - **Lazy file reading** - Efficiently handles large log files using indexed line positions
 - **TUI interface** - Clean terminal UI with ratatui
 - **Line selection** - Navigate through logs with keyboard controls
@@ -29,8 +31,16 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 - `g` - Jump to start (first line)
 - `G` - Jump to end (last line)
 - `:123` - Jump to line 123 (vim-style)
+- `zz` - Center selection on screen
+- `zt` - Move selection to top of screen
+- `zb` - Move selection to bottom of screen
 - `f` - Toggle follow mode (auto-scroll to new logs)
 - Mouse wheel - Scroll up/down (selection follows scroll)
+
+**Tabs (when multiple files open):**
+- `Tab` - Switch to next tab
+- `Shift+Tab` - Switch to previous tab
+- `1-9` - Jump directly to tab by number
 
 **Filtering:**
 - `/` - Enter live filter mode
@@ -79,13 +89,32 @@ Run LazyTail with a log file:
 lazytail /path/to/your/logfile.log
 ```
 
+Open multiple files in tabs:
+
+```bash
+lazytail app.log error.log access.log
+```
+
+Pipe logs from other commands (auto-detected):
+
+```bash
+kubectl logs pod-name | lazytail
+docker logs -f container | lazytail
+journalctl -f | lazytail
+```
+
+Combine sources - stdin, files, and process substitution:
+
+```bash
+app_logs | lazytail error.log <(kubectl logs pod-name)
+```
+
 ### Command Line Options
 
 ```bash
-lazytail [OPTIONS] <FILE>
+lazytail [OPTIONS] [FILES]...
 
 Options:
-  -s, --stdin              Read from stdin instead of a file
   -w, --watch              Enable file watching (default: true)
       --no-watch           Disable file watching
   -h, --help               Print help
@@ -172,25 +201,6 @@ lazytail ci-pipeline.log
 ```
 
 Any plain text log file works - from development logs to production system logs, with or without ANSI colors.
-
-## Upcoming Features
-
-- [x] File watching with auto-reload (inotify)
-- [x] Interactive filter input
-- [x] Live filter preview
-- [x] Follow mode (tail -f style)
-- [x] Line number jump (vim-style `:number`)
-- [x] Filter history navigation
-- [x] Mouse scroll support
-- [x] Help overlay
-- [ ] STDIN support for piping logs
-- [ ] Regex filter mode (regex parsing already implemented)
-- [ ] JSON log parsing and formatting
-- [ ] Multiple display modes
-- [ ] Search highlighting
-- [ ] Copy selected line
-- [ ] Case-sensitive filter toggle
-- [ ] Bookmark lines
 
 ## Contributing
 

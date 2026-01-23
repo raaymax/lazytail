@@ -3,11 +3,13 @@ mod event;
 mod filter;
 mod handlers;
 mod reader;
+mod tab;
 mod ui;
+mod viewport;
 mod watcher;
 
 use anyhow::{Context, Result};
-use app::App;
+use app::{App, FilterState, ViewMode};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -16,12 +18,10 @@ use crossterm::{
 };
 use filter::{engine::FilterEngine, string_filter::StringFilter, Filter};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use reader::{file_reader::FileReader, LogReader};
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use watcher::FileWatcher;
 
 // Constants
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
@@ -32,67 +32,69 @@ const PAGE_SIZE_OFFSET: usize = 5;
 #[command(name = "lazytail")]
 #[command(about = "A universal terminal-based log viewer with filtering support", long_about = None)]
 struct Args {
-    /// Log file to view
+    /// Log files to view (multiple files will open in tabs, use - for stdin)
     #[arg(value_name = "FILE")]
-    file: Option<PathBuf>,
+    files: Vec<PathBuf>,
 
-    /// Read from stdin instead of a file
-    #[arg(short, long)]
-    stdin: bool,
-
-    /// Enable file watching (auto-reload on changes)
-    #[arg(short, long, default_value_t = true)]
-    watch: bool,
+    /// Disable file watching
+    #[arg(long = "no-watch")]
+    no_watch: bool,
 }
 
 fn main() -> Result<()> {
+    use std::io::IsTerminal;
+
     let args = Args::parse();
 
-    if args.stdin {
-        eprintln!("STDIN support not yet implemented");
+    // Auto-detect stdin: if nothing is piped and no files given, show usage
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let has_piped_input = !stdin_is_tty;
+
+    if args.files.is_empty() && !has_piped_input {
+        eprintln!("Usage: lazytail <FILE>...");
+        eprintln!("       command | lazytail");
+        eprintln!("       lazytail -  (explicit stdin)");
         std::process::exit(1);
     }
 
-    let file_path = args.file.context("File path required (or use --stdin)")?;
+    // Create app state BEFORE terminal setup (important for process substitution and stdin)
+    // These sources may become invalid after terminal operations
+    let watch = !args.no_watch;
+
+    // Build tabs, treating "-" as stdin
+    let mut tabs = Vec::new();
+    let mut stdin_used = false;
+
+    // If stdin has piped data, always include it as the first tab
+    if has_piped_input {
+        tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+        stdin_used = true;
+    }
+
+    for file in args.files {
+        if file.as_os_str() == "-" {
+            if stdin_used {
+                // Already read stdin, skip duplicate
+                continue;
+            }
+            stdin_used = true;
+            tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+        } else {
+            tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
+        }
+    }
+
+    let mut app = App::with_tabs(tabs);
 
     // Setup terminal
-    enable_raw_mode()?;
+    enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create file reader
-    let reader = FileReader::new(&file_path)?;
-    let total_lines = reader.total_lines();
-    let reader = Arc::new(Mutex::new(reader));
-
-    // Create app state
-    let mut app = App::new(total_lines);
-
-    // Track filter receiver
-    let mut filter_receiver: Option<std::sync::mpsc::Receiver<filter::engine::FilterProgress>> =
-        None;
-
-    // Track whether the current filter operation is incremental (only new logs) vs full (entire file)
-    let mut is_incremental_filter = false;
-
-    // Create file watcher if enabled
-    let watcher = if args.watch {
-        Some(FileWatcher::new(&file_path)?)
-    } else {
-        None
-    };
-
     // Main loop
-    let res = run_app(
-        &mut terminal,
-        &mut app,
-        reader.clone(),
-        &mut filter_receiver,
-        &mut is_incremental_filter,
-        watcher,
-    );
+    let res = run_app(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -110,52 +112,62 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Helper function to trigger a filter operation
-/// Reduces code duplication across multiple filter trigger points
+/// Helper function to trigger a filter operation for a specific tab
 fn trigger_filter(
-    app: &mut App,
-    reader: Arc<Mutex<dyn LogReader + Send>>,
+    tab: &mut tab::TabState,
     pattern: String,
-    is_incremental: &mut bool,
     start_line: Option<usize>,
     end_line: Option<usize>,
-) -> std::sync::mpsc::Receiver<filter::engine::FilterProgress> {
+) {
     let filter: Arc<dyn Filter> = Arc::new(StringFilter::new(&pattern, false));
 
-    if let (Some(start), Some(end)) = (start_line, end_line) {
+    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
         // Incremental filtering (range)
-        app.filter_state = app::FilterState::Processing { progress: start };
-        *is_incremental = true;
-        FilterEngine::run_filter_range(reader, filter, FILTER_PROGRESS_INTERVAL, start, end)
+        tab.filter_state = FilterState::Processing { progress: start };
+        tab.is_incremental_filter = true;
+        FilterEngine::run_filter_range(
+            tab.reader.clone(),
+            filter,
+            FILTER_PROGRESS_INTERVAL,
+            start,
+            end,
+        )
     } else {
         // Full filtering
-        app.filter_state = app::FilterState::Processing { progress: 0 };
-        *is_incremental = false;
-        FilterEngine::run_filter(reader, filter, FILTER_PROGRESS_INTERVAL)
-    }
+        tab.filter_state = FilterState::Processing { progress: 0 };
+        tab.is_incremental_filter = false;
+        FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL)
+    };
+
+    tab.filter_receiver = Some(receiver);
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-    reader: Arc<Mutex<dyn LogReader + Send>>,
-    filter_receiver: &mut Option<std::sync::mpsc::Receiver<filter::engine::FilterProgress>>,
-    is_incremental_filter: &mut bool,
-    watcher: Option<FileWatcher>,
-) -> Result<()> {
+/// Data about a file modification collected during tab iteration
+struct FileModificationData {
+    new_total: usize,
+    old_total: usize,
+}
+
+/// Data about filter progress collected during tab iteration
+struct FilterProgressData {
+    tab_idx: usize,
+    progress: filter::engine::FilterProgress,
+    is_incremental: bool,
+}
+
+fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     use event::AppEvent;
 
     loop {
         // Render
         terminal.draw(|f| {
-            let mut reader_guard = reader.lock().unwrap();
-            if let Err(e) = ui::render(f, app, &mut *reader_guard) {
+            if let Err(e) = ui::render(f, app) {
                 eprintln!("Render error: {}", e);
             }
         })?;
 
         // Show/hide cursor based on input mode
-        if app.is_entering_filter() {
+        if app.is_entering_filter() || app.is_entering_line_jump() {
             terminal.show_cursor()?;
         } else {
             terminal.hide_cursor()?;
@@ -164,51 +176,139 @@ fn run_app<B: ratatui::backend::Backend>(
         // Collect events from different sources
         let mut events = Vec::new();
 
-        // Check for file changes
-        if let Some(ref watcher) = watcher {
-            if let Some(file_event) = watcher.try_recv() {
-                match file_event {
-                    watcher::FileEvent::Modified => {
-                        // Reload the file reader
-                        let mut reader_guard = reader.lock().unwrap();
-                        if let Err(e) = reader_guard.reload() {
-                            events
-                                .push(AppEvent::FileError(format!("Failed to reload file: {}", e)));
-                        } else {
-                            let new_total = reader_guard.total_lines();
-                            let old_total = app.total_lines;
-                            drop(reader_guard);
+        // === Phase 1: Collect file modification data from all tabs ===
+        let mut file_modifications: Vec<FileModificationData> = Vec::new();
 
-                            // Generate events based on file modification
-                            events.extend(handlers::file_events::process_file_modification(
-                                new_total, old_total, app,
-                            ));
+        for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
+            if let Some(ref watcher) = tab.watcher {
+                if let Some(file_event) = watcher.try_recv() {
+                    match file_event {
+                        watcher::FileEvent::Modified => {
+                            // Reload the file reader
+                            let mut reader_guard = tab.reader.lock().unwrap();
+                            if let Err(e) = reader_guard.reload() {
+                                eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
+                            } else {
+                                let new_total = reader_guard.total_lines();
+                                let old_total = tab.total_lines;
+                                drop(reader_guard);
+
+                                if tab_idx == app.active_tab {
+                                    // Collect for later processing
+                                    file_modifications.push(FileModificationData {
+                                        new_total,
+                                        old_total,
+                                    });
+                                } else {
+                                    // For inactive tabs, update state directly
+                                    tab.total_lines = new_total;
+                                    if tab.mode == ViewMode::Normal {
+                                        tab.line_indices = (0..new_total).collect();
+                                    }
+                                    // If tab has an active filter, reapply it
+                                    if let Some(pattern) = tab.filter_pattern.clone() {
+                                        if new_total > tab.last_filtered_line {
+                                            trigger_filter(
+                                                tab,
+                                                pattern,
+                                                Some(tab.last_filtered_line),
+                                                Some(new_total),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    }
-                    watcher::FileEvent::Error(err) => {
-                        events.push(AppEvent::FileError(err));
+                        watcher::FileEvent::Error(err) => {
+                            eprintln!("File watcher error for tab {}: {}", tab_idx, err);
+                        }
                     }
                 }
             }
         }
 
-        // Check for filter progress
-        if let Some(rx) = filter_receiver {
-            if let Ok(progress) = rx.try_recv() {
-                // Handle filter progress and convert to events
-                let filter_events =
-                    handlers::filter::handle_filter_progress(progress, *is_incremental_filter);
-                events.extend(filter_events);
+        // === Phase 2: Process active tab file modifications ===
+        for mod_data in file_modifications {
+            events.extend(handlers::file_events::process_file_modification(
+                mod_data.new_total,
+                mod_data.old_total,
+                app,
+            ));
+        }
 
-                // Check if filter completed (to clear receiver)
-                if events.iter().any(|e| {
-                    matches!(
-                        e,
-                        AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
-                    )
-                }) {
-                    *filter_receiver = None;
+        // === Phase 3: Collect filter progress from all tabs ===
+        let mut filter_progress_data: Vec<FilterProgressData> = Vec::new();
+
+        for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
+            if let Some(ref rx) = tab.filter_receiver {
+                if let Ok(progress) = rx.try_recv() {
+                    if tab_idx == app.active_tab {
+                        // Collect for later processing
+                        filter_progress_data.push(FilterProgressData {
+                            tab_idx,
+                            progress,
+                            is_incremental: tab.is_incremental_filter,
+                        });
+                    } else {
+                        // For inactive tabs, handle filter results directly
+                        let filter_events = handlers::filter::handle_filter_progress(
+                            progress,
+                            tab.is_incremental_filter,
+                        );
+
+                        for ev in filter_events {
+                            match ev {
+                                AppEvent::FilterProgress(lines_processed) => {
+                                    tab.filter_state = FilterState::Processing {
+                                        progress: lines_processed,
+                                    };
+                                }
+                                AppEvent::FilterComplete {
+                                    indices,
+                                    incremental,
+                                } => {
+                                    if incremental {
+                                        tab.append_filter_results(indices);
+                                    } else {
+                                        let pattern =
+                                            tab.filter_pattern.clone().unwrap_or_default();
+                                        tab.apply_filter(indices, pattern);
+                                    }
+                                    if tab.follow_mode {
+                                        tab.jump_to_end();
+                                    }
+                                    tab.filter_receiver = None;
+                                }
+                                AppEvent::FilterError(err) => {
+                                    eprintln!("Filter error for tab {}: {}", tab_idx, err);
+                                    tab.filter_state = FilterState::Inactive;
+                                    tab.filter_receiver = None;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
+            }
+        }
+
+        // === Phase 4: Process active tab filter progress ===
+        for progress_data in filter_progress_data {
+            let filter_events = handlers::filter::handle_filter_progress(
+                progress_data.progress,
+                progress_data.is_incremental,
+            );
+
+            // Check if filter completed (to clear receiver)
+            let completed = filter_events.iter().any(|e| {
+                matches!(
+                    e,
+                    AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
+                )
+            });
+            events.extend(filter_events);
+            if completed {
+                app.tabs[progress_data.tab_idx].filter_receiver = None;
             }
         }
 
@@ -256,21 +356,19 @@ fn run_app<B: ratatui::backend::Backend>(
             match &event {
                 AppEvent::StartFilter {
                     pattern,
-                    incremental,
+                    incremental: _,
                     range,
                 } => {
                     // Set filter pattern before triggering
-                    app.filter_pattern = Some(pattern.clone());
+                    let tab = app.active_tab_mut();
+                    tab.filter_pattern = Some(pattern.clone());
 
-                    *filter_receiver = Some(trigger_filter(
-                        app,
-                        reader.clone(),
+                    trigger_filter(
+                        tab,
                         pattern.clone(),
-                        is_incremental_filter,
                         range.map(|(start, _)| start),
                         range.map(|(_, end)| end),
-                    ));
-                    *is_incremental_filter = *incremental;
+                    );
                 }
                 AppEvent::FilterInputChar(_)
                 | AppEvent::FilterInputBackspace
@@ -282,19 +380,13 @@ fn run_app<B: ratatui::backend::Backend>(
                     // Then trigger live filter preview
                     let pattern = app.get_input().to_string();
                     if !pattern.is_empty() {
-                        app.filter_pattern = Some(pattern.clone());
-                        *filter_receiver = Some(trigger_filter(
-                            app,
-                            reader.clone(),
-                            pattern,
-                            is_incremental_filter,
-                            None,
-                            None,
-                        ));
+                        let tab = app.active_tab_mut();
+                        tab.filter_pattern = Some(pattern.clone());
+                        trigger_filter(tab, pattern, None, None);
                     } else {
                         // Empty input - clear filter
                         app.clear_filter();
-                        *filter_receiver = None;
+                        app.active_tab_mut().filter_receiver = None;
                     }
                     continue; // Event already applied above
                 }
@@ -311,27 +403,28 @@ fn run_app<B: ratatui::backend::Backend>(
                     continue; // Event already applied
                 }
                 AppEvent::ClearFilter => {
-                    *filter_receiver = None;
+                    app.active_tab_mut().filter_receiver = None;
                 }
                 AppEvent::FileTruncated { .. } => {
                     // Cancel any in-progress filter on truncation
-                    *filter_receiver = None;
-                    *is_incremental_filter = false;
+                    let tab = app.active_tab_mut();
+                    tab.filter_receiver = None;
+                    tab.is_incremental_filter = false;
                 }
                 AppEvent::FilterComplete { .. } => {
                     // Apply the event first
                     app.apply_event(event.clone());
 
                     // Then handle follow mode jump
-                    if app.follow_mode {
+                    if app.active_tab().follow_mode {
                         app.jump_to_end();
                     }
                     continue; // Event already applied above
                 }
-                AppEvent::FileModified { .. } | AppEvent::FileError(_) => {
+                AppEvent::FileModified { .. } => {
                     // For file events, check if we need to jump to end in follow mode
-                    let should_jump_follow = app.follow_mode
-                        && app.mode == app::ViewMode::Normal
+                    let should_jump_follow = app.active_tab().follow_mode
+                        && app.active_tab().mode == ViewMode::Normal
                         && !events
                             .iter()
                             .any(|e| matches!(e, AppEvent::StartFilter { .. }));
