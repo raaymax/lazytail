@@ -61,6 +61,8 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
+# or
+wget -qO- https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
 ```
 
 That's it! The script auto-detects your OS and architecture, downloads the latest release, and installs to `~/.local/bin`.
