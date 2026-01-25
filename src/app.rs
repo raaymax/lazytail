@@ -887,37 +887,40 @@ mod tests {
     fn test_add_to_history() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+        let initial_len = app.filter_history.len();
 
         // Add patterns to history
         app.add_to_history("ERROR".to_string(), FilterMode::plain());
         app.add_to_history("WARN".to_string(), FilterMode::plain());
         app.add_to_history("INFO".to_string(), FilterMode::plain());
 
-        assert_eq!(app.filter_history.len(), 3);
+        assert_eq!(app.filter_history.len(), initial_len + 3);
     }
 
     #[test]
     fn test_add_to_history_skips_duplicates() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+        let initial_len = app.filter_history.len();
 
-        app.add_to_history("ERROR".to_string(), FilterMode::plain());
-        app.add_to_history("ERROR".to_string(), FilterMode::plain()); // Duplicate - should not add
+        app.add_to_history("ERROR_DUP_TEST".to_string(), FilterMode::plain());
+        app.add_to_history("ERROR_DUP_TEST".to_string(), FilterMode::plain()); // Duplicate - should not add
 
-        assert_eq!(app.filter_history.len(), 1);
+        assert_eq!(app.filter_history.len(), initial_len + 1);
     }
 
     #[test]
     fn test_add_to_history_same_pattern_different_mode() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+        let initial_len = app.filter_history.len();
 
-        app.add_to_history("error".to_string(), FilterMode::plain());
-        app.add_to_history("error".to_string(), FilterMode::regex()); // Different mode - should add
+        app.add_to_history("error_mode_test".to_string(), FilterMode::plain());
+        app.add_to_history("error_mode_test".to_string(), FilterMode::regex()); // Different mode - should add
 
-        assert_eq!(app.filter_history.len(), 2);
-        assert!(!app.filter_history[0].mode.is_regex());
-        assert!(app.filter_history[1].mode.is_regex());
+        assert_eq!(app.filter_history.len(), initial_len + 2);
+        assert!(!app.filter_history[initial_len].mode.is_regex());
+        assert!(app.filter_history[initial_len + 1].mode.is_regex());
     }
 
     #[test]

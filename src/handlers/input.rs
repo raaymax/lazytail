@@ -33,8 +33,8 @@ fn handle_help_mode(key: KeyEvent) -> Vec<AppEvent> {
 /// Handle keyboard input in filter input mode
 fn handle_filter_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
-        // Ctrl+I toggles case sensitivity
-        KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // Alt+C toggles case sensitivity (Ctrl+I doesn't work - same as Tab in terminals)
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::ALT) => {
             vec![AppEvent::ToggleCaseSensitivity]
         }
         // Ctrl+A goes to start of line

@@ -597,6 +597,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from("  /             Start live filter"),
+        Line::from("  Tab           Toggle Plain/Regex mode"),
+        Line::from("  Alt+C         Toggle case sensitivity"),
         Line::from("  Enter         Close filter input (keep filter)"),
         Line::from("  Esc           Clear filter / Cancel input"),
         Line::from("  Up/Down       Navigate filter history"),

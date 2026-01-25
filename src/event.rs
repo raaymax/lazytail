@@ -20,7 +20,7 @@ pub enum AppEvent {
     FilterInputCancel,
     ClearFilter,
     ToggleFilterMode,      // Tab in filter input - switch Plain/Regex
-    ToggleCaseSensitivity, // Ctrl+I in filter input
+    ToggleCaseSensitivity, // Alt+C in filter input
     CursorLeft,            // Move cursor left in input
     CursorRight,           // Move cursor right in input
     CursorHome,            // Move cursor to start of input
