@@ -25,37 +25,7 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 
 ### Keyboard Controls
 
-**Navigation:**
-- `↑`/`k` - Scroll up one line
-- `↓`/`j` - Scroll down one line
-- `PgUp` - Scroll up one page
-- `PgDn` - Scroll down one page
-- `g` - Jump to start (first line)
-- `G` - Jump to end (last line)
-- `:123` - Jump to line 123 (vim-style)
-- `zz` - Center selection on screen
-- `zt` - Move selection to top of screen
-- `zb` - Move selection to bottom of screen
-- `f` - Toggle follow mode (auto-scroll to new logs)
-- Mouse wheel - Scroll up/down (selection follows scroll)
-
-**Tabs (when multiple files open):**
-- `Tab` - Switch to next tab
-- `Shift+Tab` - Switch to previous tab
-- `1-9` - Jump directly to tab by number
-
-**Filtering:**
-- `/` - Enter live filter mode
-- Type any text - Results update instantly as you type
-- `↑`/`↓` - Navigate filter history (in filter mode)
-- `Backspace` - Delete characters
-- `Enter` - Close filter prompt (keeps filter active, shown in title bar)
-- `Esc` - Clear filter and close prompt
-- Active filter phrase is always visible in the window title
-
-**General:**
-- `?` - Show help overlay with all keyboard shortcuts
-- `q` or `Ctrl+C` - Quit
+Press `?` in the app to see all keyboard shortcuts.
 
 ## Installation
 
