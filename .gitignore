@@ -7,6 +7,5 @@ ROADMAP.md
 # AUR/makepkg build artifacts
 *.pkg.tar.zst
 pkg/
-src/
 PKGBUILD
 .SRCINFO
