@@ -16,7 +16,10 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use filter::{engine::FilterEngine, string_filter::StringFilter, Filter};
+use filter::{
+    engine::FilterEngine, regex_filter::RegexFilter, string_filter::StringFilter, Filter,
+    FilterMode,
+};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -116,10 +119,22 @@ fn main() -> Result<()> {
 fn trigger_filter(
     tab: &mut tab::TabState,
     pattern: String,
+    mode: FilterMode,
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) {
-    let filter: Arc<dyn Filter> = Arc::new(StringFilter::new(&pattern, false));
+    let case_sensitive = mode.is_case_sensitive();
+    let filter: Arc<dyn Filter> = if mode.is_regex() {
+        match RegexFilter::new(&pattern, case_sensitive) {
+            Ok(f) => Arc::new(f),
+            Err(_) => {
+                // Invalid regex - don't apply filter
+                return;
+            }
+        }
+    } else {
+        Arc::new(StringFilter::new(&pattern, case_sensitive))
+    };
 
     let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
         // Incremental filtering (range)
@@ -208,9 +223,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                     // If tab has an active filter, reapply it
                                     if let Some(pattern) = tab.filter_pattern.clone() {
                                         if new_total > tab.last_filtered_line {
+                                            let mode = tab.filter_mode;
                                             trigger_filter(
                                                 tab,
                                                 pattern,
+                                                mode,
                                                 Some(tab.last_filtered_line),
                                                 Some(new_total),
                                             );
@@ -359,13 +376,16 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     incremental: _,
                     range,
                 } => {
-                    // Set filter pattern before triggering
+                    // Set filter pattern and mode before triggering
+                    let mode = app.current_filter_mode;
                     let tab = app.active_tab_mut();
                     tab.filter_pattern = Some(pattern.clone());
+                    tab.filter_mode = mode;
 
                     trigger_filter(
                         tab,
                         pattern.clone(),
+                        mode,
                         range.map(|(start, _)| start),
                         range.map(|(_, end)| end),
                     );
@@ -373,16 +393,20 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 AppEvent::FilterInputChar(_)
                 | AppEvent::FilterInputBackspace
                 | AppEvent::HistoryUp
-                | AppEvent::HistoryDown => {
+                | AppEvent::HistoryDown
+                | AppEvent::ToggleFilterMode
+                | AppEvent::ToggleCaseSensitivity => {
                     // Apply the event first
                     app.apply_event(event.clone());
 
                     // Then trigger live filter preview
                     let pattern = app.get_input().to_string();
-                    if !pattern.is_empty() {
+                    let mode = app.current_filter_mode;
+                    if !pattern.is_empty() && app.is_regex_valid() {
                         let tab = app.active_tab_mut();
                         tab.filter_pattern = Some(pattern.clone());
-                        trigger_filter(tab, pattern, None, None);
+                        tab.filter_mode = mode;
+                        trigger_filter(tab, pattern, mode, None, None);
                     } else {
                         // Empty input - clear filter
                         app.clear_filter();

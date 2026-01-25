@@ -19,6 +19,12 @@ pub enum AppEvent {
     FilterInputSubmit,
     FilterInputCancel,
     ClearFilter,
+    ToggleFilterMode,      // Tab in filter input - switch Plain/Regex
+    ToggleCaseSensitivity, // Ctrl+I in filter input
+    CursorLeft,            // Move cursor left in input
+    CursorRight,           // Move cursor right in input
+    CursorHome,            // Move cursor to start of input
+    CursorEnd,             // Move cursor to end of input
     StartFilter {
         pattern: String,
         incremental: bool,

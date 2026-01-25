@@ -33,12 +33,31 @@ fn handle_help_mode(key: KeyEvent) -> Vec<AppEvent> {
 /// Handle keyboard input in filter input mode
 fn handle_filter_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
+        // Ctrl+I toggles case sensitivity
+        KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::ToggleCaseSensitivity]
+        }
+        // Ctrl+A goes to start of line
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CursorHome]
+        }
+        // Ctrl+E goes to end of line
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CursorEnd]
+        }
         KeyCode::Char(c) => vec![AppEvent::FilterInputChar(c)],
         KeyCode::Backspace => vec![AppEvent::FilterInputBackspace],
         KeyCode::Enter => vec![AppEvent::FilterInputSubmit],
         KeyCode::Esc => vec![AppEvent::FilterInputCancel, AppEvent::ClearFilter],
         KeyCode::Up => vec![AppEvent::HistoryUp],
         KeyCode::Down => vec![AppEvent::HistoryDown],
+        // Tab toggles between Plain and Regex mode
+        KeyCode::Tab => vec![AppEvent::ToggleFilterMode],
+        // Cursor navigation
+        KeyCode::Left => vec![AppEvent::CursorLeft],
+        KeyCode::Right => vec![AppEvent::CursorRight],
+        KeyCode::Home => vec![AppEvent::CursorHome],
+        KeyCode::End => vec![AppEvent::CursorEnd],
         _ => vec![],
     }
 }
@@ -46,10 +65,23 @@ fn handle_filter_input_mode(key: KeyEvent) -> Vec<AppEvent> {
 /// Handle keyboard input in line jump input mode
 fn handle_line_jump_input_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
+        // Ctrl+A goes to start of line
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CursorHome]
+        }
+        // Ctrl+E goes to end of line
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CursorEnd]
+        }
         KeyCode::Char(c) => vec![AppEvent::LineJumpInputChar(c)],
         KeyCode::Backspace => vec![AppEvent::LineJumpInputBackspace],
         KeyCode::Enter => vec![AppEvent::LineJumpInputSubmit],
         KeyCode::Esc => vec![AppEvent::LineJumpInputCancel],
+        // Cursor navigation
+        KeyCode::Left => vec![AppEvent::CursorLeft],
+        KeyCode::Right => vec![AppEvent::CursorRight],
+        KeyCode::Home => vec![AppEvent::CursorHome],
+        KeyCode::End => vec![AppEvent::CursorEnd],
         _ => vec![],
     }
 }
@@ -356,5 +388,77 @@ mod tests {
             let events = handle_input_event(key, &app);
             assert_eq!(events, vec![AppEvent::SelectTab((i - 1) as usize)]);
         }
+    }
+
+    #[test]
+    fn test_filter_input_cursor_left() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorLeft]);
+    }
+
+    #[test]
+    fn test_filter_input_cursor_right() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorRight]);
+    }
+
+    #[test]
+    fn test_filter_input_cursor_home() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Home, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorHome]);
+    }
+
+    #[test]
+    fn test_filter_input_cursor_end() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorEnd]);
+    }
+
+    #[test]
+    fn test_filter_input_ctrl_a_home() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorHome]);
+    }
+
+    #[test]
+    fn test_filter_input_ctrl_e_end() {
+        let (mut app, _file) = create_test_app();
+        app.start_filter_input();
+        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorEnd]);
+    }
+
+    #[test]
+    fn test_line_jump_input_cursor_left() {
+        let (mut app, _file) = create_test_app();
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorLeft]);
+    }
+
+    #[test]
+    fn test_line_jump_input_cursor_right() {
+        let (mut app, _file) = create_test_app();
+        app.start_line_jump_input();
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CursorRight]);
     }
 }

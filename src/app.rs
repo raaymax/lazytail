@@ -1,3 +1,4 @@
+use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -41,6 +42,9 @@ pub struct App {
     /// Input buffer for filter entry
     pub input_buffer: String,
 
+    /// Cursor position within input buffer (byte offset)
+    pub input_cursor: usize,
+
     /// Should the app quit
     pub should_quit: bool,
 
@@ -48,10 +52,16 @@ pub struct App {
     pub show_help: bool,
 
     /// Filter history (up to 50 entries)
-    filter_history: Vec<String>,
+    filter_history: Vec<FilterHistoryEntry>,
 
     /// Current position in filter history (None = not navigating)
     history_index: Option<usize>,
+
+    /// Current filter mode for input (Plain or Regex, with case sensitivity)
+    pub current_filter_mode: FilterMode,
+
+    /// Regex validation error (None = valid or plain mode, Some = invalid regex)
+    pub regex_error: Option<String>,
 
     /// Side panel width
     pub side_panel_width: u16,
@@ -75,10 +85,13 @@ impl App {
             active_tab: 0,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            input_cursor: 0,
             should_quit: false,
             show_help: false,
             filter_history: Vec::new(),
             history_index: None,
+            current_filter_mode: FilterMode::default(),
+            regex_error: None,
             side_panel_width: 32,
         }
     }
@@ -177,6 +190,7 @@ impl App {
     pub fn start_filter_input(&mut self) {
         self.input_mode = InputMode::EnteringFilter;
         self.input_buffer.clear();
+        self.input_cursor = 0;
 
         // Save current line as filter origin (for restoring on Esc)
         let tab = self.active_tab_mut();
@@ -188,26 +202,29 @@ impl App {
     pub fn cancel_filter_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
+        self.input_cursor = 0;
         self.history_index = None;
         // Note: filter_origin_line is NOT cleared here - clear_filter() uses it
         // to restore the original position when Esc is pressed
     }
 
     /// Add filter pattern to history (called on filter submit)
-    pub fn add_to_history(&mut self, pattern: String) {
+    pub fn add_to_history(&mut self, pattern: String, mode: FilterMode) {
         if pattern.is_empty() {
             return;
         }
 
-        // Don't add if it's the same as the last entry
+        let entry = FilterHistoryEntry::new(pattern, mode);
+
+        // Don't add if it's the same as the last entry (same pattern AND mode)
         if let Some(last) = self.filter_history.last() {
-            if last == &pattern {
+            if last.matches(&entry) {
                 return;
             }
         }
 
         // Add to history
-        self.filter_history.push(pattern);
+        self.filter_history.push(entry);
 
         // Limit history to 50 entries
         if self.filter_history.len() > 50 {
@@ -241,7 +258,11 @@ impl App {
 
         self.history_index = new_index;
         if let Some(idx) = new_index {
-            self.input_buffer = self.filter_history[idx].clone();
+            let entry = &self.filter_history[idx];
+            self.input_buffer = entry.pattern.clone();
+            self.input_cursor = self.input_buffer.len();
+            self.current_filter_mode = entry.mode;
+            self.validate_regex();
         }
     }
 
@@ -265,26 +286,110 @@ impl App {
 
         self.history_index = new_index;
         if let Some(idx) = new_index {
-            self.input_buffer = self.filter_history[idx].clone();
+            let entry = &self.filter_history[idx];
+            self.input_buffer = entry.pattern.clone();
+            self.input_cursor = self.input_buffer.len();
+            self.current_filter_mode = entry.mode;
+            self.validate_regex();
         } else {
             // Back to empty
             self.input_buffer.clear();
+            self.input_cursor = 0;
+            // Keep current mode when clearing (don't reset)
+            self.validate_regex();
         }
     }
 
-    /// Add a character to the input buffer
+    /// Add a character to the input buffer at cursor position
     pub fn input_char(&mut self, c: char) {
-        self.input_buffer.push(c);
+        if self.input_cursor >= self.input_buffer.len() {
+            // Cursor at end - append
+            self.input_buffer.push(c);
+        } else {
+            // Insert at cursor position
+            self.input_buffer.insert(self.input_cursor, c);
+        }
+        self.input_cursor += c.len_utf8();
+        self.validate_regex();
     }
 
-    /// Remove the last character from the input buffer
+    /// Remove the character before the cursor
     pub fn input_backspace(&mut self) {
-        self.input_buffer.pop();
+        if self.input_cursor > 0 {
+            // Find the character boundary before cursor
+            let mut prev_boundary = self.input_cursor - 1;
+            while prev_boundary > 0 && !self.input_buffer.is_char_boundary(prev_boundary) {
+                prev_boundary -= 1;
+            }
+            self.input_buffer.remove(prev_boundary);
+            self.input_cursor = prev_boundary;
+        }
+        self.validate_regex();
+    }
+
+    /// Move cursor left by one character
+    pub fn cursor_left(&mut self) {
+        if self.input_cursor > 0 {
+            // Find the previous character boundary
+            let mut prev_boundary = self.input_cursor - 1;
+            while prev_boundary > 0 && !self.input_buffer.is_char_boundary(prev_boundary) {
+                prev_boundary -= 1;
+            }
+            self.input_cursor = prev_boundary;
+        }
+    }
+
+    /// Move cursor right by one character
+    pub fn cursor_right(&mut self) {
+        if self.input_cursor < self.input_buffer.len() {
+            // Find the next character boundary
+            let mut next_boundary = self.input_cursor + 1;
+            while next_boundary < self.input_buffer.len()
+                && !self.input_buffer.is_char_boundary(next_boundary)
+            {
+                next_boundary += 1;
+            }
+            self.input_cursor = next_boundary;
+        }
+    }
+
+    /// Move cursor to the beginning of input
+    pub fn cursor_home(&mut self) {
+        self.input_cursor = 0;
+    }
+
+    /// Move cursor to the end of input
+    pub fn cursor_end(&mut self) {
+        self.input_cursor = self.input_buffer.len();
+    }
+
+    /// Get the current cursor position
+    pub fn get_cursor_position(&self) -> usize {
+        self.input_cursor
     }
 
     /// Get the current input buffer content
     pub fn get_input(&self) -> &str {
         &self.input_buffer
+    }
+
+    /// Validate the current input as a regex (if in regex mode)
+    /// Sets regex_error to None if valid, Some(error) if invalid
+    pub fn validate_regex(&mut self) {
+        if !self.current_filter_mode.is_regex() || self.input_buffer.is_empty() {
+            self.regex_error = None;
+            return;
+        }
+
+        match regex::Regex::new(&self.input_buffer) {
+            Ok(_) => self.regex_error = None,
+            Err(e) => self.regex_error = Some(e.to_string()),
+        }
+    }
+
+    /// Check if the current regex input is valid
+    pub fn is_regex_valid(&self) -> bool {
+        self.regex_error.is_none()
     }
 
     /// Check if currently entering filter input
@@ -296,12 +401,14 @@ impl App {
     pub fn start_line_jump_input(&mut self) {
         self.input_mode = InputMode::EnteringLineJump;
         self.input_buffer.clear();
+        self.input_cursor = 0;
     }
 
     /// Cancel line jump input and return to normal mode
     pub fn cancel_line_jump_input(&mut self) {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
+        self.input_cursor = 0;
     }
 
     /// Check if currently entering line jump input
@@ -361,13 +468,23 @@ impl App {
             AppEvent::FilterInputSubmit => {
                 // Save current filter to history before closing
                 let pattern = self.input_buffer.clone();
-                self.add_to_history(pattern);
+                let mode = self.current_filter_mode;
+                self.add_to_history(pattern, mode);
                 // Clear origin line - user is committing to the filtered position
                 self.active_tab_mut().filter_origin_line = None;
                 self.cancel_filter_input();
             }
             AppEvent::FilterInputCancel => self.cancel_filter_input(),
             AppEvent::ClearFilter => self.clear_filter(),
+            AppEvent::ToggleFilterMode => {
+                self.current_filter_mode.toggle_mode();
+                self.validate_regex();
+            }
+            AppEvent::ToggleCaseSensitivity => self.current_filter_mode.toggle_case_sensitivity(),
+            AppEvent::CursorLeft => self.cursor_left(),
+            AppEvent::CursorRight => self.cursor_right(),
+            AppEvent::CursorHome => self.cursor_home(),
+            AppEvent::CursorEnd => self.cursor_end(),
 
             // Filter progress events
             AppEvent::FilterProgress(lines_processed) => {
@@ -747,9 +864,9 @@ mod tests {
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Add patterns to history
-        app.add_to_history("ERROR".to_string());
-        app.add_to_history("WARN".to_string());
-        app.add_to_history("INFO".to_string());
+        app.add_to_history("ERROR".to_string(), FilterMode::plain());
+        app.add_to_history("WARN".to_string(), FilterMode::plain());
+        app.add_to_history("INFO".to_string(), FilterMode::plain());
 
         assert_eq!(app.filter_history.len(), 3);
     }
@@ -759,10 +876,23 @@ mod tests {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        app.add_to_history("ERROR".to_string());
-        app.add_to_history("ERROR".to_string()); // Duplicate - should not add
+        app.add_to_history("ERROR".to_string(), FilterMode::plain());
+        app.add_to_history("ERROR".to_string(), FilterMode::plain()); // Duplicate - should not add
 
         assert_eq!(app.filter_history.len(), 1);
+    }
+
+    #[test]
+    fn test_add_to_history_same_pattern_different_mode() {
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.add_to_history("error".to_string(), FilterMode::plain());
+        app.add_to_history("error".to_string(), FilterMode::regex()); // Different mode - should add
+
+        assert_eq!(app.filter_history.len(), 2);
+        assert!(!app.filter_history[0].mode.is_regex());
+        assert!(app.filter_history[1].mode.is_regex());
     }
 
     #[test]
@@ -772,24 +902,219 @@ mod tests {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        app.add_to_history("ERROR".to_string());
-        app.add_to_history("WARN".to_string());
-        app.add_to_history("INFO".to_string());
+        app.add_to_history("ERROR".to_string(), FilterMode::plain());
+        app.add_to_history("WARN".to_string(), FilterMode::regex());
+        app.add_to_history("INFO".to_string(), FilterMode::plain());
 
         // Start filter input
         app.start_filter_input();
 
-        // Navigate up (most recent)
+        // Navigate up (most recent - INFO with plain mode)
         app.apply_event(AppEvent::HistoryUp);
         assert_eq!(app.input_buffer, "INFO");
+        assert!(!app.current_filter_mode.is_regex());
 
-        // Navigate up again (older)
+        // Navigate up again (older - WARN with regex mode)
         app.apply_event(AppEvent::HistoryUp);
         assert_eq!(app.input_buffer, "WARN");
+        assert!(app.current_filter_mode.is_regex());
 
-        // Navigate down
+        // Navigate down (back to INFO with plain mode)
         app.apply_event(AppEvent::HistoryDown);
         assert_eq!(app.input_buffer, "INFO");
+        assert!(!app.current_filter_mode.is_regex());
+    }
+
+    #[test]
+    fn test_history_navigation_restores_case_sensitivity() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Add entries with different case sensitivity settings
+        app.add_to_history(
+            "error".to_string(),
+            FilterMode::Plain {
+                case_sensitive: false,
+            },
+        );
+        app.add_to_history(
+            "Error".to_string(),
+            FilterMode::Plain {
+                case_sensitive: true,
+            },
+        );
+
+        app.start_filter_input();
+
+        // Navigate to most recent (case sensitive)
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "Error");
+        assert!(app.current_filter_mode.is_case_sensitive());
+
+        // Navigate to older (case insensitive)
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.input_buffer, "error");
+        assert!(!app.current_filter_mode.is_case_sensitive());
+    }
+
+    #[test]
+    fn test_toggle_filter_mode() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Default is plain mode
+        assert!(!app.current_filter_mode.is_regex());
+
+        // Toggle to regex
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_regex());
+
+        // Toggle back to plain
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(!app.current_filter_mode.is_regex());
+    }
+
+    #[test]
+    fn test_toggle_case_sensitivity() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Default is case insensitive
+        assert!(!app.current_filter_mode.is_case_sensitive());
+
+        // Toggle to case sensitive
+        app.apply_event(AppEvent::ToggleCaseSensitivity);
+        assert!(app.current_filter_mode.is_case_sensitive());
+
+        // Toggle back to case insensitive
+        app.apply_event(AppEvent::ToggleCaseSensitivity);
+        assert!(!app.current_filter_mode.is_case_sensitive());
+    }
+
+    #[test]
+    fn test_toggle_mode_preserves_case_sensitivity() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Set case sensitive
+        app.apply_event(AppEvent::ToggleCaseSensitivity);
+        assert!(app.current_filter_mode.is_case_sensitive());
+        assert!(!app.current_filter_mode.is_regex());
+
+        // Toggle to regex - should preserve case sensitivity
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_regex());
+        assert!(app.current_filter_mode.is_case_sensitive());
+
+        // Toggle back to plain - should still be case sensitive
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(!app.current_filter_mode.is_regex());
+        assert!(app.current_filter_mode.is_case_sensitive());
+    }
+
+    #[test]
+    fn test_regex_validation_valid_regex() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Switch to regex mode
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_regex());
+
+        // Type a valid regex
+        app.apply_event(AppEvent::FilterInputChar('e'));
+        app.apply_event(AppEvent::FilterInputChar('r'));
+        app.apply_event(AppEvent::FilterInputChar('r'));
+        app.apply_event(AppEvent::FilterInputChar('.'));
+        app.apply_event(AppEvent::FilterInputChar('*'));
+
+        assert!(app.is_regex_valid());
+        assert!(app.regex_error.is_none());
+    }
+
+    #[test]
+    fn test_regex_validation_invalid_regex() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Switch to regex mode
+        app.apply_event(AppEvent::ToggleFilterMode);
+
+        // Type an invalid regex (unclosed bracket)
+        app.apply_event(AppEvent::FilterInputChar('['));
+        app.apply_event(AppEvent::FilterInputChar('a'));
+
+        assert!(!app.is_regex_valid());
+        assert!(app.regex_error.is_some());
+    }
+
+    #[test]
+    fn test_regex_validation_clears_on_backspace() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Switch to regex mode and type invalid regex
+        app.apply_event(AppEvent::ToggleFilterMode);
+        app.apply_event(AppEvent::FilterInputChar('['));
+        assert!(!app.is_regex_valid());
+
+        // Backspace to remove the bracket
+        app.apply_event(AppEvent::FilterInputBackspace);
+        assert!(app.is_regex_valid());
+    }
+
+    #[test]
+    fn test_regex_validation_not_checked_in_plain_mode() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Stay in plain mode (default)
+        assert!(!app.current_filter_mode.is_regex());
+
+        // Type what would be an invalid regex
+        app.apply_event(AppEvent::FilterInputChar('['));
+        app.apply_event(AppEvent::FilterInputChar('a'));
+
+        // Should still be valid (not checked in plain mode)
+        assert!(app.is_regex_valid());
+        assert!(app.regex_error.is_none());
+    }
+
+    #[test]
+    fn test_regex_validation_on_mode_toggle() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Type invalid regex in plain mode (not validated)
+        app.apply_event(AppEvent::FilterInputChar('['));
+        assert!(app.is_regex_valid());
+
+        // Switch to regex mode - now it should be invalid
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(!app.is_regex_valid());
+        assert!(app.regex_error.is_some());
+
+        // Switch back to plain mode - should be valid again
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.is_regex_valid());
     }
 
     #[test]
@@ -815,5 +1140,219 @@ mod tests {
 
         app.apply_event(AppEvent::SelectTab(1));
         assert_eq!(app.active_tab, 1);
+    }
+
+    #[test]
+    fn test_cursor_starts_at_zero() {
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        assert_eq!(app.get_cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_cursor_moves_with_input() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        assert_eq!(app.get_cursor_position(), 1);
+        assert_eq!(app.get_input(), "a");
+
+        app.apply_event(AppEvent::FilterInputChar('b'));
+        assert_eq!(app.get_cursor_position(), 2);
+        assert_eq!(app.get_input(), "ab");
+    }
+
+    #[test]
+    fn test_cursor_left_right() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        app.apply_event(AppEvent::FilterInputChar('b'));
+        app.apply_event(AppEvent::FilterInputChar('c'));
+        assert_eq!(app.get_cursor_position(), 3);
+
+        // Move left
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 2);
+
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 1);
+
+        // Move right
+        app.apply_event(AppEvent::CursorRight);
+        assert_eq!(app.get_cursor_position(), 2);
+    }
+
+    #[test]
+    fn test_cursor_at_boundaries() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        app.apply_event(AppEvent::FilterInputChar('b'));
+
+        // Move left to start
+        app.apply_event(AppEvent::CursorLeft);
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 0);
+
+        // Try to move left past start (should stay at 0)
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 0);
+
+        // Move right to end
+        app.apply_event(AppEvent::CursorRight);
+        app.apply_event(AppEvent::CursorRight);
+        assert_eq!(app.get_cursor_position(), 2);
+
+        // Try to move right past end (should stay at end)
+        app.apply_event(AppEvent::CursorRight);
+        assert_eq!(app.get_cursor_position(), 2);
+    }
+
+    #[test]
+    fn test_cursor_home_end() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        app.apply_event(AppEvent::FilterInputChar('b'));
+        app.apply_event(AppEvent::FilterInputChar('c'));
+
+        // Move cursor to middle
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 2);
+
+        // Home goes to start
+        app.apply_event(AppEvent::CursorHome);
+        assert_eq!(app.get_cursor_position(), 0);
+
+        // End goes to end
+        app.apply_event(AppEvent::CursorEnd);
+        assert_eq!(app.get_cursor_position(), 3);
+    }
+
+    #[test]
+    fn test_insert_at_cursor() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        app.apply_event(AppEvent::FilterInputChar('c'));
+        // Cursor is at end: "ac|"
+
+        // Move cursor left
+        app.apply_event(AppEvent::CursorLeft);
+        // Cursor is now: "a|c"
+
+        // Insert 'b' at cursor
+        app.apply_event(AppEvent::FilterInputChar('b'));
+        assert_eq!(app.get_input(), "abc");
+        assert_eq!(app.get_cursor_position(), 2); // "ab|c"
+    }
+
+    #[test]
+    fn test_backspace_at_cursor() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+        app.apply_event(AppEvent::FilterInputChar('b'));
+        app.apply_event(AppEvent::FilterInputChar('c'));
+        // "abc|"
+
+        // Move cursor to middle
+        app.apply_event(AppEvent::CursorLeft);
+        // "ab|c"
+
+        // Backspace removes 'b'
+        app.apply_event(AppEvent::FilterInputBackspace);
+        assert_eq!(app.get_input(), "ac");
+        assert_eq!(app.get_cursor_position(), 1); // "a|c"
+    }
+
+    #[test]
+    fn test_backspace_at_start() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        app.apply_event(AppEvent::FilterInputChar('a'));
+
+        // Move to start
+        app.apply_event(AppEvent::CursorHome);
+        assert_eq!(app.get_cursor_position(), 0);
+
+        // Backspace at start does nothing
+        app.apply_event(AppEvent::FilterInputBackspace);
+        assert_eq!(app.get_input(), "a");
+        assert_eq!(app.get_cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_cursor_with_unicode() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.start_filter_input();
+        // Type "日本" (Japanese characters, 3 bytes each in UTF-8)
+        app.apply_event(AppEvent::FilterInputChar('日'));
+        app.apply_event(AppEvent::FilterInputChar('本'));
+        assert_eq!(app.get_input(), "日本");
+        assert_eq!(app.get_cursor_position(), 6); // 3 bytes * 2 chars
+
+        // Move left one character
+        app.apply_event(AppEvent::CursorLeft);
+        assert_eq!(app.get_cursor_position(), 3); // After first character
+
+        // Insert at cursor
+        app.apply_event(AppEvent::FilterInputChar('語'));
+        assert_eq!(app.get_input(), "日語本");
+    }
+
+    #[test]
+    fn test_history_sets_cursor_to_end() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Add to history
+        app.add_to_history("error".to_string(), FilterMode::plain());
+
+        // Start filter input
+        app.start_filter_input();
+        assert_eq!(app.get_cursor_position(), 0);
+
+        // Navigate up to history
+        app.apply_event(AppEvent::HistoryUp);
+        assert_eq!(app.get_input(), "error");
+        assert_eq!(app.get_cursor_position(), 5); // Cursor at end
     }
 }

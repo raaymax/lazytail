@@ -1,5 +1,6 @@
 use crate::app::{FilterState, ViewMode};
 use crate::filter::engine::FilterProgress;
+use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
@@ -27,6 +28,8 @@ pub struct TabState {
     pub filter_state: FilterState,
     /// Current filter pattern (if any)
     pub filter_pattern: Option<String>,
+    /// Filter mode used for the current filter (Plain or Regex)
+    pub filter_mode: FilterMode,
     /// Follow mode - auto-scroll to latest logs
     pub follow_mode: bool,
     /// Last line number that was filtered (for incremental filtering)
@@ -94,6 +97,7 @@ impl TabState {
             selected_line: 0,
             filter_state: FilterState::Inactive,
             filter_pattern: None,
+            filter_mode: FilterMode::default(),
             follow_mode: false,
             last_filtered_line: 0,
             reader,
@@ -123,6 +127,7 @@ impl TabState {
             selected_line: 0,
             filter_state: FilterState::Inactive,
             filter_pattern: None,
+            filter_mode: FilterMode::default(),
             follow_mode: false,
             last_filtered_line: 0,
             reader: Arc::new(Mutex::new(stream_reader)),

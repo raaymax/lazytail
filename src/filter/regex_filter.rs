@@ -1,16 +1,17 @@
 use super::Filter;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 /// Regex-based filter
-#[allow(dead_code)]
 pub struct RegexFilter {
     regex: Regex,
 }
 
-#[allow(dead_code)]
 impl RegexFilter {
-    pub fn new(pattern: &str) -> Result<Self, regex::Error> {
-        let regex = Regex::new(pattern)?;
+    /// Create a new regex filter with case sensitivity option
+    pub fn new(pattern: &str, case_sensitive: bool) -> Result<Self, regex::Error> {
+        let regex = RegexBuilder::new(pattern)
+            .case_insensitive(!case_sensitive)
+            .build()?;
         Ok(Self { regex })
     }
 }
@@ -27,7 +28,7 @@ mod tests {
 
     #[test]
     fn test_basic_regex_matching() {
-        let filter = RegexFilter::new(r"ERROR").unwrap();
+        let filter = RegexFilter::new(r"ERROR", true).unwrap();
 
         assert!(filter.matches("ERROR: Something went wrong"));
         assert!(filter.matches("This is an ERROR"));
@@ -37,7 +38,7 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_regex() {
-        let filter = RegexFilter::new(r"(?i)error").unwrap();
+        let filter = RegexFilter::new(r"error", false).unwrap();
 
         assert!(filter.matches("ERROR: Something went wrong"));
         assert!(filter.matches("error: Something went wrong"));
@@ -46,20 +47,29 @@ mod tests {
     }
 
     #[test]
+    fn test_case_sensitive_regex() {
+        let filter = RegexFilter::new(r"error", true).unwrap();
+
+        assert!(!filter.matches("ERROR: Something went wrong"));
+        assert!(filter.matches("error: Something went wrong"));
+        assert!(!filter.matches("Error: Something went wrong"));
+    }
+
+    #[test]
     fn test_pattern_anchors() {
-        let filter = RegexFilter::new(r"^ERROR").unwrap();
+        let filter = RegexFilter::new(r"^ERROR", true).unwrap();
 
         assert!(filter.matches("ERROR: at start"));
         assert!(!filter.matches("Prefix ERROR: not at start"));
 
-        let filter_end = RegexFilter::new(r"ERROR$").unwrap();
+        let filter_end = RegexFilter::new(r"ERROR$", true).unwrap();
         assert!(filter_end.matches("Line ends with ERROR"));
         assert!(!filter_end.matches("ERROR: has suffix"));
     }
 
     #[test]
     fn test_character_classes() {
-        let filter = RegexFilter::new(r"\d{4}-\d{2}-\d{2}").unwrap();
+        let filter = RegexFilter::new(r"\d{4}-\d{2}-\d{2}", false).unwrap();
 
         assert!(filter.matches("Date: 2026-01-19"));
         assert!(filter.matches("2026-01-19 12:00:00"));
@@ -69,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_alternation() {
-        let filter = RegexFilter::new(r"ERROR|WARN|FATAL").unwrap();
+        let filter = RegexFilter::new(r"ERROR|WARN|FATAL", true).unwrap();
 
         assert!(filter.matches("ERROR: Something failed"));
         assert!(filter.matches("WARN: Be careful"));
@@ -80,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_word_boundaries() {
-        let filter = RegexFilter::new(r"\berror\b").unwrap();
+        let filter = RegexFilter::new(r"\berror\b", false).unwrap();
 
         assert!(filter.matches("error: standalone word"));
         assert!(filter.matches("An error occurred"));
@@ -90,7 +100,7 @@ mod tests {
 
     #[test]
     fn test_quantifiers() {
-        let filter = RegexFilter::new(r"E+ROR").unwrap();
+        let filter = RegexFilter::new(r"E+ROR", true).unwrap();
 
         assert!(filter.matches("EROR"));
         assert!(filter.matches("EEROR"));
@@ -100,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_capturing_groups() {
-        let filter = RegexFilter::new(r"(\w+):\s*(.+)").unwrap();
+        let filter = RegexFilter::new(r"(\w+):\s*(.+)", false).unwrap();
 
         assert!(filter.matches("ERROR: Something failed"));
         assert!(filter.matches("INFO: All good"));
@@ -110,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_special_characters_escaped() {
-        let filter = RegexFilter::new(r"\[ERROR\]").unwrap();
+        let filter = RegexFilter::new(r"\[ERROR\]", true).unwrap();
 
         assert!(filter.matches("[ERROR] Bracketed"));
         assert!(!filter.matches("ERROR without brackets"));
@@ -118,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_invalid_regex() {
-        let result = RegexFilter::new(r"[invalid(");
+        let result = RegexFilter::new(r"[invalid(", false);
 
         assert!(result.is_err());
     }
@@ -126,8 +136,11 @@ mod tests {
     #[test]
     fn test_complex_log_pattern() {
         // Match timestamp + level + message pattern
-        let filter =
-            RegexFilter::new(r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+(ERROR|WARN)").unwrap();
+        let filter = RegexFilter::new(
+            r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+(ERROR|WARN)",
+            true,
+        )
+        .unwrap();
 
         assert!(filter.matches("2026-01-19 14:30:00 ERROR: Failed"));
         assert!(filter.matches("2026-01-19 14:30:00 WARN: Warning"));
@@ -137,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_unicode_regex() {
-        let filter = RegexFilter::new(r"エラー").unwrap();
+        let filter = RegexFilter::new(r"エラー", false).unwrap();
 
         assert!(filter.matches("エラーが発生しました"));
         assert!(filter.matches("ログ: エラー"));

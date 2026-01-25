@@ -236,20 +236,44 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
-    let input_text = format!("Filter: {}", app.get_input());
+    let label = app.current_filter_mode.prompt_label();
+    let input_text = format!("{}: {}", label, app.get_input());
+
+    // Determine border color based on mode and validation state
+    let border_color = if app.current_filter_mode.is_regex() {
+        if app.regex_error.is_some() {
+            Color::Red // Invalid regex
+        } else {
+            Color::Cyan // Valid regex mode
+        }
+    } else {
+        Color::White // Plain text mode
+    };
+
+    // Build help text with mode hint
+    let mode_hint = if app.current_filter_mode.is_regex() {
+        "Tab: Plain"
+    } else {
+        "Tab: Regex"
+    };
+    let title = format!("Live Filter ({}, Enter to close, Esc to clear)", mode_hint);
 
     let input = Paragraph::new(input_text)
         .style(Style::default().fg(Color::Yellow))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Live Filter (Enter to close, Esc to clear)"),
+                .border_style(Style::default().fg(border_color))
+                .title(title),
         );
 
     f.render_widget(input, area);
 
-    // Show cursor at the end of input
-    f.set_cursor_position((area.x + 9 + app.get_input().len() as u16, area.y + 1));
+    // Show cursor at the cursor position (label + ": " + chars before cursor)
+    // Count characters before cursor, not bytes (for proper Unicode support)
+    let cursor_offset = label.len() as u16 + 2; // +2 for ": "
+    let chars_before_cursor = app.get_input()[..app.get_cursor_position()].chars().count() as u16;
+    f.set_cursor_position((area.x + 1 + cursor_offset + chars_before_cursor, area.y + 1));
 }
 
 fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
@@ -265,8 +289,9 @@ fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
 
     f.render_widget(input, area);
 
-    // Show cursor at the end of input
-    f.set_cursor_position((area.x + 2 + app.get_input().len() as u16, area.y + 1));
+    // Show cursor at the cursor position (: + chars before cursor)
+    let chars_before_cursor = app.get_input()[..app.get_cursor_position()].chars().count() as u16;
+    f.set_cursor_position((area.x + 2 + chars_before_cursor, area.y + 1));
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
