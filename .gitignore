@@ -3,3 +3,10 @@ CLAUDE.md
 AGENTS.md
 ROADMAP.md
 *.log
+
+# AUR/makepkg build artifacts
+*.pkg.tar.zst
+pkg/
+src/
+PKGBUILD
+.SRCINFO

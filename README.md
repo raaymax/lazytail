@@ -59,29 +59,38 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 
 ## Installation
 
-Download the latest release for your platform from the [Releases page](https://github.com/raaymax/lazytail/releases):
-
 ```bash
-# Linux (x86_64)
-wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-linux-x86_64.tar.gz
-tar xzf lazytail-linux-x86_64.tar.gz
-chmod +x lazytail
-sudo mv lazytail /usr/local/bin/
-
-# macOS (Intel)
-wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-macos-x86_64.tar.gz
-tar xzf lazytail-macos-x86_64.tar.gz
-chmod +x lazytail
-sudo mv lazytail /usr/local/bin/
-
-# macOS (Apple Silicon)
-wget https://github.com/raaymax/lazytail/releases/latest/download/lazytail-macos-aarch64.tar.gz
-tar xzf lazytail-macos-aarch64.tar.gz
-chmod +x lazytail
-sudo mv lazytail /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
 ```
 
-For building from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+That's it! The script auto-detects your OS and architecture, downloads the latest release, and installs to `~/.local/bin`.
+
+<details>
+<summary>Alternative installation methods</summary>
+
+### Custom install directory
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | INSTALL_DIR=/usr/local/bin bash
+```
+
+### Arch Linux (AUR)
+
+```bash
+yay -S lazytail
+```
+
+### Build from source
+
+Requires Rust 1.70+:
+
+```bash
+git clone https://github.com/raaymax/lazytail.git
+cd lazytail
+cargo install --path .
+```
+
+</details>
 
 ## Usage
 
