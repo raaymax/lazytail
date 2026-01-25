@@ -78,6 +78,20 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 }
 
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) {
+    // Split side panel into sources list and stats
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(5)])
+        .split(area);
+
+    // Render sources list
+    render_sources_list(f, chunks[0], app);
+
+    // Render stats panel
+    render_stats_panel(f, chunks[1], app);
+}
+
+fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
 
     for (idx, tab) in app.tabs.iter().enumerate() {
@@ -130,6 +144,46 @@ fn render_side_panel(f: &mut Frame, area: Rect, app: &App) {
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Sources"));
 
     f.render_widget(list, area);
+}
+
+fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
+    let tab = app.active_tab();
+
+    let total_lines = tab.total_lines;
+    let filtered_lines = tab.line_indices.len();
+    let is_filtered = tab.filter_pattern.is_some();
+
+    let stats_text = if is_filtered {
+        vec![
+            Line::from(vec![
+                Span::raw(" Lines:    "),
+                Span::styled(
+                    format!("{}", total_lines),
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw(" Filtered: "),
+                Span::styled(
+                    format!("{}", filtered_lines),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+        ]
+    } else {
+        vec![Line::from(vec![
+            Span::raw(" Lines: "),
+            Span::styled(
+                format!("{}", total_lines),
+                Style::default().fg(Color::White),
+            ),
+        ])]
+    };
+
+    let stats = Paragraph::new(stats_text)
+        .block(Block::default().borders(Borders::ALL).title("Stats"));
+
+    f.render_widget(stats, area);
 }
 
 fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
