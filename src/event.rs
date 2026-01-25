@@ -77,6 +77,10 @@ pub enum AppEvent {
     EnterZMode,   // z pressed, waiting for second key
     ExitZMode,    // cancel z mode
 
+    // Line expansion events
+    ToggleLineExpansion, // Toggle expansion of currently selected line
+    CollapseAll,         // Collapse all expanded lines
+
     // System events
     Quit,
 }

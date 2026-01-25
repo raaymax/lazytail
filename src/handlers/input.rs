@@ -124,6 +124,8 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char(':') => vec![AppEvent::StartLineJumpInput],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
         KeyCode::Char('z') => vec![AppEvent::EnterZMode],
+        KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
+        KeyCode::Char('c') => vec![AppEvent::CollapseAll],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         // Tab navigation
         KeyCode::Tab => vec![AppEvent::NextTab],

@@ -5,10 +5,19 @@ use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogRea
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+
+/// Mode for expanding log entries
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ExpandMode {
+    #[default]
+    Multiple, // Allow multiple expanded entries
+    Single, // Only one expanded at a time
+}
 
 /// Per-tab state for viewing a single log source
 pub struct TabState {
@@ -46,6 +55,10 @@ pub struct TabState {
     pub viewport: Viewport,
     /// Original line when filter mode started (for restoring on Esc)
     pub filter_origin_line: Option<usize>,
+    /// Set of expanded line numbers (file line numbers, not indices)
+    pub expanded_lines: HashSet<usize>,
+    /// Mode for expanding log entries (Multiple or Single)
+    pub expand_mode: ExpandMode,
 }
 
 impl TabState {
@@ -88,24 +101,29 @@ impl TabState {
 
         let line_indices = (0..total_lines).collect();
 
+        // Start at the end in follow mode
+        let selected_line = total_lines.saturating_sub(1);
+
         Ok(Self {
             name,
             mode: ViewMode::Normal,
             total_lines,
             line_indices,
             scroll_position: 0,
-            selected_line: 0,
+            selected_line,
             filter_state: FilterState::Inactive,
             filter_pattern: None,
             filter_mode: FilterMode::default(),
-            follow_mode: false,
+            follow_mode: true,
             last_filtered_line: 0,
             reader,
             watcher,
             filter_receiver: None,
             is_incremental_filter: false,
-            viewport: Viewport::new(0),
+            viewport: Viewport::new(selected_line),
             filter_origin_line: None,
+            expanded_lines: HashSet::new(),
+            expand_mode: ExpandMode::default(),
         })
     }
 
@@ -117,6 +135,7 @@ impl TabState {
 
         let total_lines = stream_reader.total_lines();
         let line_indices = (0..total_lines).collect();
+        let selected_line = total_lines.saturating_sub(1);
 
         Ok(Self {
             name: "<stdin>".to_string(),
@@ -124,18 +143,20 @@ impl TabState {
             total_lines,
             line_indices,
             scroll_position: 0,
-            selected_line: 0,
+            selected_line,
             filter_state: FilterState::Inactive,
             filter_pattern: None,
             filter_mode: FilterMode::default(),
-            follow_mode: false,
+            follow_mode: true,
             last_filtered_line: 0,
             reader: Arc::new(Mutex::new(stream_reader)),
             watcher: None,
             filter_receiver: None,
             is_incremental_filter: false,
-            viewport: Viewport::new(0),
+            viewport: Viewport::new(selected_line),
             filter_origin_line: None,
+            expanded_lines: HashSet::new(),
+            expand_mode: ExpandMode::default(),
         })
     }
 
@@ -339,6 +360,39 @@ impl TabState {
         self.viewport.anchor_to_bottom(&self.line_indices);
         self.sync_from_viewport();
     }
+
+    /// Toggle expansion state of the currently selected line
+    pub fn toggle_expansion(&mut self) {
+        if self.line_indices.is_empty() {
+            return;
+        }
+
+        // Get the actual file line number (not the index into line_indices)
+        let file_line_number = self.line_indices[self.selected_line];
+
+        if self.expanded_lines.contains(&file_line_number) {
+            // Collapse this line
+            self.expanded_lines.remove(&file_line_number);
+        } else {
+            // Expand this line
+            if self.expand_mode == ExpandMode::Single {
+                // In single mode, collapse all other lines first
+                self.expanded_lines.clear();
+            }
+            self.expanded_lines.insert(file_line_number);
+        }
+    }
+
+    /// Check if a file line number is expanded
+    #[allow(dead_code)] // Used in tests and kept for public API
+    pub fn is_line_expanded(&self, file_line_number: usize) -> bool {
+        self.expanded_lines.contains(&file_line_number)
+    }
+
+    /// Collapse all expanded lines
+    pub fn collapse_all(&mut self) {
+        self.expanded_lines.clear();
+    }
 }
 
 #[cfg(test)]
@@ -362,10 +416,9 @@ mod tests {
         let tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
         assert_eq!(tab.total_lines, 3);
-        assert_eq!(tab.selected_line, 0);
-        assert_eq!(tab.scroll_position, 0);
+        assert_eq!(tab.selected_line, 2); // Starts at end in follow mode
         assert_eq!(tab.mode, ViewMode::Normal);
-        assert!(!tab.follow_mode);
+        assert!(tab.follow_mode); // Follow mode enabled by default
     }
 
     #[test]
@@ -382,6 +435,13 @@ mod tests {
         let temp_file = create_temp_log_file(&["line1", "line2", "line3", "line4", "line5"]);
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
+        // Starts at end (line 4) in follow mode
+        assert_eq!(tab.selected_line, 4);
+
+        // Jump to start first
+        tab.jump_to_start();
+        assert_eq!(tab.selected_line, 0);
+
         // Scroll down
         tab.scroll_down();
         assert_eq!(tab.selected_line, 1);
@@ -397,10 +457,6 @@ mod tests {
         // Jump to end
         tab.jump_to_end();
         assert_eq!(tab.selected_line, 4);
-
-        // Jump to start
-        tab.jump_to_start();
-        assert_eq!(tab.selected_line, 0);
     }
 
     #[test]
@@ -433,14 +489,18 @@ mod tests {
         let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
+        // Follow mode is now enabled by default
+        assert!(tab.follow_mode);
+        assert_eq!(tab.selected_line, 2); // Starts at end
+
+        // Toggle off
+        tab.toggle_follow_mode();
         assert!(!tab.follow_mode);
 
+        // Toggle back on - should jump to end
         tab.toggle_follow_mode();
         assert!(tab.follow_mode);
-        assert_eq!(tab.selected_line, 2); // Should jump to end
-
-        tab.toggle_follow_mode();
-        assert!(!tab.follow_mode);
+        assert_eq!(tab.selected_line, 2);
     }
 
     #[test]
@@ -448,6 +508,10 @@ mod tests {
         let lines: Vec<&str> = (0..100).map(|_| "line").collect();
         let temp_file = create_temp_log_file(&lines);
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start first (starts at end in follow mode)
+        tab.jump_to_start();
+        assert_eq!(tab.selected_line, 0);
 
         tab.page_down(20);
         assert_eq!(tab.selected_line, 20);
@@ -480,7 +544,10 @@ mod tests {
         let temp_file = create_temp_log_file(&lines);
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
-        // Position selection at line 5 using proper method
+        // Jump to start first (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Position selection at line 5
         tab.page_down(5);
         assert_eq!(tab.selected_line, 5);
 
@@ -491,5 +558,140 @@ mod tests {
         // Mouse scroll up
         tab.mouse_scroll_up(2, 20);
         assert_eq!(tab.selected_line, 6); // 8 - 2
+    }
+
+    #[test]
+    fn test_toggle_expansion() {
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Initially no lines are expanded
+        assert!(!tab.is_line_expanded(0));
+        assert!(tab.expanded_lines.is_empty());
+
+        // Expand line 0
+        tab.toggle_expansion();
+        assert!(tab.is_line_expanded(0));
+        assert_eq!(tab.expanded_lines.len(), 1);
+
+        // Toggle again - should collapse
+        tab.toggle_expansion();
+        assert!(!tab.is_line_expanded(0));
+        assert!(tab.expanded_lines.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_expanded_lines() {
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3", "line4", "line5"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Default is Multiple mode
+        assert_eq!(tab.expand_mode, ExpandMode::Multiple);
+
+        // Expand line 0
+        tab.toggle_expansion();
+        assert!(tab.is_line_expanded(0));
+
+        // Move to line 2 and expand
+        tab.scroll_down();
+        tab.scroll_down();
+        tab.toggle_expansion();
+        assert!(tab.is_line_expanded(2));
+
+        // Both should be expanded
+        assert!(tab.is_line_expanded(0));
+        assert!(tab.is_line_expanded(2));
+        assert_eq!(tab.expanded_lines.len(), 2);
+    }
+
+    #[test]
+    fn test_single_expand_mode() {
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Switch to single mode
+        tab.expand_mode = ExpandMode::Single;
+
+        // Expand line 0
+        tab.toggle_expansion();
+        assert!(tab.is_line_expanded(0));
+
+        // Move to line 1 and expand
+        tab.scroll_down();
+        tab.toggle_expansion();
+
+        // Only line 1 should be expanded now (single mode collapses others)
+        assert!(!tab.is_line_expanded(0));
+        assert!(tab.is_line_expanded(1));
+        assert_eq!(tab.expanded_lines.len(), 1);
+    }
+
+    #[test]
+    fn test_collapse_all() {
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Expand multiple lines
+        tab.toggle_expansion(); // Line 0
+        tab.scroll_down();
+        tab.toggle_expansion(); // Line 1
+        tab.scroll_down();
+        tab.toggle_expansion(); // Line 2
+
+        assert_eq!(tab.expanded_lines.len(), 3);
+
+        // Collapse all
+        tab.collapse_all();
+        assert!(tab.expanded_lines.is_empty());
+        assert!(!tab.is_line_expanded(0));
+        assert!(!tab.is_line_expanded(1));
+        assert!(!tab.is_line_expanded(2));
+    }
+
+    #[test]
+    fn test_expansion_survives_filter() {
+        let temp_file = create_temp_log_file(&["error", "info", "error", "debug"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        tab.jump_to_start();
+
+        // Expand line 0 (file line 0)
+        tab.toggle_expansion();
+        assert!(tab.is_line_expanded(0));
+
+        // Apply filter - should keep expanded_lines (stores file line numbers)
+        tab.apply_filter(vec![0, 2], "error".to_string());
+
+        // Line 0 should still be marked as expanded
+        assert!(tab.is_line_expanded(0));
+
+        // Clear filter
+        tab.clear_filter();
+
+        // Still expanded
+        assert!(tab.is_line_expanded(0));
+    }
+
+    #[test]
+    fn test_expansion_with_empty_file() {
+        let temp_file = create_temp_log_file(&[]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Toggle expansion on empty file should not panic
+        tab.toggle_expansion();
+        assert!(tab.expanded_lines.is_empty());
     }
 }

@@ -8,6 +8,33 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
+
+/// Expand tabs to spaces for proper rendering
+fn expand_tabs(line: &str) -> String {
+    if !line.contains('\t') {
+        return line.to_string();
+    }
+
+    let mut result = String::with_capacity(line.len());
+    let mut column = 0;
+
+    for ch in line.chars() {
+        if ch == '\t' {
+            // Expand to next 4-column tab stop
+            let spaces = 4 - (column % 4);
+            for _ in 0..spaces {
+                result.push(' ');
+            }
+            column += spaces;
+        } else {
+            result.push(ch);
+            column += 1;
+        }
+    }
+
+    result
+}
 
 pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     // Main horizontal layout: side panel + content area
@@ -121,53 +148,99 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let selected_idx = view.selected_index;
     let count = visible_height.min(tab.visible_line_count().saturating_sub(start_idx));
 
-    // Get reader access
+    // Calculate available width for content (accounting for borders and line prefix)
+    let available_width = area.width.saturating_sub(2) as usize; // Account for borders
+    let prefix_width = 9; // "{:6} | " = 9 characters
+
+    // Background color for expanded (non-selected) entries
+    let expanded_bg = Color::Rgb(30, 30, 40);
+
+    // Get reader access and collect expanded_lines snapshot
     let mut reader_guard = tab.reader.lock().unwrap();
+    let expanded_lines = tab.expanded_lines.clone();
 
     // Fetch the lines to display
     let mut items = Vec::new();
     for i in start_idx..start_idx + count {
         if let Some(&line_number) = tab.line_indices.get(i) {
-            let line_text = reader_guard.get_line(line_number)?.unwrap_or_default();
+            let raw_line = reader_guard.get_line(line_number)?.unwrap_or_default();
+            let line_text = expand_tabs(&raw_line);
+            let is_selected = i == selected_idx;
+            let is_expanded = expanded_lines.contains(&line_number);
 
             // Add line number prefix
             let line_prefix = format!("{:6} | ", line_number + 1);
 
-            // Parse ANSI codes and convert to ratatui Line with styles
-            // Convert to owned text to avoid lifetime issues
-            let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
-                .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+            if is_expanded && available_width > prefix_width {
+                // Expanded: wrap content across multiple lines
+                let content_width = available_width.saturating_sub(prefix_width);
+                let wrapped_lines = wrap_content(&line_text, content_width, prefix_width);
 
-            // Build the final line with prefix
-            let mut final_line = Line::default();
-            final_line.spans.push(Span::raw(line_prefix));
+                let mut item_lines: Vec<Line<'static>> = Vec::new();
 
-            // Add the parsed colored spans from the log line
-            // Make sure all spans are owned (convert Cow to String)
-            if let Some(first_line) = parsed_text.lines.first() {
-                for span in &first_line.spans {
-                    final_line
-                        .spans
-                        .push(Span::styled(span.content.to_string(), span.style));
-                }
-            }
-
-            // Apply selection background if this is the selected line
-            if i == selected_idx {
-                for span in &mut final_line.spans {
-                    // Remap foreground colors that would be invisible on dark gray background
-                    let new_style = match span.style.fg {
-                        Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
-                            // Remap to white for visibility
-                            span.style.fg(Color::White)
-                        }
-                        _ => span.style,
+                for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
+                    // First line gets the line number prefix, others get indent
+                    let prefix = if wrap_idx == 0 {
+                        line_prefix.clone()
+                    } else {
+                        " ".repeat(prefix_width)
                     };
-                    span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
-                }
-            }
 
-            items.push(ListItem::new(final_line));
+                    // Insert prefix at the beginning
+                    wrapped_line.spans.insert(0, Span::raw(prefix));
+
+                    // Apply styling based on selection/expansion state
+                    for span in &mut wrapped_line.spans {
+                        if is_selected {
+                            // Selected: dark gray background + bold
+                            let new_style = match span.style.fg {
+                                Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
+                                    span.style.fg(Color::White)
+                                }
+                                _ => span.style,
+                            };
+                            span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                        } else {
+                            // Expanded but not selected: subtle dark background
+                            span.style = span.style.bg(expanded_bg);
+                        }
+                    }
+
+                    item_lines.push(wrapped_line);
+                }
+
+                items.push(ListItem::new(item_lines));
+            } else {
+                // Not expanded: single line (truncated if too long)
+                let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+                    .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+
+                let mut final_line = Line::default();
+                final_line.spans.push(Span::raw(line_prefix));
+
+                if let Some(first_line) = parsed_text.lines.first() {
+                    for span in &first_line.spans {
+                        final_line
+                            .spans
+                            .push(Span::styled(span.content.to_string(), span.style));
+                    }
+                }
+
+                // Apply selection background if this is the selected line
+                if is_selected {
+                    for span in &mut final_line.spans {
+                        let new_style = match span.style.fg {
+                            Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
+                                span.style.fg(Color::White)
+                            }
+                            _ => span.style,
+                        };
+                        span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                    }
+                }
+
+                items.push(ListItem::new(final_line));
+            }
         }
     }
 
@@ -294,6 +367,123 @@ fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
     f.set_cursor_position((area.x + 2 + chars_before_cursor, area.y + 1));
 }
 
+/// Wrap content to fit within the available width, preserving ANSI styles
+/// Returns a vector of Lines, where each Line contains styled spans
+///
+/// # Arguments
+/// * `content` - The raw content string (may contain ANSI codes)
+/// * `available_width` - The width in columns to wrap to
+/// * `prefix_width` - The width of the line number prefix (for continuation indent)
+fn wrap_content(content: &str, available_width: usize, prefix_width: usize) -> Vec<Line<'static>> {
+    if available_width == 0 {
+        return vec![Line::default()];
+    }
+
+    // Parse ANSI codes and convert to ratatui Text with styles
+    let parsed_text = ansi_to_tui::IntoText::into_text(&content)
+        .unwrap_or_else(|_| ratatui::text::Text::raw(content.to_string()));
+
+    // Get the first line's spans (we only deal with single-line content here)
+    let spans: Vec<Span<'static>> = parsed_text
+        .lines
+        .first()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|s| Span::styled(s.content.to_string(), s.style))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // If content fits on one line, return as-is
+    let total_width: usize = spans.iter().map(|s| s.content.width()).sum();
+    if total_width <= available_width {
+        return vec![Line::from(spans)];
+    }
+
+    // Word wrap the spans
+    let mut result_lines: Vec<Line<'static>> = Vec::new();
+    let mut current_line_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_line_width = 0;
+    let continuation_indent = " ".repeat(prefix_width);
+
+    for span in spans {
+        let span_text = span.content.to_string();
+        let span_style = span.style;
+
+        // For each span, we may need to split it across multiple lines
+        let mut remaining = span_text.as_str();
+
+        while !remaining.is_empty() {
+            let remaining_width = remaining.width();
+            let line_width_limit = if result_lines.is_empty() && current_line_spans.is_empty() {
+                available_width
+            } else if current_line_spans.is_empty() {
+                // For continuation lines, account for indent
+                available_width
+            } else {
+                available_width.saturating_sub(current_line_width)
+            };
+
+            if remaining_width <= line_width_limit {
+                // The rest fits on this line
+                current_line_spans.push(Span::styled(remaining.to_string(), span_style));
+                current_line_width += remaining_width;
+                break;
+            } else {
+                // Need to split - find where to break
+                let mut break_pos = 0;
+                let mut break_width = 0;
+
+                for (idx, ch) in remaining.char_indices() {
+                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if break_width + ch_width > line_width_limit {
+                        break;
+                    }
+                    break_width += ch_width;
+                    break_pos = idx + ch.len_utf8();
+                }
+
+                if break_pos == 0 && current_line_spans.is_empty() {
+                    // Can't fit even one character - force at least one
+                    if let Some(ch) = remaining.chars().next() {
+                        break_pos = ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+
+                if break_pos > 0 {
+                    let (part, rest) = remaining.split_at(break_pos);
+                    if !part.is_empty() {
+                        current_line_spans.push(Span::styled(part.to_string(), span_style));
+                    }
+                    remaining = rest;
+                }
+
+                // Commit current line and start new one
+                if !current_line_spans.is_empty() {
+                    result_lines.push(Line::from(current_line_spans));
+                    // Add continuation indent for wrapped lines
+                    current_line_spans = vec![Span::raw(continuation_indent.clone())];
+                    current_line_width = prefix_width;
+                }
+            }
+        }
+    }
+
+    // Don't forget the last line
+    if !current_line_spans.is_empty() {
+        result_lines.push(Line::from(current_line_spans));
+    }
+
+    if result_lines.is_empty() {
+        vec![Line::default()]
+    } else {
+        result_lines
+    }
+}
+
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     // Calculate centered popup area (60% width, 80% height)
     let popup_width = (area.width as f32 * 0.6) as u16;
@@ -333,6 +523,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  zz            Center selection on screen"),
         Line::from("  zt            Move selection to top"),
         Line::from("  zb            Move selection to bottom"),
+        Line::from("  Space         Toggle line expansion"),
+        Line::from("  c             Collapse all expanded lines"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Tabs",

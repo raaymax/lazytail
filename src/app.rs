@@ -599,6 +599,14 @@ impl App {
                 self.active_tab_mut().view_to_bottom();
             }
 
+            // Line expansion events
+            AppEvent::ToggleLineExpansion => {
+                self.active_tab_mut().toggle_expansion();
+            }
+            AppEvent::CollapseAll => {
+                self.active_tab_mut().collapse_all();
+            }
+
             // Future events - not yet implemented
             AppEvent::StartFilter { .. } => {
                 // Will be handled in main loop to trigger background filter
@@ -727,6 +735,13 @@ mod tests {
         let temp_file = create_temp_log_file(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
+        // Starts at end in follow mode
+        assert_eq!(app.active_tab().selected_line, 9);
+
+        // Jump to start first
+        app.jump_to_start();
+        assert_eq!(app.active_tab().selected_line, 0);
+
         // Scroll down
         app.scroll_down();
         assert_eq!(app.active_tab().selected_line, 1);
@@ -749,6 +764,9 @@ mod tests {
         let lines: Vec<&str> = (0..100).map(|_| "line").collect();
         let temp_file = create_temp_log_file(&lines);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Jump to start first (starts at end in follow mode)
+        app.jump_to_start();
 
         // Page down
         app.page_down(10);
@@ -789,13 +807,16 @@ mod tests {
         let temp_file = create_temp_log_file(&["1", "2", "3"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
-        assert!(!app.active_tab().follow_mode);
-
-        app.toggle_follow_mode();
+        // Follow mode enabled by default
         assert!(app.active_tab().follow_mode);
 
+        // Toggle off
         app.toggle_follow_mode();
         assert!(!app.active_tab().follow_mode);
+
+        // Toggle back on
+        app.toggle_follow_mode();
+        assert!(app.active_tab().follow_mode);
     }
 
     #[test]
@@ -1354,5 +1375,49 @@ mod tests {
         app.apply_event(AppEvent::HistoryUp);
         assert_eq!(app.get_input(), "error");
         assert_eq!(app.get_cursor_position(), 5); // Cursor at end
+    }
+
+    #[test]
+    fn test_toggle_line_expansion_event() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        app.apply_event(AppEvent::JumpToStart);
+
+        // Initially no lines expanded
+        assert!(app.active_tab().expanded_lines.is_empty());
+
+        // Toggle expansion via event
+        app.apply_event(AppEvent::ToggleLineExpansion);
+        assert!(app.active_tab().is_line_expanded(0));
+
+        // Toggle again
+        app.apply_event(AppEvent::ToggleLineExpansion);
+        assert!(!app.active_tab().is_line_expanded(0));
+    }
+
+    #[test]
+    fn test_collapse_all_event() {
+        use crate::event::AppEvent;
+
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        app.apply_event(AppEvent::JumpToStart);
+
+        // Expand some lines
+        app.apply_event(AppEvent::ToggleLineExpansion);
+        app.apply_event(AppEvent::ScrollDown);
+        app.apply_event(AppEvent::ToggleLineExpansion);
+
+        assert_eq!(app.active_tab().expanded_lines.len(), 2);
+
+        // Collapse all
+        app.apply_event(AppEvent::CollapseAll);
+        assert!(app.active_tab().expanded_lines.is_empty());
     }
 }
