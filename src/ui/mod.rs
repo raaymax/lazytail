@@ -180,8 +180,8 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         ])]
     };
 
-    let stats = Paragraph::new(stats_text)
-        .block(Block::default().borders(Borders::ALL).title("Stats"));
+    let stats =
+        Paragraph::new(stats_text).block(Block::default().borders(Borders::ALL).title("Stats"));
 
     f.render_widget(stats, area);
 }

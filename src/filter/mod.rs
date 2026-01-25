@@ -7,8 +7,10 @@ pub trait Filter: Send + Sync {
     fn matches(&self, line: &str) -> bool;
 }
 
+use serde::{Deserialize, Serialize};
+
 /// Filter mode for switching between plain text and regex filtering
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilterMode {
     Plain { case_sensitive: bool },
     Regex { case_sensitive: bool },
@@ -89,7 +91,7 @@ impl FilterMode {
 }
 
 /// A filter history entry that stores both the pattern and the mode
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilterHistoryEntry {
     pub pattern: String,
     pub mode: FilterMode,

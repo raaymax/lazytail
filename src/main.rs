@@ -2,6 +2,7 @@ mod app;
 mod event;
 mod filter;
 mod handlers;
+mod history;
 mod reader;
 mod tab;
 mod ui;

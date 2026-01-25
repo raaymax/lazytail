@@ -1,4 +1,5 @@
 use crate::filter::{FilterHistoryEntry, FilterMode};
+use crate::history;
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -88,7 +89,7 @@ impl App {
             input_cursor: 0,
             should_quit: false,
             show_help: false,
-            filter_history: Vec::new(),
+            filter_history: history::load_history(),
             history_index: None,
             current_filter_mode: FilterMode::default(),
             regex_error: None,
@@ -233,6 +234,9 @@ impl App {
 
         // Reset history navigation
         self.history_index = None;
+
+        // Persist history to disk
+        history::save_history(&self.filter_history);
     }
 
     /// Navigate up in filter history (older entries)
