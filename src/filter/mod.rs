@@ -26,7 +26,7 @@ impl Default for FilterMode {
 
 impl FilterMode {
     /// Create a new plain text filter mode (case-insensitive by default)
-    #[cfg(test)]
+    #[allow(dead_code)] // Public API for external use and tests
     pub fn plain() -> Self {
         FilterMode::Plain {
             case_sensitive: false,
@@ -34,7 +34,7 @@ impl FilterMode {
     }
 
     /// Create a new regex filter mode (case-insensitive by default)
-    #[cfg(test)]
+    #[allow(dead_code)] // Public API for external use and tests
     pub fn regex() -> Self {
         FilterMode::Regex {
             case_sensitive: false,

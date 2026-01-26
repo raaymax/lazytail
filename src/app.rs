@@ -4,6 +4,9 @@ use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
 
+/// Maximum number of filter history entries to keep
+const MAX_HISTORY_ENTRIES: usize = 50;
+
 /// Represents the current view mode
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewMode {
@@ -160,14 +163,13 @@ impl App {
     }
 
     /// Mouse scroll down
-    pub fn mouse_scroll_down(&mut self, lines: usize, visible_height: usize) {
-        self.active_tab_mut()
-            .mouse_scroll_down(lines, visible_height);
+    pub fn mouse_scroll_down(&mut self, lines: usize) {
+        self.active_tab_mut().mouse_scroll_down(lines);
     }
 
     /// Mouse scroll up
-    pub fn mouse_scroll_up(&mut self, lines: usize, visible_height: usize) {
-        self.active_tab_mut().mouse_scroll_up(lines, visible_height);
+    pub fn mouse_scroll_up(&mut self, lines: usize) {
+        self.active_tab_mut().mouse_scroll_up(lines);
     }
 
     /// Apply filter results
@@ -227,8 +229,8 @@ impl App {
         // Add to history
         self.filter_history.push(entry);
 
-        // Limit history to 50 entries
-        if self.filter_history.len() > 50 {
+        // Limit history size
+        if self.filter_history.len() > MAX_HISTORY_ENTRIES {
             self.filter_history.remove(0);
         }
 

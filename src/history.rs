@@ -31,11 +31,21 @@ pub fn save_history(history: &[FilterHistoryEntry]) {
 
     // Create parent directory if it doesn't exist
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Failed to create config directory: {}", e);
+            return;
+        }
     }
 
-    if let Ok(content) = serde_json::to_string_pretty(history) {
-        let _ = fs::write(&path, content);
+    match serde_json::to_string_pretty(history) {
+        Ok(content) => {
+            if let Err(e) = fs::write(&path, content) {
+                eprintln!("Failed to save filter history: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to serialize filter history: {}", e);
+        }
     }
 }
 

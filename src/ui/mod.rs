@@ -10,6 +10,21 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+// UI Style Constants
+const SELECTED_BG: Color = Color::DarkGray;
+const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
+const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
+
+/// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
+fn apply_selection_style(style: Style) -> Style {
+    // Adjust foreground if it's too dark to see against DarkGray background
+    let adjusted = match style.fg {
+        Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => style.fg(Color::White),
+        _ => style,
+    };
+    adjusted.bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+}
+
 /// Expand tabs to spaces for proper rendering
 fn expand_tabs(line: &str) -> String {
     if !line.contains('\t') {
@@ -204,10 +219,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
 
     // Calculate available width for content (accounting for borders and line prefix)
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
-    let prefix_width = 9; // "{:6} | " = 9 characters
-
-    // Background color for expanded (non-selected) entries
-    let expanded_bg = Color::Rgb(30, 30, 40);
+    let prefix_width = LINE_PREFIX_WIDTH;
 
     // Get reader access and collect expanded_lines snapshot
     let mut reader_guard = tab.reader.lock().unwrap();
@@ -228,7 +240,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
             if is_expanded && available_width > prefix_width {
                 // Expanded: wrap content across multiple lines
                 let content_width = available_width.saturating_sub(prefix_width);
-                let wrapped_lines = wrap_content(&line_text, content_width, prefix_width);
+                let wrapped_lines = wrap_content(&line_text, content_width);
 
                 let mut item_lines: Vec<Line<'static>> = Vec::new();
 
@@ -246,17 +258,10 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
                     // Apply styling based on selection/expansion state
                     for span in &mut wrapped_line.spans {
                         if is_selected {
-                            // Selected: dark gray background + bold
-                            let new_style = match span.style.fg {
-                                Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
-                                    span.style.fg(Color::White)
-                                }
-                                _ => span.style,
-                            };
-                            span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                            span.style = apply_selection_style(span.style);
                         } else {
                             // Expanded but not selected: subtle dark background
-                            span.style = span.style.bg(expanded_bg);
+                            span.style = span.style.bg(EXPANDED_BG);
                         }
                     }
 
@@ -283,13 +288,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
                 // Apply selection background if this is the selected line
                 if is_selected {
                     for span in &mut final_line.spans {
-                        let new_style = match span.style.fg {
-                            Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => {
-                                span.style.fg(Color::White)
-                            }
-                            _ => span.style,
-                        };
-                        span.style = new_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                        span.style = apply_selection_style(span.style);
                     }
                 }
 
@@ -427,8 +426,7 @@ fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
 /// # Arguments
 /// * `content` - The raw content string (may contain ANSI codes)
 /// * `available_width` - The width in columns to wrap to
-/// * `prefix_width` - The width of the line number prefix (for continuation indent)
-fn wrap_content(content: &str, available_width: usize, prefix_width: usize) -> Vec<Line<'static>> {
+fn wrap_content(content: &str, available_width: usize) -> Vec<Line<'static>> {
     if available_width == 0 {
         return vec![Line::default()];
     }
@@ -456,10 +454,10 @@ fn wrap_content(content: &str, available_width: usize, prefix_width: usize) -> V
     }
 
     // Word wrap the spans
+    // Note: We don't add continuation indent here - the caller (render_log_view) handles prefixes
     let mut result_lines: Vec<Line<'static>> = Vec::new();
     let mut current_line_spans: Vec<Span<'static>> = Vec::new();
     let mut current_line_width = 0;
-    let continuation_indent = " ".repeat(prefix_width);
 
     for span in spans {
         let span_text = span.content.to_string();
@@ -518,9 +516,8 @@ fn wrap_content(content: &str, available_width: usize, prefix_width: usize) -> V
                 // Commit current line and start new one
                 if !current_line_spans.is_empty() {
                     result_lines.push(Line::from(current_line_spans));
-                    // Add continuation indent for wrapped lines
-                    current_line_spans = vec![Span::raw(continuation_indent.clone())];
-                    current_line_width = prefix_width;
+                    current_line_spans = Vec::new();
+                    current_line_width = 0;
                 }
             }
         }

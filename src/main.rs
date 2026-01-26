@@ -368,8 +368,13 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
             }
         }
 
+        // Pre-compute if there's a StartFilter event (affects FileModified handling)
+        let has_start_filter = events
+            .iter()
+            .any(|e| matches!(e, AppEvent::StartFilter { .. }));
+
         // Process all collected events
-        for event in events.clone() {
+        for event in events {
             // Handle special events that need side effects (like starting filters)
             match &event {
                 AppEvent::StartFilter {
@@ -398,7 +403,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 | AppEvent::ToggleFilterMode
                 | AppEvent::ToggleCaseSensitivity => {
                     // Apply the event first
-                    app.apply_event(event.clone());
+                    app.apply_event(event);
 
                     // Then trigger live filter preview
                     let pattern = app.get_input().to_string();
@@ -416,15 +421,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     continue; // Event already applied above
                 }
                 AppEvent::MouseScrollDown(lines) => {
-                    // Calculate visible height from terminal size
-                    let visible_height = terminal.size()?.height as usize - PAGE_SIZE_OFFSET - 1;
-                    app.mouse_scroll_down(*lines, visible_height);
+                    app.mouse_scroll_down(*lines);
                     continue; // Event already applied
                 }
                 AppEvent::MouseScrollUp(lines) => {
-                    // Calculate visible height from terminal size
-                    let visible_height = terminal.size()?.height as usize - PAGE_SIZE_OFFSET - 1;
-                    app.mouse_scroll_up(*lines, visible_height);
+                    app.mouse_scroll_up(*lines);
                     continue; // Event already applied
                 }
                 AppEvent::ClearFilter => {
@@ -438,7 +439,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 }
                 AppEvent::FilterComplete { .. } => {
                     // Apply the event first
-                    app.apply_event(event.clone());
+                    app.apply_event(event);
 
                     // Then handle follow mode jump
                     if app.active_tab().follow_mode {
@@ -450,11 +451,9 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     // For file events, check if we need to jump to end in follow mode
                     let should_jump_follow = app.active_tab().follow_mode
                         && app.active_tab().mode == ViewMode::Normal
-                        && !events
-                            .iter()
-                            .any(|e| matches!(e, AppEvent::StartFilter { .. }));
+                        && !has_start_filter;
 
-                    app.apply_event(event.clone());
+                    app.apply_event(event);
 
                     if should_jump_follow {
                         app.jump_to_end();

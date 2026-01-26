@@ -208,14 +208,14 @@ impl TabState {
     }
 
     /// Mouse scroll down - moves viewport and selection together
-    pub fn mouse_scroll_down(&mut self, lines: usize, _visible_height: usize) {
+    pub fn mouse_scroll_down(&mut self, lines: usize) {
         self.viewport
             .scroll_with_selection(lines as i32, &self.line_indices);
         self.sync_from_viewport();
     }
 
     /// Mouse scroll up - moves viewport and selection together
-    pub fn mouse_scroll_up(&mut self, lines: usize, _visible_height: usize) {
+    pub fn mouse_scroll_up(&mut self, lines: usize) {
         self.viewport
             .scroll_with_selection(-(lines as i32), &self.line_indices);
         self.sync_from_viewport();
@@ -552,11 +552,11 @@ mod tests {
         assert_eq!(tab.selected_line, 5);
 
         // Mouse scroll down - moves both viewport and selection together
-        tab.mouse_scroll_down(3, 20);
+        tab.mouse_scroll_down(3);
         assert_eq!(tab.selected_line, 8); // 5 + 3
 
         // Mouse scroll up
-        tab.mouse_scroll_up(2, 20);
+        tab.mouse_scroll_up(2);
         assert_eq!(tab.selected_line, 6); // 8 - 2
     }
 

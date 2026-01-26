@@ -1,7 +1,6 @@
 /target
 CLAUDE.md
 AGENTS.md
-ROADMAP.md
 *.log
 
 # AUR/makepkg build artifacts
