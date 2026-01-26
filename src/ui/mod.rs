@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 const SELECTED_BG: Color = Color::DarkGray;
 const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
+const TAB_SIZE: usize = 4;
 
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
 fn apply_selection_style(style: Style) -> Style {
@@ -36,8 +37,8 @@ fn expand_tabs(line: &str) -> String {
 
     for ch in line.chars() {
         if ch == '\t' {
-            // Expand to next 4-column tab stop
-            let spaces = 4 - (column % 4);
+            // Expand to next tab stop
+            let spaces = TAB_SIZE - (column % TAB_SIZE);
             for _ in 0..spaces {
                 result.push(' ');
             }
@@ -142,7 +143,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
         let mut line = Line::from(vec![Span::styled(line_text, style)]);
 
         // Add filter indicator if tab has active filter
-        if tab.filter_pattern.is_some() {
+        if tab.filter.pattern.is_some() {
             line.spans
                 .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
         }
@@ -166,7 +167,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
 
     let total_lines = tab.total_lines;
     let filtered_lines = tab.line_indices.len();
-    let is_filtered = tab.filter_pattern.is_some();
+    let is_filtered = tab.filter.pattern.is_some();
 
     let stats_text = if is_filtered {
         vec![
@@ -223,7 +224,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
 
     // Get reader access and collect expanded_lines snapshot
     let mut reader_guard = tab.reader.lock().unwrap();
-    let expanded_lines = tab.expanded_lines.clone();
+    let expanded_lines = tab.expansion.expanded_lines.clone();
 
     // Fetch the lines to display
     let mut items = Vec::new();
@@ -309,7 +310,7 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
 }
 
 fn build_title(tab: &TabState) -> String {
-    match (&tab.mode, &tab.filter_pattern) {
+    match (&tab.mode, &tab.filter.pattern) {
         (ViewMode::Normal, None) => tab.name.clone(),
         (ViewMode::Filtered, Some(pattern)) => format!("{} (Filter: \"{}\")", tab.name, pattern),
         (ViewMode::Filtered, None) => format!("{} (Filtered)", tab.name),
@@ -329,7 +330,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             ViewMode::Normal => "Normal",
             ViewMode::Filtered => "Filtered",
         },
-        match &tab.filter_state {
+        match &tab.filter.state {
             FilterState::Inactive => String::new(),
             FilterState::Processing { progress } =>
                 format!("| Filtering: {}/{}", progress, tab.total_lines),
@@ -566,6 +567,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         )]),
         Line::from("  j / Down      Scroll down one line"),
         Line::from("  k / Up        Scroll up one line"),
+        Line::from("  Ctrl+E        Scroll viewport down (keep selection)"),
+        Line::from("  Ctrl+Y        Scroll viewport up (keep selection)"),
         Line::from("  PageDown      Scroll down one page"),
         Line::from("  PageUp        Scroll up one page"),
         Line::from("  g             Jump to start"),

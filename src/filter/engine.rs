@@ -34,10 +34,18 @@ impl FilterEngine {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            if let Err(e) =
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Self::process_filter(reader, filter, tx.clone(), progress_interval, 0, None)
-            {
-                let _ = tx.send(FilterProgress::Error(e.to_string()));
+            }));
+
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = tx.send(FilterProgress::Error(e.to_string()));
+                }
+                Err(_) => {
+                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
+                }
             }
         });
 
@@ -60,15 +68,25 @@ impl FilterEngine {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            if let Err(e) = Self::process_filter(
-                reader,
-                filter,
-                tx.clone(),
-                progress_interval,
-                start_line,
-                Some(end_line),
-            ) {
-                let _ = tx.send(FilterProgress::Error(e.to_string()));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::process_filter(
+                    reader,
+                    filter,
+                    tx.clone(),
+                    progress_interval,
+                    start_line,
+                    Some(end_line),
+                )
+            }));
+
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = tx.send(FilterProgress::Error(e.to_string()));
+                }
+                Err(_) => {
+                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
+                }
             }
         });
 
@@ -88,22 +106,20 @@ impl FilterEngine {
         R: LogReader + Send + 'static + ?Sized,
         F: Filter + 'static + ?Sized,
     {
-        let total_lines = {
-            let reader = reader.lock().unwrap();
-            reader.total_lines()
-        };
+        // Hold lock for entire batch to avoid lock/unlock overhead per line
+        let mut reader_guard = reader
+            .lock()
+            .expect("Reader lock poisoned - thread panicked");
 
+        let total_lines = reader_guard.total_lines();
         let end = end_line.unwrap_or(total_lines);
         let mut matching_indices = Vec::new();
 
         for line_idx in start_line..end {
             // Get the line
-            let line = {
-                let mut reader = reader.lock().unwrap();
-                match reader.get_line(line_idx)? {
-                    Some(line) => line,
-                    None => continue,
-                }
+            let line = match reader_guard.get_line(line_idx)? {
+                Some(line) => line,
+                None => continue,
             };
 
             // Check if it matches
@@ -116,6 +132,9 @@ impl FilterEngine {
                 tx.send(FilterProgress::Processing(line_idx))?;
             }
         }
+
+        // Release lock before sending final results
+        drop(reader_guard);
 
         // Send final results
         tx.send(FilterProgress::Complete(matching_indices))?;

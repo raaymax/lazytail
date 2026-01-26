@@ -18,8 +18,21 @@ pub fn load_history() -> Vec<FilterHistoryEntry> {
     }
 
     match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse filter history: {}", e);
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            // Only log if file exists but can't be read (permission issues, etc.)
+            // Don't log for missing files - that's expected on first run
+            if path.exists() {
+                eprintln!("Warning: Failed to read filter history: {}", e);
+            }
+            Vec::new()
+        }
     }
 }
 

@@ -6,24 +6,19 @@ A fast, universal terminal-based log viewer with live filtering and follow mode.
 
 ## Features
 
-### Implemented
 - **Multi-tab support** - Open multiple log files in tabs with side panel navigation
 - **Stdin support** - Pipe logs directly with auto-detection (`cmd | lazytail`)
 - **Lazy file reading** - Efficiently handles large log files using indexed line positions
 - **TUI interface** - Clean terminal UI with ratatui
-- **Line selection** - Navigate through logs with keyboard controls
-- **Live filtering** - See results instantly as you type your search string
-- **Filter history** - Navigate previous filter patterns with Up/Down arrows
-- **Background filtering** - Non-blocking regex and string matching filters
+- **Live filtering** - See results instantly as you type with regex or plain text
+- **Filter history** - Navigate and reuse previous filter patterns
+- **Background filtering** - Non-blocking filtering keeps UI responsive
 - **File watching** - Auto-reload when log file is modified (using inotify on Linux)
 - **Follow mode** - Auto-scroll to show latest logs as they arrive (like `tail -f`)
 - **ANSI color support** - Parses and renders ANSI escape codes in full color
-- **Raw view mode** - Display logs in their original format with line numbers
+- **Line expansion** - Expand long lines for better readability
 - **Memory efficient** - Viewport-based rendering keeps RAM usage low
-- **Help overlay** - Built-in keyboard shortcut reference (`?` key)
-- **Vim-style navigation** - Line jumping (`:123`), vim keybindings, mouse scroll
-
-### Keyboard Controls
+- **Vim-style navigation** - Familiar keybindings for efficient navigation
 
 Press `?` in the app to see all keyboard shortcuts.
 
@@ -98,51 +93,9 @@ app_logs | lazytail error.log <(kubectl logs pod-name)
 lazytail [OPTIONS] [FILES]...
 
 Options:
-  -w, --watch              Enable file watching (default: true)
       --no-watch           Disable file watching
   -h, --help               Print help
 ```
-
-### Live Filtering Example
-
-1. Press `/` to enter filter mode
-2. Start typing - e.g., `err`
-3. Watch the results update instantly as you type
-4. Continue typing - e.g., `error`
-5. Press `Enter` to close the filter prompt (filter stays active)
-6. Press `Esc` (in normal mode) to clear the filter
-
-The filter searches through all lines in the background without blocking the UI, so even with large files the interface remains responsive.
-
-**Filter History:**
-- Press `↑` while in filter mode to recall previous filter patterns
-- Press `↓` to navigate forward through history
-- Up to 50 recent filter patterns are saved
-- Selecting from history immediately applies the filter
-
-### Jumping to Line Numbers
-
-You can jump directly to any line number using vim-style syntax:
-1. Press `:` to enter line jump mode
-2. Type the line number - e.g., `:150`
-3. Press `Enter` to jump to that line
-4. Press `Esc` to cancel
-
-This works in both normal and filtered views. In filtered view, it jumps to the nearest matching line.
-
-### Using Follow Mode
-
-**Follow Mode** allows you to automatically scroll to new log lines as they're written to the file (like `tail -f`):
-1. Press `f` to enable follow mode - the status bar will show "FOLLOW"
-2. New log lines will automatically scroll into view as they arrive
-3. Press `f` again to disable follow mode and manually navigate
-4. Any manual scroll action (↑/↓/PgUp/PgDn/g/G) automatically disables follow mode
-
-File watching is enabled by default, so new log lines will appear automatically as they're written to the file. You can disable it with `--no-watch` if needed.
-
-### ANSI Color Support
-
-LazyTail parses ANSI escape codes and renders them in full color! Colored logs from other tools display beautifully with their original formatting preserved.
 
 ### Use Cases
 
@@ -162,25 +115,14 @@ lazytail /var/log/auth.log
 
 **Container Logs:**
 ```bash
-# Docker
-docker logs my-container > container.log
-lazytail container.log
-
-# Kubernetes
-kubectl logs pod-name > pod.log
-lazytail pod.log
+kubectl logs pod-name | lazytail
+docker logs -f container | lazytail
 ```
 
 **Web Server Logs:**
 ```bash
 lazytail /var/log/nginx/access.log
 lazytail /var/log/apache2/error.log
-```
-
-**Build/CI Logs:**
-```bash
-lazytail build-output.log
-lazytail ci-pipeline.log
 ```
 
 Any plain text log file works - from development logs to production system logs, with or without ANSI colors.

@@ -19,49 +19,69 @@ pub enum ExpandMode {
     Single, // Only one expanded at a time
 }
 
+/// Filter-related state for a tab
+#[derive(Default)]
+pub struct FilterConfig {
+    /// Current filter state (Inactive, Processing, Complete)
+    pub state: FilterState,
+    /// Current filter pattern (if any)
+    pub pattern: Option<String>,
+    /// Filter mode (Plain or Regex, with case sensitivity)
+    pub mode: FilterMode,
+    /// Channel receiver for filter progress updates
+    pub receiver: Option<Receiver<FilterProgress>>,
+    /// Whether current filter operation is incremental
+    pub is_incremental: bool,
+    /// Last line number that was filtered (for incremental filtering)
+    pub last_filtered_line: usize,
+    /// Original line when filter started (for restoring on Esc)
+    pub origin_line: Option<usize>,
+}
+
+/// Line expansion state for a tab
+#[derive(Default)]
+pub struct ExpansionState {
+    /// Set of expanded line numbers (file line numbers, not indices)
+    pub expanded_lines: HashSet<usize>,
+    /// Mode for expanding (Multiple or Single)
+    pub mode: ExpandMode,
+}
+
 /// Per-tab state for viewing a single log source
 pub struct TabState {
     /// Display name (filename)
     pub name: String,
-    /// Current view mode
+    /// Current view mode (Normal or Filtered)
     pub mode: ViewMode,
     /// Total number of lines in the source
     pub total_lines: usize,
     /// Indices of lines to display (all lines or filtered results)
     pub line_indices: Vec<usize>,
-    /// Current scroll position (index into line_indices)
+    /// Current scroll position (synced from viewport for compatibility)
     pub scroll_position: usize,
-    /// Currently selected line (index into line_indices)
+    /// Currently selected line index (synced from viewport for compatibility)
     pub selected_line: usize,
-    /// Current filter state
-    pub filter_state: FilterState,
-    /// Current filter pattern (if any)
-    pub filter_pattern: Option<String>,
-    /// Filter mode used for the current filter (Plain or Regex)
-    pub filter_mode: FilterMode,
     /// Follow mode - auto-scroll to latest logs
     pub follow_mode: bool,
-    /// Last line number that was filtered (for incremental filtering)
-    pub last_filtered_line: usize,
     /// Per-tab reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Per-tab file watcher
     pub watcher: Option<FileWatcher>,
-    /// Per-tab filter receiver
-    pub filter_receiver: Option<Receiver<FilterProgress>>,
-    /// Whether the current filter operation is incremental
-    pub is_incremental_filter: bool,
     /// Viewport for anchor-based scroll/selection management
     pub viewport: Viewport,
-    /// Original line when filter mode started (for restoring on Esc)
-    pub filter_origin_line: Option<usize>,
-    /// Set of expanded line numbers (file line numbers, not indices)
-    pub expanded_lines: HashSet<usize>,
-    /// Mode for expanding log entries (Multiple or Single)
-    pub expand_mode: ExpandMode,
+    /// Filter configuration and state
+    pub filter: FilterConfig,
+    /// Line expansion state
+    pub expansion: ExpansionState,
 }
 
 impl TabState {
+    /// Check if a line is expanded (test helper)
+    #[cfg(test)]
+    pub fn is_line_expanded(&self, file_line_number: usize) -> bool {
+        self.expansion.expanded_lines.contains(&file_line_number)
+    }
+
     /// Create a new tab from a file path
     pub fn new(path: PathBuf, watch: bool) -> Result<Self> {
         // Check file type to determine if it's a regular file or pipe/FIFO
@@ -111,19 +131,12 @@ impl TabState {
             line_indices,
             scroll_position: 0,
             selected_line,
-            filter_state: FilterState::Inactive,
-            filter_pattern: None,
-            filter_mode: FilterMode::default(),
             follow_mode: true,
-            last_filtered_line: 0,
             reader,
             watcher,
-            filter_receiver: None,
-            is_incremental_filter: false,
             viewport: Viewport::new(selected_line),
-            filter_origin_line: None,
-            expanded_lines: HashSet::new(),
-            expand_mode: ExpandMode::default(),
+            filter: FilterConfig::default(),
+            expansion: ExpansionState::default(),
         })
     }
 
@@ -144,19 +157,12 @@ impl TabState {
             line_indices,
             scroll_position: 0,
             selected_line,
-            filter_state: FilterState::Inactive,
-            filter_pattern: None,
-            filter_mode: FilterMode::default(),
             follow_mode: true,
-            last_filtered_line: 0,
             reader: Arc::new(Mutex::new(stream_reader)),
             watcher: None,
-            filter_receiver: None,
-            is_incremental_filter: false,
             viewport: Viewport::new(selected_line),
-            filter_origin_line: None,
-            expanded_lines: HashSet::new(),
-            expand_mode: ExpandMode::default(),
+            filter: FilterConfig::default(),
+            expansion: ExpansionState::default(),
         })
     }
 
@@ -221,6 +227,18 @@ impl TabState {
         self.sync_from_viewport();
     }
 
+    /// Viewport scroll down (Ctrl+E) - scroll viewport without moving selection
+    pub fn viewport_down(&mut self) {
+        self.viewport.move_viewport(1, &self.line_indices);
+        self.sync_from_viewport();
+    }
+
+    /// Viewport scroll up (Ctrl+Y) - scroll viewport without moving selection
+    pub fn viewport_up(&mut self) {
+        self.viewport.move_viewport(-1, &self.line_indices);
+        self.sync_from_viewport();
+    }
+
     /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         // Capture screen offset BEFORE changing line_indices
@@ -228,15 +246,15 @@ impl TabState {
 
         self.line_indices = matching_indices;
         self.mode = ViewMode::Filtered;
-        self.filter_pattern = Some(pattern);
-        self.filter_state = FilterState::Complete {
+        self.filter.pattern = Some(pattern);
+        self.filter.state = FilterState::Complete {
             matches: self.line_indices.len(),
         };
-        self.last_filtered_line = self.total_lines;
+        self.filter.last_filtered_line = self.total_lines;
 
         // If we have an origin line (from when filtering started), select nearest match
         // while preserving screen position
-        if let Some(origin) = self.filter_origin_line {
+        if let Some(origin) = self.filter.origin_line {
             if !self.line_indices.is_empty() {
                 // Find the match nearest to origin
                 let nearest_line = self.find_nearest_line(origin);
@@ -285,10 +303,10 @@ impl TabState {
     /// Append incremental filter results (for new logs only)
     pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
         self.line_indices.extend(new_matching_indices);
-        self.filter_state = FilterState::Complete {
+        self.filter.state = FilterState::Complete {
             matches: self.line_indices.len(),
         };
-        self.last_filtered_line = self.total_lines;
+        self.filter.last_filtered_line = self.total_lines;
         // Don't change selection - let follow mode or user control it
     }
 
@@ -296,11 +314,11 @@ impl TabState {
     pub fn clear_filter(&mut self) {
         self.line_indices = (0..self.total_lines).collect();
         self.mode = ViewMode::Normal;
-        self.filter_pattern = None;
-        self.filter_state = FilterState::Inactive;
+        self.filter.pattern = None;
+        self.filter.state = FilterState::Inactive;
 
         // Restore to origin line if set (where user was before filtering)
-        if let Some(origin) = self.filter_origin_line.take() {
+        if let Some(origin) = self.filter.origin_line.take() {
             self.viewport.jump_to_line(origin);
         } else {
             // Preserve screen offset - keep selection at same position on screen
@@ -370,28 +388,22 @@ impl TabState {
         // Get the actual file line number (not the index into line_indices)
         let file_line_number = self.line_indices[self.selected_line];
 
-        if self.expanded_lines.contains(&file_line_number) {
+        if self.expansion.expanded_lines.contains(&file_line_number) {
             // Collapse this line
-            self.expanded_lines.remove(&file_line_number);
+            self.expansion.expanded_lines.remove(&file_line_number);
         } else {
             // Expand this line
-            if self.expand_mode == ExpandMode::Single {
+            if self.expansion.mode == ExpandMode::Single {
                 // In single mode, collapse all other lines first
-                self.expanded_lines.clear();
+                self.expansion.expanded_lines.clear();
             }
-            self.expanded_lines.insert(file_line_number);
+            self.expansion.expanded_lines.insert(file_line_number);
         }
-    }
-
-    /// Check if a file line number is expanded
-    #[allow(dead_code)] // Used in tests and kept for public API
-    pub fn is_line_expanded(&self, file_line_number: usize) -> bool {
-        self.expanded_lines.contains(&file_line_number)
     }
 
     /// Collapse all expanded lines
     pub fn collapse_all(&mut self) {
-        self.expanded_lines.clear();
+        self.expansion.expanded_lines.clear();
     }
 }
 
@@ -468,7 +480,7 @@ mod tests {
 
         assert_eq!(tab.mode, ViewMode::Filtered);
         assert_eq!(tab.line_indices, vec![0, 2]);
-        assert_eq!(tab.filter_pattern, Some("error".to_string()));
+        assert_eq!(tab.filter.pattern, Some("error".to_string()));
     }
 
     #[test]
@@ -481,7 +493,7 @@ mod tests {
 
         assert_eq!(tab.mode, ViewMode::Normal);
         assert_eq!(tab.line_indices.len(), 4);
-        assert!(tab.filter_pattern.is_none());
+        assert!(tab.filter.pattern.is_none());
     }
 
     #[test]
@@ -570,17 +582,17 @@ mod tests {
 
         // Initially no lines are expanded
         assert!(!tab.is_line_expanded(0));
-        assert!(tab.expanded_lines.is_empty());
+        assert!(tab.expansion.expanded_lines.is_empty());
 
         // Expand line 0
         tab.toggle_expansion();
         assert!(tab.is_line_expanded(0));
-        assert_eq!(tab.expanded_lines.len(), 1);
+        assert_eq!(tab.expansion.expanded_lines.len(), 1);
 
         // Toggle again - should collapse
         tab.toggle_expansion();
         assert!(!tab.is_line_expanded(0));
-        assert!(tab.expanded_lines.is_empty());
+        assert!(tab.expansion.expanded_lines.is_empty());
     }
 
     #[test]
@@ -592,7 +604,7 @@ mod tests {
         tab.jump_to_start();
 
         // Default is Multiple mode
-        assert_eq!(tab.expand_mode, ExpandMode::Multiple);
+        assert_eq!(tab.expansion.mode, ExpandMode::Multiple);
 
         // Expand line 0
         tab.toggle_expansion();
@@ -607,7 +619,7 @@ mod tests {
         // Both should be expanded
         assert!(tab.is_line_expanded(0));
         assert!(tab.is_line_expanded(2));
-        assert_eq!(tab.expanded_lines.len(), 2);
+        assert_eq!(tab.expansion.expanded_lines.len(), 2);
     }
 
     #[test]
@@ -619,7 +631,7 @@ mod tests {
         tab.jump_to_start();
 
         // Switch to single mode
-        tab.expand_mode = ExpandMode::Single;
+        tab.expansion.mode = ExpandMode::Single;
 
         // Expand line 0
         tab.toggle_expansion();
@@ -632,7 +644,7 @@ mod tests {
         // Only line 1 should be expanded now (single mode collapses others)
         assert!(!tab.is_line_expanded(0));
         assert!(tab.is_line_expanded(1));
-        assert_eq!(tab.expanded_lines.len(), 1);
+        assert_eq!(tab.expansion.expanded_lines.len(), 1);
     }
 
     #[test]
@@ -650,11 +662,11 @@ mod tests {
         tab.scroll_down();
         tab.toggle_expansion(); // Line 2
 
-        assert_eq!(tab.expanded_lines.len(), 3);
+        assert_eq!(tab.expansion.expanded_lines.len(), 3);
 
         // Collapse all
         tab.collapse_all();
-        assert!(tab.expanded_lines.is_empty());
+        assert!(tab.expansion.expanded_lines.is_empty());
         assert!(!tab.is_line_expanded(0));
         assert!(!tab.is_line_expanded(1));
         assert!(!tab.is_line_expanded(2));
@@ -692,6 +704,6 @@ mod tests {
 
         // Toggle expansion on empty file should not panic
         tab.toggle_expansion();
-        assert!(tab.expanded_lines.is_empty());
+        assert!(tab.expansion.expanded_lines.is_empty());
     }
 }

@@ -11,6 +11,8 @@ pub enum AppEvent {
     JumpToEnd,
     MouseScrollDown(usize), // scroll amount (lines)
     MouseScrollUp(usize),   // scroll amount (lines)
+    ViewportDown,           // Ctrl+E - scroll viewport down, keep selection
+    ViewportUp,             // Ctrl+Y - scroll viewport up, keep selection
 
     // Filter events
     StartFilterInput,

@@ -9,11 +9,12 @@ pub struct FileReader {
     /// Path to the file
     path: PathBuf,
 
-    /// File handle for reading
-    file: File,
+    /// Buffered reader for efficient reading
+    /// Using BufReader with seek() clears the buffer, making random access safe
+    reader: BufReader<File>,
 
-    /// Index storing byte offset for each line start
-    /// line_index[i] = byte offset where line i starts
+    /// Index storing byte offset for each line start.
+    /// `line_index` at position i gives the byte offset where line i starts.
     line_index: Vec<u64>,
 
     /// Total number of lines
@@ -28,7 +29,7 @@ impl FileReader {
 
         let mut reader = Self {
             path,
-            file,
+            reader: BufReader::new(file),
             line_index: Vec::new(),
             total_lines: 0,
         };
@@ -39,9 +40,8 @@ impl FileReader {
 
     /// Build the line index by scanning through the file
     fn build_index(&mut self) -> Result<()> {
-        self.file.seek(SeekFrom::Start(0))?;
+        self.reader.seek(SeekFrom::Start(0))?;
 
-        let mut buf_reader = BufReader::new(&self.file);
         let mut current_offset = 0u64;
         let mut line_buffer = String::new();
 
@@ -50,7 +50,7 @@ impl FileReader {
 
         loop {
             line_buffer.clear();
-            let bytes_read = buf_reader.read_line(&mut line_buffer)?;
+            let bytes_read = self.reader.read_line(&mut line_buffer)?;
 
             if bytes_read == 0 {
                 // End of file
@@ -79,21 +79,15 @@ impl FileReader {
             self.total_lines = 0;
         }
 
-        // Reopen file for future seeks (BufReader consumed the file)
-        self.file = File::open(&self.path)?;
-
         Ok(())
     }
 
     /// Read a specific line by seeking to its position
     fn read_line_at_offset(&mut self, offset: u64) -> Result<String> {
-        self.file.seek(SeekFrom::Start(offset))?;
-        let mut reader = BufReader::new(&self.file);
+        // seek() on BufReader clears the internal buffer, making random access safe
+        self.reader.seek(SeekFrom::Start(offset))?;
         let mut line = String::new();
-        reader.read_line(&mut line)?;
-
-        // Reopen file for future seeks
-        self.file = File::open(&self.path)?;
+        self.reader.read_line(&mut line)?;
 
         // Remove trailing newline
         if line.ends_with('\n') {
@@ -125,7 +119,8 @@ impl LogReader for FileReader {
     fn reload(&mut self) -> Result<()> {
         self.line_index.clear();
         self.total_lines = 0;
-        self.file = File::open(&self.path)?;
+        let file = File::open(&self.path)?;
+        self.reader = BufReader::new(file);
         self.build_index()
     }
 }

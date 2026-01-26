@@ -1,19 +1,24 @@
 use super::Filter;
 
-/// Simple string matching filter (case-insensitive)
+/// Simple string matching filter with optimized case-insensitive search
 pub struct StringFilter {
+    /// Pattern string (lowercased if case-insensitive)
     pattern: String,
+    /// Pre-computed lowercase pattern bytes for fast ASCII comparison
+    pattern_bytes: Vec<u8>,
     case_sensitive: bool,
 }
 
 impl StringFilter {
     pub fn new(pattern: &str, case_sensitive: bool) -> Self {
+        let pattern_lower = pattern.to_lowercase();
         Self {
             pattern: if case_sensitive {
                 pattern.to_string()
             } else {
-                pattern.to_lowercase()
+                pattern_lower.clone()
             },
+            pattern_bytes: pattern_lower.into_bytes(),
             case_sensitive,
         }
     }
@@ -23,10 +28,38 @@ impl Filter for StringFilter {
     fn matches(&self, line: &str) -> bool {
         if self.case_sensitive {
             line.contains(&self.pattern)
+        } else if line.is_ascii() {
+            // Fast path: ASCII case-insensitive search without allocation
+            contains_ascii_ignore_case(line.as_bytes(), &self.pattern_bytes)
         } else {
+            // Fallback for Unicode: requires allocation
             line.to_lowercase().contains(&self.pattern)
         }
     }
+}
+
+/// Case-insensitive substring search for ASCII bytes (allocation-free)
+/// Assumes `needle` is already lowercase
+fn contains_ascii_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > haystack.len() {
+        return false;
+    }
+
+    let limit = haystack.len() - needle.len();
+    'outer: for start in 0..=limit {
+        for (i, &n) in needle.iter().enumerate() {
+            let h = haystack[start + i].to_ascii_lowercase();
+            if h != n {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

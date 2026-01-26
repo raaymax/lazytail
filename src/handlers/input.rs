@@ -105,6 +105,14 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::Quit]
         }
+        // Ctrl+E - scroll viewport down (vim style)
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::ViewportDown, AppEvent::DisableFollowMode]
+        }
+        // Ctrl+Y - scroll viewport up (vim style)
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::ViewportUp, AppEvent::DisableFollowMode]
+        }
         KeyCode::Down | KeyCode::Char('j') => {
             vec![AppEvent::ScrollDown, AppEvent::DisableFollowMode]
         }
@@ -191,6 +199,28 @@ mod tests {
         assert_eq!(
             events,
             vec![AppEvent::ScrollUp, AppEvent::DisableFollowMode]
+        );
+    }
+
+    #[test]
+    fn test_viewport_down_ctrl_e() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(
+            events,
+            vec![AppEvent::ViewportDown, AppEvent::DisableFollowMode]
+        );
+    }
+
+    #[test]
+    fn test_viewport_up_ctrl_y() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(
+            events,
+            vec![AppEvent::ViewportUp, AppEvent::DisableFollowMode]
         );
     }
 

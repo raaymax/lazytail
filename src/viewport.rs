@@ -4,6 +4,9 @@
 //! and the viewport only scrolls when selection hits the edge padding.
 //! The anchor_line (file line number) is stable across filter changes.
 
+/// Default edge padding (vim's scrolloff equivalent)
+const DEFAULT_EDGE_PADDING: usize = 3;
+
 /// Result of resolving the viewport against current content
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedView {
@@ -39,7 +42,7 @@ impl Viewport {
             anchor_line: initial_line,
             scroll_position: 0,
             height: 0,
-            edge_padding: 3,
+            edge_padding: DEFAULT_EDGE_PADDING,
             cache: None,
         }
     }
@@ -145,9 +148,12 @@ impl Viewport {
         self.cache = None;
     }
 
-    /// Move viewport by delta lines without moving selection
-    /// (selection stays on same line, but moves on screen)
-    #[allow(dead_code)] // Future: Ctrl+E/Ctrl+Y vim commands
+    /// Move viewport by delta lines, keeping selection at same screen position
+    /// Used by Ctrl+E (down) and Ctrl+Y (up) vim commands
+    ///
+    /// Both viewport and selection move together, so selection stays at
+    /// the same position on screen. This prevents ensure_visible from
+    /// undoing the scroll due to edge padding.
     pub fn move_viewport(&mut self, delta: i32, line_indices: &[usize]) {
         if line_indices.is_empty() || self.height == 0 {
             return;
@@ -157,19 +163,36 @@ impl Viewport {
         let current_idx = self.find_index(line_indices);
 
         if delta > 0 {
-            // Scroll down
-            self.scroll_position = (self.scroll_position + delta as usize).min(max_scroll);
-            // If selection goes above viewport, move it down
-            if current_idx < self.scroll_position {
-                self.anchor_line = line_indices[self.scroll_position];
+            let delta_usize = delta as usize;
+            // Scroll down - move both viewport and selection
+            let new_scroll = (self.scroll_position + delta_usize).min(max_scroll);
+            let scroll_delta = new_scroll - self.scroll_position;
+            self.scroll_position = new_scroll;
+
+            // Move selection by same amount (or to end if at bottom)
+            let new_idx = (current_idx + scroll_delta).min(line_indices.len() - 1);
+            self.anchor_line = line_indices[new_idx];
+
+            // If we couldn't scroll but can still move selection, do so
+            if scroll_delta == 0 && current_idx < line_indices.len() - 1 {
+                let new_idx = (current_idx + delta_usize).min(line_indices.len() - 1);
+                self.anchor_line = line_indices[new_idx];
             }
         } else {
-            // Scroll up
-            self.scroll_position = self.scroll_position.saturating_sub((-delta) as usize);
-            // If selection goes below viewport, move it up
-            let bottom = self.scroll_position + self.height - 1;
-            if current_idx > bottom {
-                self.anchor_line = line_indices[bottom.min(line_indices.len() - 1)];
+            let delta_usize = (-delta) as usize;
+            // Scroll up - move both viewport and selection
+            let new_scroll = self.scroll_position.saturating_sub(delta_usize);
+            let scroll_delta = self.scroll_position - new_scroll;
+            self.scroll_position = new_scroll;
+
+            // Move selection by same amount (or to start if at top)
+            let new_idx = current_idx.saturating_sub(scroll_delta);
+            self.anchor_line = line_indices[new_idx];
+
+            // If we couldn't scroll but can still move selection, do so
+            if scroll_delta == 0 && current_idx > 0 {
+                let new_idx = current_idx.saturating_sub(delta_usize);
+                self.anchor_line = line_indices[new_idx];
             }
         }
 
@@ -618,6 +641,7 @@ mod tests {
 
     #[test]
     fn test_move_viewport_down() {
+        // Selection moves with viewport to maintain screen position
         let mut vp = Viewport::new(50);
         vp.height = 20;
         vp.scroll_position = 45;
@@ -626,8 +650,8 @@ mod tests {
         vp.move_viewport(2, &lines); // Scroll down 2
 
         assert_eq!(vp.scroll_position, 47);
-        // Selection stays on line 50 (still visible)
-        assert_eq!(vp.selected_line(), 50);
+        // Selection moves with viewport (was at 50, now at 52)
+        assert_eq!(vp.selected_line(), 52);
     }
 
     #[test]
@@ -640,6 +664,77 @@ mod tests {
         vp.move_viewport(-2, &lines); // Scroll up 2
 
         assert_eq!(vp.scroll_position, 43);
-        assert_eq!(vp.selected_line(), 50);
+        // Selection moves with viewport (was at 50, now at 48)
+        assert_eq!(vp.selected_line(), 48);
+    }
+
+    #[test]
+    fn test_move_viewport_down_selection_moves_with_scroll() {
+        // Selection at top of viewport, both move together
+        let mut vp = Viewport::new(10);
+        vp.height = 20;
+        vp.scroll_position = 10; // Lines 10-29 visible
+        let lines: Vec<usize> = (0..100).collect();
+
+        assert_eq!(vp.selected_line(), 10);
+
+        vp.move_viewport(1, &lines); // Scroll down 1
+
+        assert_eq!(vp.scroll_position, 11);
+        // Selection moves with viewport
+        assert_eq!(vp.selected_line(), 11);
+    }
+
+    #[test]
+    fn test_move_viewport_up_selection_moves_with_scroll() {
+        // Selection at bottom of viewport, both move together
+        let mut vp = Viewport::new(29);
+        vp.height = 20;
+        vp.scroll_position = 10; // Lines 10-29 visible
+        let lines: Vec<usize> = (0..100).collect();
+
+        assert_eq!(vp.selected_line(), 29);
+
+        vp.move_viewport(-1, &lines); // Scroll up 1
+
+        assert_eq!(vp.scroll_position, 9);
+        // Selection moves with viewport
+        assert_eq!(vp.selected_line(), 28);
+    }
+
+    #[test]
+    fn test_move_viewport_down_at_max_scroll_moves_selection() {
+        // At max_scroll, Ctrl+E should move selection instead of scrolling
+        let mut vp = Viewport::new(90);
+        vp.height = 20;
+        vp.scroll_position = 80; // max_scroll = 100-20 = 80
+        let lines: Vec<usize> = (0..100).collect();
+
+        assert_eq!(vp.selected_line(), 90);
+
+        vp.move_viewport(1, &lines); // Try to scroll down
+
+        // Viewport can't scroll (at max)
+        assert_eq!(vp.scroll_position, 80);
+        // Selection should move down instead
+        assert_eq!(vp.selected_line(), 91);
+    }
+
+    #[test]
+    fn test_move_viewport_up_at_start_moves_selection() {
+        // At start, Ctrl+Y should move selection instead of scrolling
+        let mut vp = Viewport::new(10);
+        vp.height = 20;
+        vp.scroll_position = 0; // Already at start
+        let lines: Vec<usize> = (0..100).collect();
+
+        assert_eq!(vp.selected_line(), 10);
+
+        vp.move_viewport(-1, &lines); // Try to scroll up
+
+        // Viewport can't scroll (at start)
+        assert_eq!(vp.scroll_position, 0);
+        // Selection should move up instead
+        assert_eq!(vp.selected_line(), 9);
     }
 }

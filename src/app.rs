@@ -8,22 +8,27 @@ use std::path::PathBuf;
 const MAX_HISTORY_ENTRIES: usize = 50;
 
 /// Represents the current view mode
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Normal,
     Filtered,
 }
 
 /// Filter state tracking
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterState {
+    #[default]
     Inactive,
-    Processing { progress: usize },
-    Complete { matches: usize },
+    Processing {
+        progress: usize,
+    },
+    Complete {
+        matches: usize,
+    },
 }
 
 /// Input mode for user interaction
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     EnteringFilter,
@@ -172,6 +177,16 @@ impl App {
         self.active_tab_mut().mouse_scroll_up(lines);
     }
 
+    /// Viewport scroll down (Ctrl+E) - scroll viewport without moving selection
+    pub fn viewport_down(&mut self) {
+        self.active_tab_mut().viewport_down();
+    }
+
+    /// Viewport scroll up (Ctrl+Y) - scroll viewport without moving selection
+    pub fn viewport_up(&mut self) {
+        self.active_tab_mut().viewport_up();
+    }
+
     /// Apply filter results
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         self.active_tab_mut()
@@ -198,7 +213,7 @@ impl App {
         // Save current line as filter origin (for restoring on Esc)
         let tab = self.active_tab_mut();
         let current_line = tab.viewport.selected_line();
-        tab.filter_origin_line = Some(current_line);
+        tab.filter.origin_line = Some(current_line);
     }
 
     /// Cancel filter input and return to normal mode
@@ -461,6 +476,8 @@ impl App {
             AppEvent::MouseScrollUp(_lines) => {
                 // Mouse scroll events will be handled in main loop with visible_height
             }
+            AppEvent::ViewportDown => self.viewport_down(),
+            AppEvent::ViewportUp => self.viewport_up(),
 
             // Tab navigation events
             AppEvent::NextTab => self.next_tab(),
@@ -477,7 +494,7 @@ impl App {
                 let mode = self.current_filter_mode;
                 self.add_to_history(pattern, mode);
                 // Clear origin line - user is committing to the filtered position
-                self.active_tab_mut().filter_origin_line = None;
+                self.active_tab_mut().filter.origin_line = None;
                 self.cancel_filter_input();
             }
             AppEvent::FilterInputCancel => self.cancel_filter_input(),
@@ -494,7 +511,7 @@ impl App {
 
             // Filter progress events
             AppEvent::FilterProgress(lines_processed) => {
-                self.active_tab_mut().filter_state = FilterState::Processing {
+                self.active_tab_mut().filter.state = FilterState::Processing {
                     progress: lines_processed,
                 };
             }
@@ -505,14 +522,14 @@ impl App {
                 if incremental {
                     self.append_filter_results(indices);
                 } else {
-                    let pattern = self.active_tab().filter_pattern.clone().unwrap_or_default();
+                    let pattern = self.active_tab().filter.pattern.clone().unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
                 // Follow mode jump will be handled separately in main loop
             }
             AppEvent::FilterError(err) => {
                 eprintln!("Filter error: {}", err);
-                self.active_tab_mut().filter_state = FilterState::Inactive;
+                self.active_tab_mut().filter.state = FilterState::Inactive;
             }
 
             // File events
@@ -534,9 +551,9 @@ impl App {
                 tab.total_lines = new_total;
                 tab.line_indices = (0..new_total).collect();
                 tab.mode = ViewMode::Normal;
-                tab.filter_pattern = None;
-                tab.filter_state = FilterState::Inactive;
-                tab.last_filtered_line = 0;
+                tab.filter.pattern = None;
+                tab.filter.state = FilterState::Inactive;
+                tab.filter.last_filtered_line = 0;
                 // Ensure selection is valid
                 if tab.selected_line >= new_total && new_total > 0 {
                     tab.selected_line = new_total - 1;
@@ -729,7 +746,7 @@ mod tests {
         // Switch to tab 1
         app.next_tab();
         assert_eq!(app.active_tab().mode, ViewMode::Normal);
-        assert!(app.active_tab().filter_pattern.is_none());
+        assert!(app.active_tab().filter.pattern.is_none());
 
         // Tab 0 should still be filtered
         app.prev_tab();
@@ -793,7 +810,7 @@ mod tests {
 
         assert_eq!(app.active_tab().mode, ViewMode::Filtered);
         assert_eq!(app.active_tab().line_indices, matching_indices);
-        assert_eq!(app.active_tab().filter_pattern, Some("error".to_string()));
+        assert_eq!(app.active_tab().filter.pattern, Some("error".to_string()));
     }
 
     #[test]
@@ -805,7 +822,7 @@ mod tests {
         app.clear_filter();
 
         assert_eq!(app.active_tab().mode, ViewMode::Normal);
-        assert!(app.active_tab().filter_pattern.is_none());
+        assert!(app.active_tab().filter.pattern.is_none());
     }
 
     #[test]
@@ -1397,7 +1414,7 @@ mod tests {
         app.apply_event(AppEvent::JumpToStart);
 
         // Initially no lines expanded
-        assert!(app.active_tab().expanded_lines.is_empty());
+        assert!(app.active_tab().expansion.expanded_lines.is_empty());
 
         // Toggle expansion via event
         app.apply_event(AppEvent::ToggleLineExpansion);
@@ -1423,10 +1440,10 @@ mod tests {
         app.apply_event(AppEvent::ScrollDown);
         app.apply_event(AppEvent::ToggleLineExpansion);
 
-        assert_eq!(app.active_tab().expanded_lines.len(), 2);
+        assert_eq!(app.active_tab().expansion.expanded_lines.len(), 2);
 
         // Collapse all
         app.apply_event(AppEvent::CollapseAll);
-        assert!(app.active_tab().expanded_lines.is_empty());
+        assert!(app.active_tab().expansion.expanded_lines.is_empty());
     }
 }
