@@ -421,7 +421,8 @@ fn apply_filter_events_to_tab(
 }
 
 /// Collect input events from keyboard and mouse
-/// Drains all pending events and coalesces scroll events to prevent input lag
+/// Drains and coalesces mouse scroll events to prevent input lag
+/// Key events are processed one at a time to ensure state changes take effect
 fn collect_input_events<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &App,
@@ -432,14 +433,15 @@ fn collect_input_events<B: ratatui::backend::Backend>(
     let mut events = Vec::new();
     let mut scroll_down_count: usize = 0;
     let mut scroll_up_count: usize = 0;
+    let mut got_key_event = false;
 
     // Wait for at least one event (with timeout)
     if !crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
         return Ok(events);
     }
 
-    // Drain all pending events to prevent input lag
-    // Coalesce consecutive scroll events into single larger scrolls
+    // Drain mouse scroll events (stateless, can be coalesced)
+    // But only process ONE key event per iteration (state-dependent)
     loop {
         match crossterm_event::read()? {
             Event::Key(key) => {
@@ -469,6 +471,11 @@ fn collect_input_events<B: ratatui::backend::Backend>(
                     let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
                     events.push(AppEvent::PageUp(page_size));
                 }
+
+                // Only process one key event per iteration to allow state changes
+                // (e.g., 'z' changes mode, second 'z' needs to see new mode)
+                got_key_event = true;
+                break;
             }
             Event::Mouse(mouse_event) => match mouse_event.kind {
                 MouseEventKind::ScrollDown => {
@@ -504,18 +511,20 @@ fn collect_input_events<B: ratatui::backend::Backend>(
         }
     }
 
-    // Flush any remaining scroll events
-    if scroll_down_count > 0 {
-        events.push(AppEvent::MouseScrollDown(
-            scroll_down_count * MOUSE_SCROLL_LINES,
-        ));
-        events.push(AppEvent::DisableFollowMode);
-    }
-    if scroll_up_count > 0 {
-        events.push(AppEvent::MouseScrollUp(
-            scroll_up_count * MOUSE_SCROLL_LINES,
-        ));
-        events.push(AppEvent::DisableFollowMode);
+    // Flush any remaining scroll events (only if we didn't break due to key event)
+    if !got_key_event {
+        if scroll_down_count > 0 {
+            events.push(AppEvent::MouseScrollDown(
+                scroll_down_count * MOUSE_SCROLL_LINES,
+            ));
+            events.push(AppEvent::DisableFollowMode);
+        }
+        if scroll_up_count > 0 {
+            events.push(AppEvent::MouseScrollUp(
+                scroll_up_count * MOUSE_SCROLL_LINES,
+            ));
+            events.push(AppEvent::DisableFollowMode);
+        }
     }
 
     Ok(events)
