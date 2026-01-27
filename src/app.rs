@@ -93,6 +93,10 @@ impl App {
 
     /// Create an App with pre-created tabs
     pub fn with_tabs(tabs: Vec<TabState>) -> Self {
+        assert!(
+            !tabs.is_empty(),
+            "App must be created with at least one tab"
+        );
         Self {
             tabs,
             active_tab: 0,
@@ -111,12 +115,20 @@ impl App {
     }
 
     /// Get a reference to the active tab
+    ///
+    /// # Panics
+    /// Panics if there are no tabs (should never happen as App requires at least one tab)
     pub fn active_tab(&self) -> &TabState {
+        debug_assert!(!self.tabs.is_empty(), "No tabs available");
         &self.tabs[self.active_tab]
     }
 
     /// Get a mutable reference to the active tab
+    ///
+    /// # Panics
+    /// Panics if there are no tabs (should never happen as App requires at least one tab)
     pub fn active_tab_mut(&mut self) -> &mut TabState {
+        debug_assert!(!self.tabs.is_empty(), "No tabs available");
         &mut self.tabs[self.active_tab]
     }
 
@@ -540,12 +552,8 @@ impl App {
             AppEvent::PageUp(page_size) => self.page_up(page_size),
             AppEvent::JumpToStart => self.jump_to_start(),
             AppEvent::JumpToEnd => self.jump_to_end(),
-            AppEvent::MouseScrollDown(_lines) => {
-                // Mouse scroll events will be handled in main loop with visible_height
-            }
-            AppEvent::MouseScrollUp(_lines) => {
-                // Mouse scroll events will be handled in main loop with visible_height
-            }
+            // MouseScrollDown/MouseScrollUp handled directly in main.rs process_event()
+            AppEvent::MouseScrollDown(_) | AppEvent::MouseScrollUp(_) => {}
             AppEvent::ViewportDown => self.viewport_down(),
             AppEvent::ViewportUp => self.viewport_up(),
 
@@ -621,19 +629,33 @@ impl App {
             AppEvent::FileTruncated { new_total } => {
                 let tab = self.active_tab_mut();
                 eprintln!("File truncated: {} -> {} lines", tab.total_lines, new_total);
+
+                // Cancel any in-progress filter
+                if let Some(ref cancel) = tab.filter.cancel_token {
+                    cancel.cancel();
+                }
+
                 // Reset state on truncation
                 tab.total_lines = new_total;
                 tab.line_indices = (0..new_total).collect();
                 tab.mode = ViewMode::Normal;
+
+                // Fully reset filter state
                 tab.filter.pattern = None;
                 tab.filter.state = FilterState::Inactive;
                 tab.filter.last_filtered_line = 0;
-                // Ensure selection is valid
-                if tab.selected_line >= new_total && new_total > 0 {
-                    tab.selected_line = new_total - 1;
-                } else if new_total == 0 {
-                    tab.selected_line = 0;
-                }
+                tab.filter.cancel_token = None;
+                tab.filter.receiver = None;
+                tab.filter.needs_clear = false;
+                tab.filter.is_incremental = false;
+
+                // Reset viewport to valid position
+                let new_anchor = if new_total > 0 { new_total - 1 } else { 0 };
+                tab.viewport.jump_to_line(new_anchor);
+
+                // Sync old fields from viewport
+                tab.selected_line = new_anchor.min(new_total.saturating_sub(1));
+                tab.scroll_position = 0;
             }
 
             // Mode toggles

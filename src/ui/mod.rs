@@ -16,6 +16,10 @@ const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 const TAB_SIZE: usize = 4;
 
+// Help overlay dimensions (as percentage of screen)
+const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
+const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
+
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
 fn apply_selection_style(style: Style) -> Style {
     // Adjust foreground if it's too dark to see against DarkGray background
@@ -540,9 +544,9 @@ fn wrap_content(content: &str, available_width: usize) -> Vec<Line<'static>> {
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
-    // Calculate centered popup area (60% width, 80% height)
-    let popup_width = (area.width as f32 * 0.6) as u16;
-    let popup_height = (area.height as f32 * 0.8) as u16;
+    // Calculate centered popup area
+    let popup_width = (area.width as f32 * HELP_POPUP_WIDTH_PERCENT) as u16;
+    let popup_height = (area.height as f32 * HELP_POPUP_HEIGHT_PERCENT) as u16;
     let popup_x = (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = (area.height.saturating_sub(popup_height)) / 2;
 

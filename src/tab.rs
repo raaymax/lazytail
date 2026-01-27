@@ -213,15 +213,17 @@ impl TabState {
 
     /// Scroll down by page
     pub fn page_down(&mut self, page_size: usize) {
-        self.viewport
-            .move_selection(page_size as i32, &self.line_indices);
+        // Clamp to i32::MAX to prevent overflow (page_size > 2^31 is unrealistic anyway)
+        let delta = page_size.min(i32::MAX as usize) as i32;
+        self.viewport.move_selection(delta, &self.line_indices);
         self.sync_from_viewport();
     }
 
     /// Scroll up by page
     pub fn page_up(&mut self, page_size: usize) {
-        self.viewport
-            .move_selection(-(page_size as i32), &self.line_indices);
+        // Clamp to i32::MAX to prevent overflow (page_size > 2^31 is unrealistic anyway)
+        let delta = page_size.min(i32::MAX as usize) as i32;
+        self.viewport.move_selection(-delta, &self.line_indices);
         self.sync_from_viewport();
     }
 

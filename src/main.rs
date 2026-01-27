@@ -420,8 +420,7 @@ fn apply_filter_events_to_tab(
 }
 
 /// Collect input events from keyboard and mouse
-/// Drains and coalesces mouse scroll events to prevent input lag
-/// Key events are processed one at a time to ensure state changes take effect
+/// Coalesces mouse scroll events to prevent input lag while keeping key events responsive
 fn collect_input_events<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &App,
@@ -430,100 +429,90 @@ fn collect_input_events<B: ratatui::backend::Backend>(
     use event::AppEvent;
 
     let mut events = Vec::new();
-    let mut scroll_down_count: usize = 0;
-    let mut scroll_up_count: usize = 0;
-    let mut got_key_event = false;
 
     // Wait for at least one event (with timeout)
     if !crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
         return Ok(events);
     }
 
-    // Drain mouse scroll events (stateless, can be coalesced)
-    // But only process ONE key event per iteration (state-dependent)
-    loop {
-        match crossterm_event::read()? {
-            Event::Key(key) => {
-                // Flush any pending scroll events before processing key
-                if scroll_down_count > 0 {
-                    events.push(AppEvent::MouseScrollDown(
-                        scroll_down_count * MOUSE_SCROLL_LINES,
-                    ));
-                    events.push(AppEvent::DisableFollowMode);
-                    scroll_down_count = 0;
-                }
-                if scroll_up_count > 0 {
-                    events.push(AppEvent::MouseScrollUp(
-                        scroll_up_count * MOUSE_SCROLL_LINES,
-                    ));
-                    events.push(AppEvent::DisableFollowMode);
-                    scroll_up_count = 0;
-                }
+    // Read the first event - this is guaranteed to be available after poll() returns true
+    let first_event = crossterm_event::read()?;
 
-                events.extend(handlers::input::handle_input_event(key, app));
+    // Process the first event
+    match first_event {
+        Event::Key(key) => {
+            events.extend(handlers::input::handle_input_event(key, app));
 
-                // Add page size for PageDown/PageUp
-                if matches!(key.code, KeyCode::PageDown) {
-                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                    events.push(AppEvent::PageDown(page_size));
-                } else if matches!(key.code, KeyCode::PageUp) {
-                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                    events.push(AppEvent::PageUp(page_size));
-                }
-
-                // Only process one key event per iteration to allow state changes
-                // (e.g., 'z' changes mode, second 'z' needs to see new mode)
-                got_key_event = true;
-                break;
+            // Add page size for PageDown/PageUp
+            if matches!(key.code, KeyCode::PageDown) {
+                let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                events.push(AppEvent::PageDown(page_size));
+            } else if matches!(key.code, KeyCode::PageUp) {
+                let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                events.push(AppEvent::PageUp(page_size));
             }
-            Event::Mouse(mouse_event) => match mouse_event.kind {
+
+            // For key events, return immediately to allow state changes
+            // (e.g., 'z' changes mode, second 'z' needs to see new mode)
+            return Ok(events);
+        }
+        Event::Mouse(mouse_event) => {
+            // For mouse events, we'll coalesce scroll events below
+            match mouse_event.kind {
                 MouseEventKind::ScrollDown => {
-                    // Coalesce: if we were scrolling up, flush that first
-                    if scroll_up_count > 0 {
-                        events.push(AppEvent::MouseScrollUp(
-                            scroll_up_count * MOUSE_SCROLL_LINES,
-                        ));
-                        events.push(AppEvent::DisableFollowMode);
-                        scroll_up_count = 0;
+                    let mut scroll_count: usize = 1;
+
+                    // Drain and coalesce consecutive scroll-down events
+                    while crossterm_event::poll(Duration::ZERO)? {
+                        match crossterm_event::read()? {
+                            Event::Mouse(me) if me.kind == MouseEventKind::ScrollDown => {
+                                scroll_count += 1;
+                            }
+                            Event::Key(key) => {
+                                // Got a key event - emit scroll first, then key
+                                events.push(AppEvent::MouseScrollDown(
+                                    scroll_count * MOUSE_SCROLL_LINES,
+                                ));
+                                events.push(AppEvent::DisableFollowMode);
+                                events.extend(handlers::input::handle_input_event(key, app));
+                                return Ok(events);
+                            }
+                            _ => break, // Different event type, stop coalescing
+                        }
                     }
-                    scroll_down_count += 1;
+
+                    events.push(AppEvent::MouseScrollDown(scroll_count * MOUSE_SCROLL_LINES));
+                    events.push(AppEvent::DisableFollowMode);
                 }
                 MouseEventKind::ScrollUp => {
-                    // Coalesce: if we were scrolling down, flush that first
-                    if scroll_down_count > 0 {
-                        events.push(AppEvent::MouseScrollDown(
-                            scroll_down_count * MOUSE_SCROLL_LINES,
-                        ));
-                        events.push(AppEvent::DisableFollowMode);
-                        scroll_down_count = 0;
+                    let mut scroll_count: usize = 1;
+
+                    // Drain and coalesce consecutive scroll-up events
+                    while crossterm_event::poll(Duration::ZERO)? {
+                        match crossterm_event::read()? {
+                            Event::Mouse(me) if me.kind == MouseEventKind::ScrollUp => {
+                                scroll_count += 1;
+                            }
+                            Event::Key(key) => {
+                                // Got a key event - emit scroll first, then key
+                                events.push(AppEvent::MouseScrollUp(
+                                    scroll_count * MOUSE_SCROLL_LINES,
+                                ));
+                                events.push(AppEvent::DisableFollowMode);
+                                events.extend(handlers::input::handle_input_event(key, app));
+                                return Ok(events);
+                            }
+                            _ => break, // Different event type, stop coalescing
+                        }
                     }
-                    scroll_up_count += 1;
+
+                    events.push(AppEvent::MouseScrollUp(scroll_count * MOUSE_SCROLL_LINES));
+                    events.push(AppEvent::DisableFollowMode);
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         }
-
-        // Check if more events are immediately available
-        if !crossterm_event::poll(Duration::ZERO)? {
-            break;
-        }
-    }
-
-    // Flush any remaining scroll events (only if we didn't break due to key event)
-    if !got_key_event {
-        if scroll_down_count > 0 {
-            events.push(AppEvent::MouseScrollDown(
-                scroll_down_count * MOUSE_SCROLL_LINES,
-            ));
-            events.push(AppEvent::DisableFollowMode);
-        }
-        if scroll_up_count > 0 {
-            events.push(AppEvent::MouseScrollUp(
-                scroll_up_count * MOUSE_SCROLL_LINES,
-            ));
-            events.push(AppEvent::DisableFollowMode);
-        }
+        _ => {}
     }
 
     Ok(events)

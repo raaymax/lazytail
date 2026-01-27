@@ -201,7 +201,7 @@ impl FilterEngine {
         reader: &mut R,
         filter: Arc<F>,
         tx: Sender<FilterProgress>,
-        _progress_interval: usize,
+        batch_size: usize,
         start_line: usize,
         end_line: Option<usize>,
         cancel: CancelToken,
@@ -210,7 +210,7 @@ impl FilterEngine {
         R: LogReader + Send + 'static,
         F: Filter + 'static + ?Sized,
     {
-        const BATCH_SIZE: usize = 1000;
+        let batch_size = batch_size.max(100); // Ensure reasonable minimum
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -233,7 +233,7 @@ impl FilterEngine {
                 return Ok(());
             }
 
-            let batch_start = current_end.saturating_sub(BATCH_SIZE).max(start_line);
+            let batch_start = current_end.saturating_sub(batch_size).max(start_line);
 
             // Read and filter this batch
             let mut batch_matches = Vec::new();
@@ -284,7 +284,7 @@ impl FilterEngine {
         reader: Arc<Mutex<R>>,
         filter: Arc<F>,
         tx: Sender<FilterProgress>,
-        _progress_interval: usize,
+        batch_size: usize,
         start_line: usize,
         end_line: Option<usize>,
         cancel: CancelToken,
@@ -293,7 +293,7 @@ impl FilterEngine {
         R: LogReader + Send + 'static + ?Sized,
         F: Filter + 'static + ?Sized,
     {
-        const BATCH_SIZE: usize = 1000;
+        let batch_size = batch_size.max(100); // Ensure reasonable minimum
 
         if cancel.is_cancelled() {
             return Ok(());
@@ -320,7 +320,7 @@ impl FilterEngine {
                 return Ok(());
             }
 
-            let batch_start = current_end.saturating_sub(BATCH_SIZE).max(start_line);
+            let batch_start = current_end.saturating_sub(batch_size).max(start_line);
 
             // Read a batch of lines (brief lock)
             let batch: Vec<(usize, String)> = {
