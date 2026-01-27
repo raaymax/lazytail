@@ -208,8 +208,14 @@ impl App {
     pub fn merge_partial_filter_results(&mut self, new_indices: Vec<usize>) {
         let tab = self.active_tab_mut();
 
-        // Switch to filtered mode if this is the first partial result
-        if tab.mode == ViewMode::Normal {
+        // Check if we need to clear old results (new filter started)
+        // This is deferred from trigger_filter to prevent blink
+        if tab.filter.needs_clear {
+            tab.mode = ViewMode::Filtered;
+            tab.line_indices.clear();
+            tab.filter.needs_clear = false;
+        } else if tab.mode == ViewMode::Normal {
+            // Switch to filtered mode if this is the first partial result
             tab.mode = ViewMode::Filtered;
             tab.line_indices.clear();
         }
@@ -698,13 +704,12 @@ impl App {
                 self.active_tab_mut().collapse_all();
             }
 
-            // StartFilter: clear old results when starting a new (non-incremental) filter
+            // StartFilter: mark that results need clearing when first results arrive
             AppEvent::StartFilter { incremental, .. } => {
                 if !incremental {
-                    // Clear old filter results before new ones arrive
+                    // Defer clearing until first results arrive (prevents blink)
                     let tab = self.active_tab_mut();
-                    tab.mode = ViewMode::Filtered;
-                    tab.line_indices.clear();
+                    tab.filter.needs_clear = true;
                     tab.filter.state = FilterState::Processing { progress: 0 };
                 }
                 // Actual filter execution is handled in main loop

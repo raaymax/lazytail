@@ -39,6 +39,8 @@ pub struct FilterConfig {
     pub last_filtered_line: usize,
     /// Original line when filter started (for restoring on Esc)
     pub origin_line: Option<usize>,
+    /// Flag to clear results when first partial results arrive (prevents blink)
+    pub needs_clear: bool,
 }
 
 /// Line expansion state for a tab

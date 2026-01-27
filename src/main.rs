@@ -184,9 +184,8 @@ fn trigger_filter(
             )
         }
     } else {
-        // Full filtering - clear old results first
-        tab.mode = ViewMode::Filtered;
-        tab.line_indices.clear();
+        // Full filtering - defer clearing until first results arrive (prevents blink)
+        tab.filter.needs_clear = true;
         tab.filter.state = FilterState::Processing { progress: 0 };
         tab.filter.is_incremental = false;
 
