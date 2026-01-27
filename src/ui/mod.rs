@@ -206,8 +206,11 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let tab = app.active_tab_mut();
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
-    // Use viewport to compute scroll position and selected index
-    let view = tab.viewport.resolve(&tab.line_indices, visible_height);
+    // During filtering, preserve anchor so selection doesn't jump when partial results arrive
+    let is_filtering = matches!(tab.filter.state, FilterState::Processing { .. });
+    let view = tab
+        .viewport
+        .resolve_with_options(&tab.line_indices, visible_height, is_filtering);
 
     // Sync old fields from viewport (for backward compatibility during migration)
     tab.scroll_position = view.scroll_position;

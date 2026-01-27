@@ -1,10 +1,20 @@
+use super::sparse_index::SparseIndex;
 use super::LogReader;
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// Lazy file reader that indexes line positions for efficient random access
+/// Default sparse index interval (index every 10,000 lines)
+const DEFAULT_INDEX_INTERVAL: usize = 10_000;
+
+/// Lazy file reader that uses sparse indexing for memory-efficient random access
+///
+/// Instead of storing byte offset for every line (O(n) memory), this reader
+/// stores only every Nth line's offset. For line access, it seeks to the
+/// nearest indexed position and scans forward.
+///
+/// Memory usage for 100M lines: ~120KB (vs ~800MB with full indexing)
 pub struct FileReader {
     /// Path to the file
     path: PathBuf,
@@ -13,40 +23,40 @@ pub struct FileReader {
     /// Using BufReader with seek() clears the buffer, making random access safe
     reader: BufReader<File>,
 
-    /// Index storing byte offset for each line start.
-    /// `line_index` at position i gives the byte offset where line i starts.
-    line_index: Vec<u64>,
-
-    /// Total number of lines
-    total_lines: usize,
+    /// Sparse index storing byte offsets for every Nth line
+    sparse_index: SparseIndex,
 }
 
 impl FileReader {
-    /// Create a new FileReader and build the line index
+    /// Create a new FileReader and build the sparse line index
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::with_interval(path, DEFAULT_INDEX_INTERVAL)
+    }
+
+    /// Create a new FileReader with a custom index interval
+    pub fn with_interval<P: AsRef<Path>>(path: P, interval: usize) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path).context(format!("Failed to open file: {}", path.display()))?;
 
         let mut reader = Self {
             path,
             reader: BufReader::new(file),
-            line_index: Vec::new(),
-            total_lines: 0,
+            sparse_index: SparseIndex::new(interval),
         };
 
         reader.build_index()?;
         Ok(reader)
     }
 
-    /// Build the line index by scanning through the file
+    /// Build the sparse line index by scanning through the file
     fn build_index(&mut self) -> Result<()> {
         self.reader.seek(SeekFrom::Start(0))?;
+        self.sparse_index.clear();
 
         let mut current_offset = 0u64;
         let mut line_buffer = String::new();
-
-        // First line starts at offset 0
-        self.line_index.push(0);
+        let mut line_count = 0usize;
+        let interval = self.sparse_index.interval();
 
         loop {
             line_buffer.clear();
@@ -57,68 +67,73 @@ impl FileReader {
                 break;
             }
 
+            line_count += 1;
             current_offset += bytes_read as u64;
 
-            // If we read a line and haven't reached EOF, there's another line
-            if line_buffer.ends_with('\n') || line_buffer.ends_with('\r') {
-                self.line_index.push(current_offset);
+            // Index every `interval` lines (store the offset AFTER this line)
+            if line_count.is_multiple_of(interval) {
+                self.sparse_index.append(line_count, current_offset);
             }
         }
 
-        // Calculate total lines
-        // If the last line didn't end with a newline, we still have that line
-        if let Some(&last_index) = self.line_index.last() {
-            if last_index < current_offset {
-                // We read content after the last newline - that's a line too
-                self.total_lines = self.line_index.len();
-            } else {
-                // Normal case: index has N+1 entries for N lines
-                self.total_lines = self.line_index.len().saturating_sub(1);
-            }
-        } else {
-            self.total_lines = 0;
-        }
-
+        self.sparse_index.set_total_lines(line_count);
         Ok(())
     }
 
-    /// Read a specific line by seeking to its position
-    fn read_line_at_offset(&mut self, offset: u64) -> Result<String> {
-        // seek() on BufReader clears the internal buffer, making random access safe
-        self.reader.seek(SeekFrom::Start(offset))?;
-        let mut line = String::new();
-        self.reader.read_line(&mut line)?;
+    /// Read a specific line by seeking to nearest indexed position and scanning
+    fn read_line_at(&mut self, line_num: usize) -> Result<Option<String>> {
+        if line_num >= self.sparse_index.total_lines() {
+            return Ok(None);
+        }
 
-        // Remove trailing newline
-        if line.ends_with('\n') {
-            line.pop();
-            if line.ends_with('\r') {
-                line.pop();
+        let (offset, skip) = self.sparse_index.locate(line_num);
+
+        // Seek to the indexed position
+        self.reader.seek(SeekFrom::Start(offset))?;
+
+        // Skip lines to reach target
+        let mut line_buffer = String::new();
+        for _ in 0..skip {
+            line_buffer.clear();
+            if self.reader.read_line(&mut line_buffer)? == 0 {
+                return Ok(None);
             }
         }
 
-        Ok(line)
+        // Read the target line
+        line_buffer.clear();
+        if self.reader.read_line(&mut line_buffer)? == 0 {
+            return Ok(None);
+        }
+
+        // Remove trailing newline
+        if line_buffer.ends_with('\n') {
+            line_buffer.pop();
+            if line_buffer.ends_with('\r') {
+                line_buffer.pop();
+            }
+        }
+
+        Ok(Some(line_buffer))
+    }
+
+    /// Get memory usage of the index in bytes
+    #[cfg(test)]
+    pub fn index_memory_usage(&self) -> usize {
+        self.sparse_index.memory_usage()
     }
 }
 
 impl LogReader for FileReader {
     fn total_lines(&self) -> usize {
-        self.total_lines
+        self.sparse_index.total_lines()
     }
 
     fn get_line(&mut self, index: usize) -> Result<Option<String>> {
-        if index >= self.total_lines {
-            return Ok(None);
-        }
-
-        let offset = self.line_index[index];
-        let line = self.read_line_at_offset(offset)?;
-        Ok(Some(line))
+        self.read_line_at(index)
     }
 
     fn reload(&mut self) -> Result<()> {
-        self.line_index.clear();
-        self.total_lines = 0;
         let file = File::open(&self.path)?;
         self.reader = BufReader::new(file);
         self.build_index()
@@ -489,6 +504,110 @@ mod tests {
         assert!(reader.get_line(0)?.unwrap().contains("\x1b[38;5;214m"));
         assert!(reader.get_line(1)?.unwrap().contains("\x1b]8;;"));
         assert!(reader.get_line(2)?.unwrap().contains("\x1b[1m"));
+
+        Ok(())
+    }
+
+    // Tests specific to sparse indexing behavior
+
+    #[test]
+    fn test_sparse_index_with_small_interval() -> Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Write 25 lines with interval of 10
+        for i in 0..25 {
+            writeln!(temp_file, "Line {}", i)?;
+        }
+        temp_file.flush()?;
+
+        let mut reader = FileReader::with_interval(temp_file.path(), 10)?;
+
+        assert_eq!(reader.total_lines(), 25);
+
+        // Test access before first index entry
+        assert_eq!(reader.get_line(0)?.unwrap(), "Line 0");
+        assert_eq!(reader.get_line(5)?.unwrap(), "Line 5");
+        assert_eq!(reader.get_line(9)?.unwrap(), "Line 9");
+
+        // Test access at index entry
+        assert_eq!(reader.get_line(10)?.unwrap(), "Line 10");
+
+        // Test access between index entries
+        assert_eq!(reader.get_line(15)?.unwrap(), "Line 15");
+
+        // Test access at second index entry
+        assert_eq!(reader.get_line(20)?.unwrap(), "Line 20");
+
+        // Test access after last index entry
+        assert_eq!(reader.get_line(24)?.unwrap(), "Line 24");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sparse_index_memory_efficiency() -> Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Write 100,000 lines
+        for i in 0..100_000 {
+            writeln!(temp_file, "Line number {} with some padding text", i)?;
+        }
+        temp_file.flush()?;
+
+        // With default interval (10,000), should have ~10 index entries
+        let reader = FileReader::new(temp_file.path())?;
+
+        // Memory should be minimal - roughly 10 entries * 12 bytes = 120 bytes
+        // Plus struct overhead. Should be under 1KB for sure.
+        let memory = reader.index_memory_usage();
+        assert!(
+            memory < 1024,
+            "Index memory {} bytes should be under 1KB",
+            memory
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_random_access_across_index_boundaries() -> Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+
+        // Write 50 lines with interval of 10
+        for i in 0..50 {
+            writeln!(temp_file, "Content at line {}", i)?;
+        }
+        temp_file.flush()?;
+
+        let mut reader = FileReader::with_interval(temp_file.path(), 10)?;
+
+        // Access lines in random order crossing index boundaries
+        assert_eq!(reader.get_line(45)?.unwrap(), "Content at line 45");
+        assert_eq!(reader.get_line(5)?.unwrap(), "Content at line 5");
+        assert_eq!(reader.get_line(25)?.unwrap(), "Content at line 25");
+        assert_eq!(reader.get_line(10)?.unwrap(), "Content at line 10");
+        assert_eq!(reader.get_line(35)?.unwrap(), "Content at line 35");
+        assert_eq!(reader.get_line(0)?.unwrap(), "Content at line 0");
+        assert_eq!(reader.get_line(49)?.unwrap(), "Content at line 49");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_of_one_behaves_like_full_index() -> Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+
+        for i in 0..20 {
+            writeln!(temp_file, "Line {}", i)?;
+        }
+        temp_file.flush()?;
+
+        let mut reader = FileReader::with_interval(temp_file.path(), 1)?;
+
+        assert_eq!(reader.total_lines(), 20);
+        for i in 0..20 {
+            assert_eq!(reader.get_line(i)?.unwrap(), format!("Line {}", i));
+        }
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 mod app;
+mod cache;
 mod event;
 mod filter;
 mod handlers;
@@ -18,20 +19,23 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::{
-    engine::FilterEngine, regex_filter::RegexFilter, string_filter::StringFilter, Filter,
-    FilterMode,
+    cancel::CancelToken, engine::FilterEngine, regex_filter::RegexFilter,
+    string_filter::StringFilter, Filter, FilterMode,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use reader::file_reader::FileReader;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Constants
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const INPUT_POLL_DURATION_MS: u64 = 100;
 const PAGE_SIZE_OFFSET: usize = 5;
 const MOUSE_SCROLL_LINES: usize = 3;
+/// Debounce delay for live filter preview (milliseconds)
+const FILTER_DEBOUNCE_MS: u64 = 500;
 
 #[derive(Parser, Debug)]
 #[command(name = "lazytail")]
@@ -125,6 +129,11 @@ fn trigger_filter(
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) {
+    // Cancel any previous filter operation
+    if let Some(ref cancel) = tab.filter.cancel_token {
+        cancel.cancel();
+    }
+
     let case_sensitive = mode.is_case_sensitive();
     let filter: Arc<dyn Filter> = if mode.is_regex() {
         match RegexFilter::new(&pattern, case_sensitive) {
@@ -138,22 +147,56 @@ fn trigger_filter(
         Arc::new(StringFilter::new(&pattern, case_sensitive))
     };
 
+    // Create new cancel token for this operation
+    let cancel = CancelToken::new();
+    tab.filter.cancel_token = Some(cancel.clone());
+
+    // Try to create a separate reader for the filter thread (no lock contention with UI)
+    let owned_reader = tab
+        .source_path
+        .as_ref()
+        .and_then(|path| FileReader::new(path).ok());
+
     let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
         // Incremental filtering (range)
         tab.filter.state = FilterState::Processing { progress: start };
         tab.filter.is_incremental = true;
-        FilterEngine::run_filter_range(
-            tab.reader.clone(),
-            filter,
-            FILTER_PROGRESS_INTERVAL,
-            start,
-            end,
-        )
+
+        if let Some(reader) = owned_reader {
+            // Use owned reader - no UI blocking!
+            FilterEngine::run_filter_range_owned(
+                reader,
+                filter,
+                FILTER_PROGRESS_INTERVAL,
+                start,
+                end,
+                cancel,
+            )
+        } else {
+            // Fall back to shared reader (for stdin)
+            FilterEngine::run_filter_range(
+                tab.reader.clone(),
+                filter,
+                FILTER_PROGRESS_INTERVAL,
+                start,
+                end,
+                cancel,
+            )
+        }
     } else {
-        // Full filtering
+        // Full filtering - clear old results first
+        tab.mode = ViewMode::Filtered;
+        tab.line_indices.clear();
         tab.filter.state = FilterState::Processing { progress: 0 };
         tab.filter.is_incremental = false;
-        FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL)
+
+        if let Some(reader) = owned_reader {
+            // Use owned reader - no UI blocking!
+            FilterEngine::run_filter_owned(reader, filter, FILTER_PROGRESS_INTERVAL, cancel)
+        } else {
+            // Fall back to shared reader (for stdin)
+            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
+        }
     };
 
     tab.filter.receiver = Some(receiver);
@@ -166,13 +209,21 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         // Phase 1: Render
         render(terminal, app)?;
 
-        // Phase 2: Collect events from all sources
+        // Phase 2: Check for pending debounced filter
+        if let Some(trigger_at) = app.pending_filter_at {
+            if Instant::now() >= trigger_at {
+                app.pending_filter_at = None;
+                trigger_live_filter_preview(app);
+            }
+        }
+
+        // Phase 3: Collect events from all sources
         let mut events = Vec::new();
         events.extend(collect_file_events(app));
         events.extend(collect_filter_progress(app));
         events.extend(collect_input_events(terminal, app)?);
 
-        // Phase 3: Process all events
+        // Phase 4: Process all events
         let has_start_filter = events
             .iter()
             .any(|e| matches!(e, AppEvent::StartFilter { .. }));
@@ -370,6 +421,7 @@ fn apply_filter_events_to_tab(
 }
 
 /// Collect input events from keyboard and mouse
+/// Drains all pending events and coalesces scroll events to prevent input lag
 fn collect_input_events<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &App,
@@ -378,36 +430,92 @@ fn collect_input_events<B: ratatui::backend::Backend>(
     use event::AppEvent;
 
     let mut events = Vec::new();
+    let mut scroll_down_count: usize = 0;
+    let mut scroll_up_count: usize = 0;
 
+    // Wait for at least one event (with timeout)
     if !crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
         return Ok(events);
     }
 
-    match crossterm_event::read()? {
-        Event::Key(key) => {
-            events.extend(handlers::input::handle_input_event(key, app));
+    // Drain all pending events to prevent input lag
+    // Coalesce consecutive scroll events into single larger scrolls
+    loop {
+        match crossterm_event::read()? {
+            Event::Key(key) => {
+                // Flush any pending scroll events before processing key
+                if scroll_down_count > 0 {
+                    events.push(AppEvent::MouseScrollDown(
+                        scroll_down_count * MOUSE_SCROLL_LINES,
+                    ));
+                    events.push(AppEvent::DisableFollowMode);
+                    scroll_down_count = 0;
+                }
+                if scroll_up_count > 0 {
+                    events.push(AppEvent::MouseScrollUp(
+                        scroll_up_count * MOUSE_SCROLL_LINES,
+                    ));
+                    events.push(AppEvent::DisableFollowMode);
+                    scroll_up_count = 0;
+                }
 
-            // Add page size for PageDown/PageUp
-            if matches!(key.code, KeyCode::PageDown) {
-                let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                events.push(AppEvent::PageDown(page_size));
-            } else if matches!(key.code, KeyCode::PageUp) {
-                let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
-                events.push(AppEvent::PageUp(page_size));
+                events.extend(handlers::input::handle_input_event(key, app));
+
+                // Add page size for PageDown/PageUp
+                if matches!(key.code, KeyCode::PageDown) {
+                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                    events.push(AppEvent::PageDown(page_size));
+                } else if matches!(key.code, KeyCode::PageUp) {
+                    let page_size = terminal.size()?.height as usize - PAGE_SIZE_OFFSET;
+                    events.push(AppEvent::PageUp(page_size));
+                }
             }
-        }
-        Event::Mouse(mouse_event) => match mouse_event.kind {
-            MouseEventKind::ScrollDown => {
-                events.push(AppEvent::MouseScrollDown(MOUSE_SCROLL_LINES));
-                events.push(AppEvent::DisableFollowMode);
-            }
-            MouseEventKind::ScrollUp => {
-                events.push(AppEvent::MouseScrollUp(MOUSE_SCROLL_LINES));
-                events.push(AppEvent::DisableFollowMode);
-            }
+            Event::Mouse(mouse_event) => match mouse_event.kind {
+                MouseEventKind::ScrollDown => {
+                    // Coalesce: if we were scrolling up, flush that first
+                    if scroll_up_count > 0 {
+                        events.push(AppEvent::MouseScrollUp(
+                            scroll_up_count * MOUSE_SCROLL_LINES,
+                        ));
+                        events.push(AppEvent::DisableFollowMode);
+                        scroll_up_count = 0;
+                    }
+                    scroll_down_count += 1;
+                }
+                MouseEventKind::ScrollUp => {
+                    // Coalesce: if we were scrolling down, flush that first
+                    if scroll_down_count > 0 {
+                        events.push(AppEvent::MouseScrollDown(
+                            scroll_down_count * MOUSE_SCROLL_LINES,
+                        ));
+                        events.push(AppEvent::DisableFollowMode);
+                        scroll_down_count = 0;
+                    }
+                    scroll_up_count += 1;
+                }
+                _ => {}
+            },
             _ => {}
-        },
-        _ => {}
+        }
+
+        // Check if more events are immediately available
+        if !crossterm_event::poll(Duration::ZERO)? {
+            break;
+        }
+    }
+
+    // Flush any remaining scroll events
+    if scroll_down_count > 0 {
+        events.push(AppEvent::MouseScrollDown(
+            scroll_down_count * MOUSE_SCROLL_LINES,
+        ));
+        events.push(AppEvent::DisableFollowMode);
+    }
+    if scroll_up_count > 0 {
+        events.push(AppEvent::MouseScrollUp(
+            scroll_up_count * MOUSE_SCROLL_LINES,
+        ));
+        events.push(AppEvent::DisableFollowMode);
     }
 
     Ok(events)
@@ -433,7 +541,7 @@ fn process_event(app: &mut App, event: event::AppEvent, has_start_filter: bool) 
             );
         }
 
-        // Live filter preview events
+        // Live filter preview events - debounce to avoid lag while typing
         AppEvent::FilterInputChar(_)
         | AppEvent::FilterInputBackspace
         | AppEvent::HistoryUp
@@ -441,7 +549,13 @@ fn process_event(app: &mut App, event: event::AppEvent, has_start_filter: bool) 
         | AppEvent::ToggleFilterMode
         | AppEvent::ToggleCaseSensitivity => {
             app.apply_event(event);
-            trigger_live_filter_preview(app);
+            // Cancel any in-progress filter immediately to free the reader lock
+            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
+                cancel.cancel();
+            }
+            // Schedule filter to run after debounce delay
+            app.pending_filter_at =
+                Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
         }
 
         // Mouse scroll - handle directly
@@ -452,8 +566,12 @@ fn process_event(app: &mut App, event: event::AppEvent, has_start_filter: bool) 
             app.mouse_scroll_up(*lines);
         }
 
-        // Clear filter - also clear receiver
+        // Clear filter - also clear receiver and pending filter
         AppEvent::ClearFilter => {
+            app.pending_filter_at = None;
+            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
+                cancel.cancel();
+            }
             app.active_tab_mut().filter.receiver = None;
             app.apply_event(event);
         }
@@ -483,6 +601,30 @@ fn process_event(app: &mut App, event: event::AppEvent, has_start_filter: bool) 
             if should_jump {
                 app.jump_to_end();
             }
+        }
+
+        // Filter input cancelled - clear pending filter and cancel any in-progress
+        AppEvent::FilterInputCancel => {
+            app.pending_filter_at = None;
+            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
+                cancel.cancel();
+            }
+            app.apply_event(event);
+        }
+
+        // Filter input submitted - trigger filter immediately (bypass debounce)
+        AppEvent::FilterInputSubmit => {
+            app.pending_filter_at = None;
+            // Trigger filter with current input BEFORE apply_event clears it
+            let pattern = app.get_input().to_string();
+            let mode = app.current_filter_mode;
+            if !pattern.is_empty() && app.is_regex_valid() {
+                let tab = app.active_tab_mut();
+                tab.filter.pattern = Some(pattern.clone());
+                tab.filter.mode = mode;
+                trigger_filter(tab, pattern, mode, None, None);
+            }
+            app.apply_event(event);
         }
 
         // All other events - apply directly

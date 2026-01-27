@@ -3,6 +3,7 @@ use crate::history;
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// Maximum number of filter history entries to keep
 const MAX_HISTORY_ENTRIES: usize = 50;
@@ -74,6 +75,9 @@ pub struct App {
 
     /// Side panel width
     pub side_panel_width: u16,
+
+    /// Time when pending filter should be triggered (for debouncing)
+    pub pending_filter_at: Option<Instant>,
 }
 
 impl App {
@@ -102,6 +106,7 @@ impl App {
             current_filter_mode: FilterMode::default(),
             regex_error: None,
             side_panel_width: 32,
+            pending_filter_at: None,
         }
     }
 
@@ -197,6 +202,65 @@ impl App {
     pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
         self.active_tab_mut()
             .append_filter_results(new_matching_indices);
+    }
+
+    /// Merge partial filter results (for immediate display while filtering continues)
+    pub fn merge_partial_filter_results(&mut self, new_indices: Vec<usize>) {
+        let tab = self.active_tab_mut();
+
+        // Switch to filtered mode if this is the first partial result
+        if tab.mode == ViewMode::Normal {
+            tab.mode = ViewMode::Filtered;
+            tab.line_indices.clear();
+        }
+
+        // Merge new indices (they should already be sorted)
+        // Since we process from end to start, new indices may need to be inserted at the beginning
+        let is_first_result = tab.line_indices.is_empty();
+        if is_first_result {
+            tab.line_indices = new_indices;
+            // Jump to end to show newest results first (we process from end of file)
+            tab.viewport.jump_to_end(&tab.line_indices);
+        } else {
+            // Count items that will be prepended (items smaller than current first item)
+            // This is needed to adjust scroll_position since it's an index that becomes
+            // stale when items are inserted before it
+            let first_existing = tab.line_indices[0];
+            let prepended_count = new_indices
+                .iter()
+                .filter(|&&idx| idx < first_existing)
+                .count();
+
+            // Merge sorted arrays
+            let mut merged = Vec::with_capacity(tab.line_indices.len() + new_indices.len());
+            let mut i = 0;
+            let mut j = 0;
+
+            while i < tab.line_indices.len() && j < new_indices.len() {
+                if tab.line_indices[i] <= new_indices[j] {
+                    merged.push(tab.line_indices[i]);
+                    i += 1;
+                } else {
+                    merged.push(new_indices[j]);
+                    j += 1;
+                }
+            }
+
+            // Add remaining elements
+            merged.extend_from_slice(&tab.line_indices[i..]);
+            merged.extend_from_slice(&new_indices[j..]);
+
+            tab.line_indices = merged;
+
+            // Adjust scroll_position to account for prepended items
+            // This keeps the view stable - the same content stays visible
+            tab.viewport.adjust_scroll_for_prepend(prepended_count);
+        }
+
+        // Update filter state to show partial match count
+        tab.filter.state = FilterState::Processing {
+            progress: tab.line_indices.len(),
+        };
     }
 
     /// Clear filter
@@ -515,6 +579,10 @@ impl App {
                     progress: lines_processed,
                 };
             }
+            AppEvent::FilterPartialResults(indices) => {
+                // Merge partial results for immediate display
+                self.merge_partial_filter_results(indices);
+            }
             AppEvent::FilterComplete {
                 indices,
                 incremental,
@@ -630,9 +698,16 @@ impl App {
                 self.active_tab_mut().collapse_all();
             }
 
-            // Future events - not yet implemented
-            AppEvent::StartFilter { .. } => {
-                // Will be handled in main loop to trigger background filter
+            // StartFilter: clear old results when starting a new (non-incremental) filter
+            AppEvent::StartFilter { incremental, .. } => {
+                if !incremental {
+                    // Clear old filter results before new ones arrive
+                    let tab = self.active_tab_mut();
+                    tab.mode = ViewMode::Filtered;
+                    tab.line_indices.clear();
+                    tab.filter.state = FilterState::Processing { progress: 0 };
+                }
+                // Actual filter execution is handled in main loop
             }
         }
     }
@@ -908,10 +983,10 @@ mod tests {
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
         let initial_len = app.filter_history.len();
 
-        // Add patterns to history
-        app.add_to_history("ERROR".to_string(), FilterMode::plain());
-        app.add_to_history("WARN".to_string(), FilterMode::plain());
-        app.add_to_history("INFO".to_string(), FilterMode::plain());
+        // Add patterns to history (use unique names to avoid conflicts with persisted history)
+        app.add_to_history("TEST_HIST_ERROR_12345".to_string(), FilterMode::plain());
+        app.add_to_history("TEST_HIST_WARN_12345".to_string(), FilterMode::plain());
+        app.add_to_history("TEST_HIST_INFO_12345".to_string(), FilterMode::plain());
 
         assert_eq!(app.filter_history.len(), initial_len + 3);
     }

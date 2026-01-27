@@ -8,6 +8,9 @@ pub fn handle_filter_progress(progress: FilterProgress, is_incremental: bool) ->
         FilterProgress::Processing(lines_processed) => {
             vec![AppEvent::FilterProgress(lines_processed)]
         }
+        FilterProgress::PartialResults(indices) => {
+            vec![AppEvent::FilterPartialResults(indices)]
+        }
         FilterProgress::Complete(matching_indices) => {
             vec![AppEvent::FilterComplete {
                 indices: matching_indices,

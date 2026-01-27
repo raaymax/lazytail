@@ -33,6 +33,8 @@ pub enum AppEvent {
         range: Option<(usize, usize)>,
     },
     FilterProgress(usize),
+    /// Partial filter results (for immediate display while filtering continues)
+    FilterPartialResults(Vec<usize>),
     FilterComplete {
         indices: Vec<usize>,
         incremental: bool,

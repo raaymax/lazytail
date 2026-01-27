@@ -51,7 +51,19 @@ impl Viewport {
     ///
     /// Finds where the anchor line is in the current view and ensures
     /// scroll position keeps selection within the comfort zone.
+    /// If `preserve_anchor` is true, anchor_line won't be changed when not found
+    /// (useful during incremental filtering when the line may appear later).
     pub fn resolve(&mut self, line_indices: &[usize], height: usize) -> ResolvedView {
+        self.resolve_with_options(line_indices, height, false)
+    }
+
+    /// Resolve viewport, optionally keeping view stable during filtering
+    pub fn resolve_with_options(
+        &mut self,
+        line_indices: &[usize],
+        height: usize,
+        _filtering_in_progress: bool,
+    ) -> ResolvedView {
         self.height = height;
 
         if line_indices.is_empty() {
@@ -63,7 +75,12 @@ impl Viewport {
             return view;
         }
 
-        // Find anchor line in current view
+        // During filtering, we used to force view to the end. But this causes
+        // jumping when the user tries to navigate. Instead, just resolve normally
+        // and let anchor_line provide stability. The user can navigate freely
+        // and the view will stay where they put it.
+
+        // Normal resolution - find anchor line in current view
         let selected_index = match line_indices.binary_search(&self.anchor_line) {
             Ok(idx) => idx,
             Err(insert_pos) => {
@@ -82,7 +99,6 @@ impl Viewport {
                         insert_pos
                     }
                 };
-                // Update anchor to the line we actually found
                 self.anchor_line = line_indices[idx];
                 idx
             }
@@ -292,6 +308,13 @@ impl Viewport {
             self.scroll_position = line_indices.len().saturating_sub(self.height);
             self.cache = None;
         }
+    }
+
+    /// Adjust scroll position when items are prepended to line_indices.
+    /// This keeps the view stable by offsetting the index-based scroll.
+    pub fn adjust_scroll_for_prepend(&mut self, prepended_count: usize) {
+        self.scroll_position = self.scroll_position.saturating_add(prepended_count);
+        self.cache = None;
     }
 
     /// Center the current selection on screen

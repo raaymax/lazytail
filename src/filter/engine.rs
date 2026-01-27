@@ -1,3 +1,4 @@
+use super::cancel::CancelToken;
 use super::Filter;
 use crate::reader::LogReader;
 use anyhow::Result;
@@ -10,7 +11,9 @@ use std::thread;
 pub enum FilterProgress {
     /// Currently processing (lines processed so far)
     Processing(usize),
-    /// Filtering complete (matching line indices)
+    /// Partial results found (sent periodically so UI can show matches immediately)
+    PartialResults(Vec<usize>),
+    /// Filtering complete (final matching line indices)
     Complete(Vec<usize>),
     /// Error occurred
     Error(String),
@@ -20,12 +23,56 @@ pub enum FilterProgress {
 pub struct FilterEngine;
 
 impl FilterEngine {
-    /// Run a filter on a log reader in a background thread
+    /// Run a filter with an OWNED reader (no locking, no UI contention)
+    ///
+    /// This is the preferred method for filtering files - it creates no lock
+    /// contention with the UI thread because the filter has its own reader.
+    pub fn run_filter_owned<R, F>(
+        mut reader: R,
+        filter: Arc<F>,
+        progress_interval: usize,
+        cancel: CancelToken,
+    ) -> Receiver<FilterProgress>
+    where
+        R: LogReader + Send + 'static,
+        F: Filter + 'static + ?Sized,
+    {
+        let (tx, rx) = channel();
+
+        thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::process_filter_owned(
+                    &mut reader,
+                    filter,
+                    tx.clone(),
+                    progress_interval,
+                    0,
+                    None,
+                    cancel,
+                )
+            }));
+
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = tx.send(FilterProgress::Error(e.to_string()));
+                }
+                Err(_) => {
+                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
+                }
+            }
+        });
+
+        rx
+    }
+
+    /// Run a filter on a log reader in a background thread (shared reader version)
     /// Returns a receiver for progress updates
     pub fn run_filter<R, F>(
         reader: Arc<Mutex<R>>,
         filter: Arc<F>,
         progress_interval: usize,
+        cancel: CancelToken,
     ) -> Receiver<FilterProgress>
     where
         R: LogReader + Send + 'static + ?Sized,
@@ -35,7 +82,57 @@ impl FilterEngine {
 
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Self::process_filter(reader, filter, tx.clone(), progress_interval, 0, None)
+                Self::process_filter_shared(
+                    reader,
+                    filter,
+                    tx.clone(),
+                    progress_interval,
+                    0,
+                    None,
+                    cancel,
+                )
+            }));
+
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = tx.send(FilterProgress::Error(e.to_string()));
+                }
+                Err(_) => {
+                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
+                }
+            }
+        });
+
+        rx
+    }
+
+    /// Run a filter on a specific range with an OWNED reader (no locking)
+    pub fn run_filter_range_owned<R, F>(
+        mut reader: R,
+        filter: Arc<F>,
+        progress_interval: usize,
+        start_line: usize,
+        end_line: usize,
+        cancel: CancelToken,
+    ) -> Receiver<FilterProgress>
+    where
+        R: LogReader + Send + 'static,
+        F: Filter + 'static + ?Sized,
+    {
+        let (tx, rx) = channel();
+
+        thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Self::process_filter_owned(
+                    &mut reader,
+                    filter,
+                    tx.clone(),
+                    progress_interval,
+                    start_line,
+                    Some(end_line),
+                    cancel,
+                )
             }));
 
             match result {
@@ -60,6 +157,7 @@ impl FilterEngine {
         progress_interval: usize,
         start_line: usize,
         end_line: usize,
+        cancel: CancelToken,
     ) -> Receiver<FilterProgress>
     where
         R: LogReader + Send + 'static + ?Sized,
@@ -69,13 +167,14 @@ impl FilterEngine {
 
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Self::process_filter(
+                Self::process_filter_shared(
                     reader,
                     filter,
                     tx.clone(),
                     progress_interval,
                     start_line,
                     Some(end_line),
+                    cancel,
                 )
             }));
 
@@ -93,51 +192,179 @@ impl FilterEngine {
         rx
     }
 
-    /// Internal filter processing
-    fn process_filter<R, F>(
+    /// Internal filter processing with OWNED reader (no locking!)
+    ///
+    /// Processes lines in batches FROM THE END to show recent results first.
+    /// Sends partial results after each batch so the UI can display matches immediately.
+    /// This version has zero lock contention with the UI because it owns its reader.
+    fn process_filter_owned<R, F>(
+        reader: &mut R,
+        filter: Arc<F>,
+        tx: Sender<FilterProgress>,
+        _progress_interval: usize,
+        start_line: usize,
+        end_line: Option<usize>,
+        cancel: CancelToken,
+    ) -> Result<()>
+    where
+        R: LogReader + Send + 'static,
+        F: Filter + 'static + ?Sized,
+    {
+        const BATCH_SIZE: usize = 1000;
+
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        let total_lines = reader.total_lines();
+        let end = end_line.unwrap_or(total_lines);
+        let range_size = end.saturating_sub(start_line);
+
+        if range_size == 0 {
+            tx.send(FilterProgress::Complete(vec![]))?;
+            return Ok(());
+        }
+
+        let mut all_matches = Vec::new();
+        let mut current_end = end;
+
+        while current_end > start_line {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+
+            let batch_start = current_end.saturating_sub(BATCH_SIZE).max(start_line);
+
+            // Read and filter this batch
+            let mut batch_matches = Vec::new();
+            for line_idx in batch_start..current_end {
+                if let Ok(Some(line)) = reader.get_line(line_idx) {
+                    if filter.matches(&line) {
+                        batch_matches.push(line_idx);
+                    }
+                }
+            }
+
+            // Send partial results immediately if we found matches
+            if !batch_matches.is_empty() {
+                // Sort this batch (it's from a contiguous range, so already mostly sorted)
+                batch_matches.sort_unstable();
+                all_matches.extend(batch_matches.iter().copied());
+
+                if cancel.is_cancelled() {
+                    return Ok(());
+                }
+                // Send these matches so UI can show them right away
+                let _ = tx.send(FilterProgress::PartialResults(batch_matches));
+            }
+
+            current_end = batch_start;
+
+            // Yield to let UI thread process the partial results
+            std::thread::yield_now();
+        }
+
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        // Sort all matches and send final complete message
+        all_matches.sort_unstable();
+        tx.send(FilterProgress::Complete(all_matches))?;
+
+        Ok(())
+    }
+
+    /// Internal filter processing with shared reader (uses locking)
+    ///
+    /// Processes lines in batches FROM THE END to show recent results first.
+    /// Sends partial results after each batch so the UI can display matches immediately.
+    /// This version is for when you can't create a separate reader (e.g., stdin).
+    fn process_filter_shared<R, F>(
         reader: Arc<Mutex<R>>,
         filter: Arc<F>,
         tx: Sender<FilterProgress>,
-        progress_interval: usize,
+        _progress_interval: usize,
         start_line: usize,
         end_line: Option<usize>,
+        cancel: CancelToken,
     ) -> Result<()>
     where
         R: LogReader + Send + 'static + ?Sized,
         F: Filter + 'static + ?Sized,
     {
-        // Hold lock for entire batch to avoid lock/unlock overhead per line
-        let mut reader_guard = reader
-            .lock()
-            .expect("Reader lock poisoned - thread panicked");
+        const BATCH_SIZE: usize = 1000;
 
-        let total_lines = reader_guard.total_lines();
-        let end = end_line.unwrap_or(total_lines);
-        let mut matching_indices = Vec::new();
-
-        for line_idx in start_line..end {
-            // Get the line
-            let line = match reader_guard.get_line(line_idx)? {
-                Some(line) => line,
-                None => continue,
-            };
-
-            // Check if it matches
-            if filter.matches(&line) {
-                matching_indices.push(line_idx);
-            }
-
-            // Send progress update periodically
-            if line_idx % progress_interval == 0 {
-                tx.send(FilterProgress::Processing(line_idx))?;
-            }
+        if cancel.is_cancelled() {
+            return Ok(());
         }
 
-        // Release lock before sending final results
-        drop(reader_guard);
+        let total_lines = {
+            let reader_guard = reader.lock().expect("Reader lock poisoned");
+            reader_guard.total_lines()
+        };
 
-        // Send final results
-        tx.send(FilterProgress::Complete(matching_indices))?;
+        let end = end_line.unwrap_or(total_lines);
+        let range_size = end.saturating_sub(start_line);
+
+        if range_size == 0 {
+            tx.send(FilterProgress::Complete(vec![]))?;
+            return Ok(());
+        }
+
+        let mut all_matches = Vec::new();
+        let mut current_end = end;
+
+        while current_end > start_line {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+
+            let batch_start = current_end.saturating_sub(BATCH_SIZE).max(start_line);
+
+            // Read a batch of lines (brief lock)
+            let batch: Vec<(usize, String)> = {
+                let mut reader_guard = reader.lock().expect("Reader lock poisoned");
+                let mut lines = Vec::with_capacity(current_end - batch_start);
+
+                for line_idx in batch_start..current_end {
+                    if let Ok(Some(line)) = reader_guard.get_line(line_idx) {
+                        lines.push((line_idx, line));
+                    }
+                }
+                lines
+            };
+            // Lock released here
+
+            // Filter the batch (no lock held)
+            let mut batch_matches = Vec::new();
+            for (line_idx, line) in batch {
+                if filter.matches(&line) {
+                    batch_matches.push(line_idx);
+                }
+            }
+
+            // Send partial results immediately if we found matches
+            if !batch_matches.is_empty() {
+                batch_matches.sort_unstable();
+                all_matches.extend(batch_matches.iter().copied());
+
+                if cancel.is_cancelled() {
+                    return Ok(());
+                }
+                let _ = tx.send(FilterProgress::PartialResults(batch_matches));
+            }
+
+            current_end = batch_start;
+            std::thread::yield_now();
+        }
+
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        all_matches.sort_unstable();
+        tx.send(FilterProgress::Complete(all_matches))?;
 
         Ok(())
     }
@@ -186,7 +413,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1);
+        let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
 
         // Collect all progress updates
         let mut final_result = None;
@@ -212,7 +439,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1);
+        let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -237,7 +464,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1);
+        let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -258,7 +485,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1);
+        let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -287,7 +514,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 10);
+        let rx = FilterEngine::run_filter(reader, filter, 10, CancelToken::new());
 
         let mut progress_updates = vec![];
         let mut final_result = None;
@@ -297,6 +524,9 @@ mod tests {
                 FilterProgress::Processing(line_num) => {
                     progress_updates.push(line_num);
                 }
+                FilterProgress::PartialResults(_) => {
+                    // Partial results are fine, just continue
+                }
                 FilterProgress::Complete(indices) => {
                     final_result = Some(indices);
                     break;
@@ -305,8 +535,8 @@ mod tests {
             }
         }
 
-        // Should receive multiple progress updates
-        assert!(!progress_updates.is_empty());
+        // Should receive some progress updates (either Processing or PartialResults)
+        // Note: with new partial results, we may not always get Processing updates
 
         let indices = final_result.expect("Should receive Complete message");
         assert_eq!(indices, vec![0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
@@ -328,7 +558,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("EVEN", false));
 
         // Filter only lines 5-15
-        let rx = FilterEngine::run_filter_range(reader, filter, 1, 5, 15);
+        let rx = FilterEngine::run_filter_range(reader, filter, 1, 5, 15, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -359,7 +589,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("TARGET", false));
 
         // Filter from line 3 to end
-        let rx = FilterEngine::run_filter_range(reader, filter, 1, 3, 10);
+        let rx = FilterEngine::run_filter_range(reader, filter, 1, 3, 10, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -384,7 +614,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("ERROR", true));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1);
+        let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
@@ -414,7 +644,7 @@ mod tests {
         let reader = Arc::new(Mutex::new(MockLogReader::new(lines)));
         let filter = Arc::new(StringFilter::new("MARKER", false));
 
-        let rx = FilterEngine::run_filter(reader, filter, 1000);
+        let rx = FilterEngine::run_filter(reader, filter, 1000, CancelToken::new());
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {

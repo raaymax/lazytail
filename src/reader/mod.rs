@@ -1,5 +1,9 @@
 pub mod file_reader;
+pub mod huge_file_reader;
+pub mod mmap_reader;
+pub mod sparse_index;
 pub mod stream_reader;
+pub mod tail_buffer;
 
 use anyhow::Result;
 

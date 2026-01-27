@@ -1,4 +1,5 @@
 use crate::app::{FilterState, ViewMode};
+use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
@@ -30,6 +31,8 @@ pub struct FilterConfig {
     pub mode: FilterMode,
     /// Channel receiver for filter progress updates
     pub receiver: Option<Receiver<FilterProgress>>,
+    /// Cancellation token for the current filter operation
+    pub cancel_token: Option<CancelToken>,
     /// Whether current filter operation is incremental
     pub is_incremental: bool,
     /// Last line number that was filtered (for incremental filtering)
@@ -51,6 +54,8 @@ pub struct ExpansionState {
 pub struct TabState {
     /// Display name (filename)
     pub name: String,
+    /// Source file path (None for stdin)
+    pub source_path: Option<PathBuf>,
     /// Current view mode (Normal or Filtered)
     pub mode: ViewMode,
     /// Total number of lines in the source
@@ -124,8 +129,12 @@ impl TabState {
         // Start at the end in follow mode
         let selected_line = total_lines.saturating_sub(1);
 
+        // Store path only for regular files (not for pipes/FIFOs)
+        let source_path = if is_regular_file { Some(path) } else { None };
+
         Ok(Self {
             name,
+            source_path,
             mode: ViewMode::Normal,
             total_lines,
             line_indices,
@@ -152,6 +161,7 @@ impl TabState {
 
         Ok(Self {
             name: "<stdin>".to_string(),
+            source_path: None,
             mode: ViewMode::Normal,
             total_lines,
             line_indices,
