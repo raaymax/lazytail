@@ -220,6 +220,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         let mut events = Vec::new();
         events.extend(collect_file_events(app));
         events.extend(collect_filter_progress(app));
+        collect_stream_events(app); // Handle stream events directly (modifies tabs)
         events.extend(collect_input_events(terminal, app)?);
 
         // Phase 4: Process all events
@@ -415,6 +416,50 @@ fn apply_filter_events_to_tab(
                 tab.filter.receiver = None;
             }
             _ => {}
+        }
+    }
+}
+
+/// Collect and process stream events from background readers (pipes/stdin)
+/// This modifies tabs directly rather than returning events
+fn collect_stream_events(app: &mut App) {
+    use std::sync::mpsc::TryRecvError;
+    use tab::StreamMessage;
+
+    for tab in app.tabs.iter_mut() {
+        if tab.stream_receiver.is_none() {
+            continue;
+        }
+
+        // Drain all available messages
+        loop {
+            let msg = {
+                let receiver = tab.stream_receiver.as_ref().unwrap();
+                match receiver.try_recv() {
+                    Ok(msg) => msg,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        // Channel closed - mark complete and stop
+                        tab.mark_stream_complete();
+                        break;
+                    }
+                }
+            };
+
+            match msg {
+                StreamMessage::Lines(lines) => {
+                    tab.append_stream_lines(lines);
+                }
+                StreamMessage::Complete => {
+                    tab.mark_stream_complete();
+                    break;
+                }
+                StreamMessage::Error(err) => {
+                    eprintln!("Stream read error: {}", err);
+                    tab.mark_stream_complete();
+                    break;
+                }
+            }
         }
     }
 }

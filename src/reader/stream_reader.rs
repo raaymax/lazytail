@@ -2,21 +2,34 @@ use super::LogReader;
 use anyhow::Result;
 
 /// In-memory reader for non-seekable streams (pipes, process substitution, etc.)
-/// Reads the entire input into memory for random access
+/// Supports both blocking (read all at once) and incremental (background loading) modes
 pub struct StreamReader {
     /// All lines stored in memory
     lines: Vec<String>,
+    /// Whether the stream has finished loading
+    complete: bool,
 }
 
 impl StreamReader {
-    /// Create a new StreamReader from any readable source
+    /// Create a new StreamReader from any readable source (blocking - reads everything)
     pub fn from_reader<R: std::io::Read>(mut reader: R) -> Result<Self> {
         let mut content = String::new();
         reader.read_to_string(&mut content)?;
 
         let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
-        Ok(Self { lines })
+        Ok(Self {
+            lines,
+            complete: true,
+        })
+    }
+
+    /// Create an empty StreamReader for incremental loading
+    pub fn new_incremental() -> Self {
+        Self {
+            lines: Vec::new(),
+            complete: false,
+        }
     }
 }
 
@@ -33,6 +46,18 @@ impl LogReader for StreamReader {
         // Streams can't be reloaded - they're consumed on first read
         // Just return Ok to avoid errors
         Ok(())
+    }
+
+    fn append_lines(&mut self, lines: Vec<String>) {
+        self.lines.extend(lines);
+    }
+
+    fn mark_complete(&mut self) {
+        self.complete = true;
+    }
+
+    fn is_loading(&self) -> bool {
+        !self.complete
     }
 }
 

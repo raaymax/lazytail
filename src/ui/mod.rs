@@ -146,6 +146,12 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
 
         let mut line = Line::from(vec![Span::styled(line_text, style)]);
 
+        // Add loading indicator if stream is still loading
+        if tab.stream_receiver.is_some() {
+            line.spans
+                .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+        }
+
         // Add filter indicator if tab has active filter
         if tab.filter.pattern.is_some() {
             line.spans
@@ -172,33 +178,43 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     let total_lines = tab.total_lines;
     let filtered_lines = tab.line_indices.len();
     let is_filtered = tab.filter.pattern.is_some();
+    let is_loading = tab.stream_receiver.is_some();
 
-    let stats_text = if is_filtered {
-        vec![
-            Line::from(vec![
-                Span::raw(" Lines:    "),
-                Span::styled(
-                    format!("{}", total_lines),
-                    Style::default().fg(Color::White),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw(" Filtered: "),
-                Span::styled(
-                    format!("{}", filtered_lines),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-        ]
+    let mut stats_text = Vec::new();
+
+    // Show loading indicator
+    if is_loading {
+        stats_text.push(Line::from(vec![Span::styled(
+            " Loading... ",
+            Style::default().fg(Color::Magenta),
+        )]));
+    }
+
+    // Show line counts
+    if is_filtered {
+        stats_text.push(Line::from(vec![
+            Span::raw(" Lines:    "),
+            Span::styled(
+                format!("{}", total_lines),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        stats_text.push(Line::from(vec![
+            Span::raw(" Filtered: "),
+            Span::styled(
+                format!("{}", filtered_lines),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
     } else {
-        vec![Line::from(vec![
+        stats_text.push(Line::from(vec![
             Span::raw(" Lines: "),
             Span::styled(
                 format!("{}", total_lines),
                 Style::default().fg(Color::White),
             ),
-        ])]
-    };
+        ]));
+    }
 
     let stats =
         Paragraph::new(stats_text).block(Block::default().borders(Borders::ALL).title("Stats"));

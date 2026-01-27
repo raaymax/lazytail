@@ -17,4 +17,19 @@ pub trait LogReader {
 
     /// Reload the source (e.g., for file watching)
     fn reload(&mut self) -> Result<()>;
+
+    /// Append lines for incremental loading (only supported by StreamReader)
+    fn append_lines(&mut self, _lines: Vec<String>) {
+        // Default: no-op for readers that don't support incremental loading
+    }
+
+    /// Mark stream as complete (only supported by StreamReader)
+    fn mark_complete(&mut self) {
+        // Default: no-op for readers that don't support incremental loading
+    }
+
+    /// Check if this is a streaming reader that's still loading
+    fn is_loading(&self) -> bool {
+        false // Default: not a streaming reader
+    }
 }

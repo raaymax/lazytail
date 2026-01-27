@@ -50,6 +50,12 @@ pub enum AppEvent {
         new_total: usize,
     },
 
+    // Stream events (for background loading of pipes/stdin)
+    StreamData {
+        lines: Vec<String>,
+    },
+    StreamComplete,
+
     // Tab navigation events
     NextTab,
     PrevTab,

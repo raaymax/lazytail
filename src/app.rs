@@ -736,6 +736,9 @@ impl App {
                 }
                 // Actual filter execution is handled in main loop
             }
+
+            // Stream events are handled directly in main loop, not here
+            AppEvent::StreamData { .. } | AppEvent::StreamComplete => {}
         }
     }
 }

@@ -8,9 +8,25 @@ use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread;
+
+/// Batch size for sending lines from background reader
+const STREAM_BATCH_SIZE: usize = 10_000;
+
+/// Messages sent from the background stream reader thread
+#[derive(Debug)]
+pub enum StreamMessage {
+    /// A batch of lines has been read
+    Lines(Vec<String>),
+    /// Reading is complete
+    Complete,
+    /// An error occurred while reading
+    Error(String),
+}
 
 /// Mode for expanding log entries
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -80,6 +96,8 @@ pub struct TabState {
     pub filter: FilterConfig,
     /// Line expansion state
     pub expansion: ExpansionState,
+    /// Receiver for background stream loading (pipes/stdin)
+    pub stream_receiver: Option<Receiver<StreamMessage>>,
 }
 
 impl TabState {
@@ -100,82 +118,130 @@ impl TabState {
         let file =
             File::open(&path).with_context(|| format!("Failed to open: {}", path.display()))?;
 
-        let (reader, watcher): (Arc<Mutex<dyn LogReader + Send>>, Option<FileWatcher>) =
-            if is_regular_file {
-                // Regular file - close this handle and use FileReader (which opens its own)
-                drop(file);
-                let file_reader = FileReader::new(&path)?;
-                let watcher = if watch {
-                    FileWatcher::new(&path).ok()
-                } else {
-                    None
-                };
-                (Arc::new(Mutex::new(file_reader)), watcher)
-            } else {
-                // Pipe/FIFO - use the already-open handle with StreamReader
-                let stream_reader = StreamReader::from_reader(file)
-                    .with_context(|| format!("Failed to read stream: {}", path.display()))?;
-                // No file watching for streams
-                (Arc::new(Mutex::new(stream_reader)), None)
-            };
-
-        let total_lines = reader.lock().unwrap().total_lines();
-
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
-        let line_indices = (0..total_lines).collect();
+        if is_regular_file {
+            // Regular file - close this handle and use FileReader (which opens its own)
+            drop(file);
+            let file_reader = FileReader::new(&path)?;
+            let watcher = if watch {
+                FileWatcher::new(&path).ok()
+            } else {
+                None
+            };
 
-        // Start at the end in follow mode
-        let selected_line = total_lines.saturating_sub(1);
+            let total_lines = file_reader.total_lines();
+            let line_indices = (0..total_lines).collect();
+            let selected_line = total_lines.saturating_sub(1);
 
-        // Store path only for regular files (not for pipes/FIFOs)
-        let source_path = if is_regular_file { Some(path) } else { None };
+            Ok(Self {
+                name,
+                source_path: Some(path),
+                mode: ViewMode::Normal,
+                total_lines,
+                line_indices,
+                scroll_position: 0,
+                selected_line,
+                follow_mode: true,
+                reader: Arc::new(Mutex::new(file_reader)),
+                watcher,
+                viewport: Viewport::new(selected_line),
+                filter: FilterConfig::default(),
+                expansion: ExpansionState::default(),
+                stream_receiver: None,
+            })
+        } else {
+            // Pipe/FIFO - use background loading for immediate UI
+            let stream_reader = StreamReader::new_incremental();
+            let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
-        Ok(Self {
-            name,
-            source_path,
-            mode: ViewMode::Normal,
-            total_lines,
-            line_indices,
-            scroll_position: 0,
-            selected_line,
-            follow_mode: true,
-            reader,
-            watcher,
-            viewport: Viewport::new(selected_line),
-            filter: FilterConfig::default(),
-            expansion: ExpansionState::default(),
-        })
+            // Spawn background thread to read from pipe
+            let (tx, rx) = mpsc::channel();
+            spawn_stream_reader(file, tx);
+
+            Ok(Self {
+                name,
+                source_path: None,
+                mode: ViewMode::Normal,
+                total_lines: 0,
+                line_indices: Vec::new(),
+                scroll_position: 0,
+                selected_line: 0,
+                follow_mode: true,
+                reader,
+                watcher: None,
+                viewport: Viewport::new(0),
+                filter: FilterConfig::default(),
+                expansion: ExpansionState::default(),
+                stream_receiver: Some(rx),
+            })
+        }
     }
 
-    /// Create a new tab from stdin
+    /// Create a new tab from stdin (with background loading)
     pub fn from_stdin() -> Result<Self> {
-        let stdin = std::io::stdin();
-        let stream_reader =
-            StreamReader::from_reader(stdin.lock()).context("Failed to read from stdin")?;
+        let stream_reader = StreamReader::new_incremental();
+        let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
-        let total_lines = stream_reader.total_lines();
-        let line_indices = (0..total_lines).collect();
-        let selected_line = total_lines.saturating_sub(1);
+        // Spawn background thread to read from stdin
+        let (tx, rx) = mpsc::channel();
+        spawn_stream_reader(std::io::stdin(), tx);
 
         Ok(Self {
             name: "<stdin>".to_string(),
             source_path: None,
             mode: ViewMode::Normal,
-            total_lines,
-            line_indices,
+            total_lines: 0,
+            line_indices: Vec::new(),
             scroll_position: 0,
-            selected_line,
+            selected_line: 0,
             follow_mode: true,
-            reader: Arc::new(Mutex::new(stream_reader)),
+            reader,
             watcher: None,
-            viewport: Viewport::new(selected_line),
+            viewport: Viewport::new(0),
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
+            stream_receiver: Some(rx),
         })
+    }
+
+    /// Append lines from background stream loading
+    pub fn append_stream_lines(&mut self, lines: Vec<String>) {
+        let old_total = self.total_lines;
+        let new_lines_count = lines.len();
+
+        // Add lines to the reader
+        {
+            let mut reader = self.reader.lock().unwrap();
+            reader.append_lines(lines);
+        }
+
+        // Update total lines
+        self.total_lines = old_total + new_lines_count;
+
+        // In normal mode, add new line indices
+        if self.mode == ViewMode::Normal {
+            self.line_indices
+                .extend(old_total..old_total + new_lines_count);
+        }
+
+        // If in follow mode, jump to end
+        if self.follow_mode && new_lines_count > 0 {
+            self.jump_to_end();
+        }
+    }
+
+    /// Mark stream loading as complete
+    pub fn mark_stream_complete(&mut self) {
+        {
+            let mut reader = self.reader.lock().unwrap();
+            reader.mark_complete();
+        }
+        // Clear the receiver since we won't need it anymore
+        self.stream_receiver = None;
     }
 
     /// Get the number of visible lines
@@ -419,6 +485,46 @@ impl TabState {
     pub fn collapse_all(&mut self) {
         self.expansion.expanded_lines.clear();
     }
+}
+
+/// Spawn a background thread to read from a stream and send batches of lines
+fn spawn_stream_reader<R: std::io::Read + Send + 'static>(reader: R, tx: Sender<StreamMessage>) {
+    thread::spawn(move || {
+        let buf_reader = BufReader::new(reader);
+        let mut batch = Vec::with_capacity(STREAM_BATCH_SIZE);
+
+        for line in buf_reader.lines() {
+            match line {
+                Ok(line) => {
+                    batch.push(line);
+                    if batch.len() >= STREAM_BATCH_SIZE {
+                        if tx
+                            .send(StreamMessage::Lines(std::mem::take(&mut batch)))
+                            .is_err()
+                        {
+                            // Receiver dropped, stop reading
+                            return;
+                        }
+                        batch = Vec::with_capacity(STREAM_BATCH_SIZE);
+                    }
+                }
+                Err(e) => {
+                    // Send any remaining lines before error
+                    if !batch.is_empty() {
+                        let _ = tx.send(StreamMessage::Lines(std::mem::take(&mut batch)));
+                    }
+                    let _ = tx.send(StreamMessage::Error(e.to_string()));
+                    return;
+                }
+            }
+        }
+
+        // Send any remaining lines
+        if !batch.is_empty() {
+            let _ = tx.send(StreamMessage::Lines(batch));
+        }
+        let _ = tx.send(StreamMessage::Complete);
+    });
 }
 
 #[cfg(test)]
