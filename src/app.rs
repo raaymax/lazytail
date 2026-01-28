@@ -21,7 +21,7 @@ pub enum FilterState {
     #[default]
     Inactive,
     Processing {
-        progress: usize,
+        lines_processed: usize,
     },
     Complete {
         matches: usize,
@@ -217,7 +217,11 @@ impl App {
     }
 
     /// Merge partial filter results (for immediate display while filtering continues)
-    pub fn merge_partial_filter_results(&mut self, new_indices: Vec<usize>) {
+    pub fn merge_partial_filter_results(
+        &mut self,
+        new_indices: Vec<usize>,
+        lines_processed: usize,
+    ) {
         let tab = self.active_tab_mut();
 
         // Check if we need to clear old results (new filter started)
@@ -275,10 +279,8 @@ impl App {
             tab.viewport.adjust_scroll_for_prepend(prepended_count);
         }
 
-        // Update filter state to show partial match count
-        tab.filter.state = FilterState::Processing {
-            progress: tab.line_indices.len(),
-        };
+        // Update filter state with lines processed for progress display
+        tab.filter.state = FilterState::Processing { lines_processed };
     }
 
     /// Clear filter
@@ -589,13 +591,14 @@ impl App {
 
             // Filter progress events
             AppEvent::FilterProgress(lines_processed) => {
-                self.active_tab_mut().filter.state = FilterState::Processing {
-                    progress: lines_processed,
-                };
+                self.active_tab_mut().filter.state = FilterState::Processing { lines_processed };
             }
-            AppEvent::FilterPartialResults(indices) => {
+            AppEvent::FilterPartialResults {
+                matches,
+                lines_processed,
+            } => {
                 // Merge partial results for immediate display
-                self.merge_partial_filter_results(indices);
+                self.merge_partial_filter_results(matches, lines_processed);
             }
             AppEvent::FilterComplete {
                 indices,
@@ -732,7 +735,7 @@ impl App {
                     // Defer clearing until first results arrive (prevents blink)
                     let tab = self.active_tab_mut();
                     tab.filter.needs_clear = true;
-                    tab.filter.state = FilterState::Processing { progress: 0 };
+                    tab.filter.state = FilterState::Processing { lines_processed: 0 };
                 }
                 // Actual filter execution is handled in main loop
             }

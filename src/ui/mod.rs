@@ -355,8 +355,14 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         },
         match &tab.filter.state {
             FilterState::Inactive => String::new(),
-            FilterState::Processing { progress } =>
-                format!("| Filtering: {}/{}", progress, tab.total_lines),
+            FilterState::Processing { lines_processed } => {
+                let percent = if tab.total_lines > 0 {
+                    (lines_processed * 100) / tab.total_lines
+                } else {
+                    0
+                };
+                format!("| Filtering: {}%", percent)
+            }
             FilterState::Complete { matches } => format!("| Matches: {}", matches),
         },
         if tab.follow_mode { " | FOLLOW" } else { "" }

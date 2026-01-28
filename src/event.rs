@@ -34,7 +34,10 @@ pub enum AppEvent {
     },
     FilterProgress(usize),
     /// Partial filter results (for immediate display while filtering continues)
-    FilterPartialResults(Vec<usize>),
+    FilterPartialResults {
+        matches: Vec<usize>,
+        lines_processed: usize,
+    },
     FilterComplete {
         indices: Vec<usize>,
         incremental: bool,

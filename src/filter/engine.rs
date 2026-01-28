@@ -12,7 +12,10 @@ pub enum FilterProgress {
     /// Currently processing (lines processed so far)
     Processing(usize),
     /// Partial results found (sent periodically so UI can show matches immediately)
-    PartialResults(Vec<usize>),
+    PartialResults {
+        matches: Vec<usize>,
+        lines_processed: usize,
+    },
     /// Filtering complete (final matching line indices)
     Complete(Vec<usize>),
     /// Error occurred
@@ -245,6 +248,9 @@ impl FilterEngine {
                 }
             }
 
+            // Calculate lines processed (we process from end to start)
+            let lines_processed = end - batch_start;
+
             // Send partial results immediately if we found matches
             if !batch_matches.is_empty() {
                 // Sort this batch (it's from a contiguous range, so already mostly sorted)
@@ -255,7 +261,10 @@ impl FilterEngine {
                     return Ok(());
                 }
                 // Send these matches so UI can show them right away
-                let _ = tx.send(FilterProgress::PartialResults(batch_matches));
+                let _ = tx.send(FilterProgress::PartialResults {
+                    matches: batch_matches,
+                    lines_processed,
+                });
             }
 
             current_end = batch_start;
@@ -344,6 +353,9 @@ impl FilterEngine {
                 }
             }
 
+            // Calculate lines processed (we process from end to start)
+            let lines_processed = end - batch_start;
+
             // Send partial results immediately if we found matches
             if !batch_matches.is_empty() {
                 batch_matches.sort_unstable();
@@ -352,7 +364,10 @@ impl FilterEngine {
                 if cancel.is_cancelled() {
                     return Ok(());
                 }
-                let _ = tx.send(FilterProgress::PartialResults(batch_matches));
+                let _ = tx.send(FilterProgress::PartialResults {
+                    matches: batch_matches,
+                    lines_processed,
+                });
             }
 
             current_end = batch_start;
@@ -524,7 +539,7 @@ mod tests {
                 FilterProgress::Processing(line_num) => {
                     progress_updates.push(line_num);
                 }
-                FilterProgress::PartialResults(_) => {
+                FilterProgress::PartialResults { .. } => {
                     // Partial results are fine, just continue
                 }
                 FilterProgress::Complete(indices) => {

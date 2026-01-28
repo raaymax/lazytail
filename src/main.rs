@@ -19,11 +19,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::{
-    cancel::CancelToken, engine::FilterEngine, regex_filter::RegexFilter,
+    cancel::CancelToken, engine::FilterEngine, regex_filter::RegexFilter, streaming_filter,
     string_filter::StringFilter, Filter, FilterMode,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use reader::file_reader::FileReader;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -135,45 +134,38 @@ fn trigger_filter(
     }
 
     let case_sensitive = mode.is_case_sensitive();
-    let filter: Arc<dyn Filter> = if mode.is_regex() {
-        match RegexFilter::new(&pattern, case_sensitive) {
-            Ok(f) => Arc::new(f),
-            Err(_) => {
-                // Invalid regex - don't apply filter
-                return;
-            }
-        }
-    } else {
-        Arc::new(StringFilter::new(&pattern, case_sensitive))
-    };
+    let is_regex = mode.is_regex();
 
     // Create new cancel token for this operation
     let cancel = CancelToken::new();
     tab.filter.cancel_token = Some(cancel.clone());
 
-    // Try to create a separate reader for the filter thread (no lock contention with UI)
-    let owned_reader = tab
-        .source_path
-        .as_ref()
-        .and_then(|path| FileReader::new(path).ok());
-
+    // For incremental filtering, we need the generic filter
     let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
-        // Incremental filtering (range)
-        tab.filter.state = FilterState::Processing { progress: start };
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
         tab.filter.is_incremental = true;
 
-        if let Some(reader) = owned_reader {
-            // Use owned reader - no UI blocking!
-            FilterEngine::run_filter_range_owned(
-                reader,
+        let filter: Arc<dyn Filter> = if is_regex {
+            match RegexFilter::new(&pattern, case_sensitive) {
+                Ok(f) => Arc::new(f),
+                Err(_) => return,
+            }
+        } else {
+            Arc::new(StringFilter::new(&pattern, case_sensitive))
+        };
+
+        if let Some(path) = &tab.source_path {
+            match streaming_filter::run_streaming_filter_range(
+                path.clone(),
                 filter,
-                FILTER_PROGRESS_INTERVAL,
                 start,
                 end,
                 cancel,
-            )
+            ) {
+                Ok(rx) => rx,
+                Err(_) => return,
+            }
         } else {
-            // Fall back to shared reader (for stdin)
             FilterEngine::run_filter_range(
                 tab.reader.clone(),
                 filter,
@@ -184,16 +176,44 @@ fn trigger_filter(
             )
         }
     } else {
-        // Full filtering - defer clearing until first results arrive (prevents blink)
+        // Full filtering
         tab.filter.needs_clear = true;
-        tab.filter.state = FilterState::Processing { progress: 0 };
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
         tab.filter.is_incremental = false;
 
-        if let Some(reader) = owned_reader {
-            // Use owned reader - no UI blocking!
-            FilterEngine::run_filter_owned(reader, filter, FILTER_PROGRESS_INTERVAL, cancel)
+        if let Some(path) = &tab.source_path {
+            if is_regex {
+                // Regex: use generic filter
+                let filter: Arc<dyn Filter> = match RegexFilter::new(&pattern, case_sensitive) {
+                    Ok(f) => Arc::new(f),
+                    Err(_) => return,
+                };
+                match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
+                    Ok(rx) => rx,
+                    Err(_) => return,
+                }
+            } else {
+                // Plain text: use FAST byte-level filter with SIMD
+                match streaming_filter::run_streaming_filter_fast(
+                    path.clone(),
+                    pattern.as_bytes(),
+                    case_sensitive,
+                    cancel,
+                ) {
+                    Ok(rx) => rx,
+                    Err(_) => return,
+                }
+            }
         } else {
-            // Fall back to shared reader (for stdin)
+            // Stdin: use generic filter
+            let filter: Arc<dyn Filter> = if is_regex {
+                match RegexFilter::new(&pattern, case_sensitive) {
+                    Ok(f) => Arc::new(f),
+                    Err(_) => return,
+                }
+            } else {
+                Arc::new(StringFilter::new(&pattern, case_sensitive))
+            };
             FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
         }
     };
@@ -391,9 +411,7 @@ fn apply_filter_events_to_tab(
     for ev in filter_events {
         match ev {
             AppEvent::FilterProgress(lines_processed) => {
-                tab.filter.state = FilterState::Processing {
-                    progress: lines_processed,
-                };
+                tab.filter.state = FilterState::Processing { lines_processed };
             }
             AppEvent::FilterComplete {
                 indices,

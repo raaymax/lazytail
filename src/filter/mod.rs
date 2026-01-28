@@ -2,6 +2,7 @@ pub mod cancel;
 pub mod engine;
 pub mod parallel_engine;
 pub mod regex_filter;
+pub mod streaming_filter;
 pub mod string_filter;
 
 /// Trait for extensible filtering
