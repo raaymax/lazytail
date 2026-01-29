@@ -12,6 +12,7 @@ pub struct StreamReader {
 
 impl StreamReader {
     /// Create a new StreamReader from any readable source (blocking - reads everything)
+    #[allow(dead_code)]
     pub fn from_reader<R: std::io::Read>(mut reader: R) -> Result<Self> {
         let mut content = String::new();
         reader.read_to_string(&mut content)?;

@@ -1,8 +1,12 @@
 pub mod file_reader;
+#[allow(dead_code)]
 pub mod huge_file_reader;
+#[allow(dead_code)]
 pub mod mmap_reader;
+#[allow(dead_code)]
 pub mod sparse_index;
 pub mod stream_reader;
+#[allow(dead_code)]
 pub mod tail_buffer;
 
 use anyhow::Result;
@@ -29,6 +33,7 @@ pub trait LogReader {
     }
 
     /// Check if this is a streaming reader that's still loading
+    #[allow(dead_code)]
     fn is_loading(&self) -> bool {
         false // Default: not a streaming reader
     }

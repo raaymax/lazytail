@@ -1,6 +1,8 @@
 // Cache modules for performance optimization
 // These are infrastructure components ready for integration
+#[allow(dead_code)]
 mod ansi_cache;
+#[allow(dead_code)]
 mod line_cache;
 
 // Re-export for future use

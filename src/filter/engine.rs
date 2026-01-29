@@ -10,6 +10,7 @@ use std::thread;
 #[derive(Debug, Clone)]
 pub enum FilterProgress {
     /// Currently processing (lines processed so far)
+    #[allow(dead_code)]
     Processing(usize),
     /// Partial results found (sent periodically so UI can show matches immediately)
     PartialResults {
@@ -30,6 +31,7 @@ impl FilterEngine {
     ///
     /// This is the preferred method for filtering files - it creates no lock
     /// contention with the UI thread because the filter has its own reader.
+    #[allow(dead_code)]
     pub fn run_filter_owned<R, F>(
         mut reader: R,
         filter: Arc<F>,
@@ -111,6 +113,7 @@ impl FilterEngine {
     }
 
     /// Run a filter on a specific range with an OWNED reader (no locking)
+    #[allow(dead_code)]
     pub fn run_filter_range_owned<R, F>(
         mut reader: R,
         filter: Arc<F>,
@@ -200,6 +203,7 @@ impl FilterEngine {
     /// Processes lines in batches FROM THE END to show recent results first.
     /// Sends partial results after each batch so the UI can display matches immediately.
     /// This version has zero lock contention with the UI because it owns its reader.
+    #[allow(dead_code)]
     fn process_filter_owned<R, F>(
         reader: &mut R,
         filter: Arc<F>,

@@ -59,7 +59,7 @@ pub fn run_capture_mode(name: String) -> Result<()> {
             Err(_) => return,
         };
 
-        for _ in signals.forever() {
+        if signals.forever().next().is_some() {
             running_for_signal.store(false, Ordering::SeqCst);
             let _ = remove_marker(&name_for_signal);
             std::process::exit(0);

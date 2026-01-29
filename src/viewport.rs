@@ -53,6 +53,7 @@ impl Viewport {
     /// scroll position keeps selection within the comfort zone.
     /// If `preserve_anchor` is true, anchor_line won't be changed when not found
     /// (useful during incremental filtering when the line may appear later).
+    #[allow(dead_code)]
     pub fn resolve(&mut self, line_indices: &[usize], height: usize) -> ResolvedView {
         self.resolve_with_options(line_indices, height, false)
     }

@@ -40,7 +40,7 @@ impl DirectoryWatcher {
                     | EventKind::Modify(ModifyKind::Name(_)) => {
                         // File created or renamed
                         for path in event.paths {
-                            if path.extension().map_or(false, |ext| ext == "log") {
+                            if path.extension().is_some_and(|ext| ext == "log") {
                                 let _ = tx.send(DirEvent::NewFile(path));
                             }
                         }
@@ -48,7 +48,7 @@ impl DirectoryWatcher {
                     EventKind::Remove(RemoveKind::File) => {
                         // File removed
                         for path in event.paths {
-                            if path.extension().map_or(false, |ext| ext == "log") {
+                            if path.extension().is_some_and(|ext| ext == "log") {
                                 let _ = tx.send(DirEvent::FileRemoved(path));
                             }
                         }

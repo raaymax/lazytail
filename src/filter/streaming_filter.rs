@@ -88,7 +88,7 @@ fn stream_filter_impl(
     // Stream through file, processing each line
     while pos < data.len() {
         // Check cancellation less frequently for performance
-        if line_idx % CANCEL_CHECK_INTERVAL == 0 && cancel.is_cancelled() {
+        if line_idx.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -116,7 +116,7 @@ fn stream_filter_impl(
         pos = line_end + 1;
 
         // Send batch update periodically
-        if line_idx % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+        if line_idx.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
             all_matches.extend(batch_matches.iter().copied());
 
             let _ = tx.send(FilterProgress::PartialResults {
@@ -213,7 +213,7 @@ fn stream_filter_grep_style(
     // Search for pattern occurrences
     while let Some(match_offset) = finder.find(&data[search_pos..]) {
         check_count += 1;
-        if check_count % 10000 == 0 && cancel.is_cancelled() {
+        if check_count.is_multiple_of(10000) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -305,7 +305,7 @@ fn stream_filter_fast_impl(
 
     while pos < data.len() {
         // Check cancellation less frequently
-        if line_idx % CANCEL_CHECK_INTERVAL == 0 && cancel.is_cancelled() {
+        if line_idx.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -335,7 +335,7 @@ fn stream_filter_fast_impl(
         pos = line_end + 1;
 
         // Send batch update periodically
-        if line_idx % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+        if line_idx.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
             all_matches.extend(batch_matches.iter().copied());
 
             let _ = tx.send(FilterProgress::PartialResults {
@@ -442,7 +442,7 @@ fn stream_filter_range_impl(
 
             lines_in_range += 1;
 
-            if lines_in_range % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+            if lines_in_range.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
                 all_matches.extend(batch_matches.iter().copied());
 
                 if cancel.is_cancelled() {

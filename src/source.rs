@@ -107,7 +107,7 @@ pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
         let path = entry.path();
 
         // Only process .log files
-        if path.extension().map_or(false, |ext| ext == "log") {
+        if path.extension().is_some_and(|ext| ext == "log") {
             if let Some(stem) = path.file_stem() {
                 let name = stem.to_string_lossy().to_string();
                 let status = check_source_status(&name);
