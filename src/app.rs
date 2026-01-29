@@ -1,5 +1,6 @@
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
+use crate::source::{self, SourceStatus};
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -170,6 +171,7 @@ impl App {
     /// Close a tab by index
     ///
     /// If the last tab is closed, sets should_quit to true.
+    /// If the tab is a discovered source with Ended status, deletes the source file.
     pub fn close_tab(&mut self, index: usize) {
         if self.tabs.len() <= 1 {
             // Don't close the last tab - quit instead
@@ -178,6 +180,15 @@ impl App {
         }
 
         if index < self.tabs.len() {
+            let tab = &self.tabs[index];
+
+            // If this is an ended discovered source, delete it
+            if tab.source_status == Some(SourceStatus::Ended) {
+                if let Some(ref path) = tab.source_path {
+                    let _ = source::delete_source(&tab.name, path);
+                }
+            }
+
             self.tabs.remove(index);
 
             // Adjust active_tab if needed

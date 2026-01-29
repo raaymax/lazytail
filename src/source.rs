@@ -163,6 +163,30 @@ pub fn remove_marker(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a source (log file and marker).
+///
+/// Only deletes sources in the lazytail data directory.
+pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
+    // Safety check: only delete files in our data directory
+    let Some(data) = data_dir() else {
+        anyhow::bail!("Could not determine data directory");
+    };
+
+    if !log_path.starts_with(&data) {
+        anyhow::bail!("Cannot delete source outside data directory");
+    }
+
+    // Remove the log file
+    if log_path.exists() {
+        fs::remove_file(log_path).context("Failed to delete source log file")?;
+    }
+
+    // Remove the marker if it exists (cleanup stale markers)
+    let _ = remove_marker(name);
+
+    Ok(())
+}
+
 /// Validate a source name for use in capture mode.
 pub fn validate_source_name(name: &str) -> Result<()> {
     if name.is_empty() {
