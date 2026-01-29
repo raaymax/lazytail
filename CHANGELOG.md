@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/raaymax/lazytail/compare/0.2.0...v0.3.0) (2026-01-26)
+
+
+### Features
+
+* add advanced filter modes with regex support and cursor navigation ([bbb12c8](https://github.com/raaymax/lazytail/commit/bbb12c815cced10abecb6f2503cc149e41c5235d))
+* add Ctrl+E/Ctrl+Y viewport scrolling and major refactor ([f14563f](https://github.com/raaymax/lazytail/commit/f14563f8aad79c19e9cf203633409f4d73b43dd0))
+* add expandable log entries and default follow mode ([293fb9b](https://github.com/raaymax/lazytail/commit/293fb9b3e7f8963cce2b083f4bfe63b92629655e))
+* add stats panel showing line counts in side panel ([d6fadbf](https://github.com/raaymax/lazytail/commit/d6fadbfda29d75fbedddd0f8bae26443df1a576d))
+* persist filter history to disk ([d6eded9](https://github.com/raaymax/lazytail/commit/d6eded9aa6fdc7ad7196b622f5a97413239bc8c4))
+
+
+### Bug Fixes
+
+* change case sensitivity toggle to Alt+C ([ab82ca6](https://github.com/raaymax/lazytail/commit/ab82ca61d9e1f88cda28930676451595f391695c))
+* remove src/ from gitignore ([b93d43f](https://github.com/raaymax/lazytail/commit/b93d43f8b086d9f4c1ad032273c357835ba7c0bd))
+
 ## [0.2.0](https://github.com/raaymax/lazytail/compare/v0.1.0...v0.2.0) (2026-01-23)
 
 
