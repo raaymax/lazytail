@@ -67,6 +67,14 @@ pub enum AppEvent {
     SelectTab(usize),
     CloseCurrentTab,
 
+    // Source panel events
+    FocusSourcePanel,
+    UnfocusSourcePanel,
+    SourcePanelUp,
+    SourcePanelDown,
+    ToggleCategoryExpand,
+    SelectSource,
+
     // Mode toggles
     ToggleFollowMode,
     DisableFollowMode,

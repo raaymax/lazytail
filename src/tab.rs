@@ -1,4 +1,4 @@
-use crate::app::{FilterState, ViewMode};
+use crate::app::{FilterState, SourceType, ViewMode};
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
@@ -108,6 +108,17 @@ impl TabState {
     #[cfg(test)]
     pub fn is_line_expanded(&self, file_line_number: usize) -> bool {
         self.expansion.expanded_lines.contains(&file_line_number)
+    }
+
+    /// Get the source type for this tab (Global, File, or Pipe)
+    pub fn source_type(&self) -> SourceType {
+        if self.source_status.is_some() {
+            SourceType::Global
+        } else if self.source_path.is_some() {
+            SourceType::File
+        } else {
+            SourceType::Pipe
+        }
     }
 
     /// Create a new tab from a file path

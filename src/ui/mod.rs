@@ -1,4 +1,4 @@
-use crate::app::{App, FilterState, ViewMode};
+use crate::app::{App, FilterState, InputMode, SourceType, TreeSelection, ViewMode};
 use crate::source::SourceStatus;
 use crate::tab::TabState;
 use anyhow::Result;
@@ -114,73 +114,145 @@ fn render_side_panel(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
+    let categories = app.tabs_by_category();
+    let is_panel_focused = app.input_mode == InputMode::SourcePanel;
 
-    for (idx, tab) in app.tabs.iter().enumerate() {
-        let is_active = idx == app.active_tab;
+    // Track global tab index for numbering
+    let mut global_idx = 0usize;
 
-        // Build the display string
-        let number_prefix = if idx < 9 {
-            format!("{} ", idx + 1)
-        } else {
-            "  ".to_string()
+    for (cat, tab_indices) in &categories {
+        if tab_indices.is_empty() {
+            continue; // Skip empty categories
+        }
+
+        // Category header
+        let cat_name = match cat {
+            SourceType::Global => "Global",
+            SourceType::File => "Files",
+            SourceType::Pipe => "Pipes",
         };
+        let cat_idx = *cat as usize;
+        let expanded = app.source_panel.expanded[cat_idx];
+        let arrow = if expanded { "▼" } else { "▶" };
 
-        // Truncate name to fit in panel width
-        let max_name_len = (area.width as usize).saturating_sub(4); // "N > " prefix
-        let display_name = if tab.name.len() > max_name_len {
-            format!("{}...", &tab.name[..max_name_len.saturating_sub(3)])
-        } else {
-            tab.name.clone()
-        };
+        let is_cat_selected =
+            is_panel_focused && app.source_panel.selection == Some(TreeSelection::Category(*cat));
 
-        let indicator = if is_active { "> " } else { "  " };
-
-        let line_text = format!("{}{}{}", number_prefix, indicator, display_name);
-
-        let style = if is_active {
+        let cat_style = if is_cat_selected {
             Style::default()
-                .fg(Color::Yellow)
+                .bg(Color::DarkGray)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         };
 
-        let mut line = Line::from(vec![Span::styled(line_text, style)]);
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            format!("{} {}", arrow, cat_name),
+            cat_style,
+        )])));
 
-        // Add loading indicator if stream is still loading
-        if tab.stream_receiver.is_some() {
-            line.spans
-                .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+        // Category items (if expanded)
+        if expanded {
+            for (in_cat_idx, &tab_idx) in tab_indices.iter().enumerate() {
+                let tab = &app.tabs[tab_idx];
+                let is_active = tab_idx == app.active_tab;
+                let is_tree_selected = is_panel_focused
+                    && app.source_panel.selection == Some(TreeSelection::Item(*cat, in_cat_idx));
+
+                // Build item display (indented)
+                let number = if global_idx < 9 {
+                    format!("{}", global_idx + 1)
+                } else {
+                    " ".to_string()
+                };
+                let indicator = if is_active { ">" } else { " " };
+
+                // Truncate name to fit in panel width (accounting for indent)
+                let max_len = (area.width as usize).saturating_sub(8); // "  N> " + indicators
+                let name = if tab.name.len() > max_len {
+                    format!("{}...", &tab.name[..max_len.saturating_sub(3)])
+                } else {
+                    tab.name.clone()
+                };
+
+                let item_style = if is_tree_selected {
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_active {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let mut line = Line::from(vec![Span::styled(
+                    format!("  {}{} {}", number, indicator, name),
+                    item_style,
+                )]);
+
+                // Add loading indicator if stream is still loading
+                if tab.stream_receiver.is_some() {
+                    line.spans
+                        .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+                }
+
+                // Add filter indicator if tab has active filter
+                if tab.filter.pattern.is_some() {
+                    line.spans
+                        .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
+                }
+
+                // Add follow indicator if tab is in follow mode
+                if tab.follow_mode {
+                    line.spans
+                        .push(Span::styled(" F", Style::default().fg(Color::Green)));
+                }
+
+                // Add source status indicator for discovered sources
+                if let Some(status) = tab.source_status {
+                    let (status_ind, color) = match status {
+                        SourceStatus::Active => ("●", Color::Green),
+                        SourceStatus::Ended => ("○", Color::DarkGray),
+                    };
+                    line.spans.push(Span::styled(
+                        format!(" {}", status_ind),
+                        Style::default().fg(color),
+                    ));
+                }
+
+                items.push(ListItem::new(line));
+                global_idx += 1;
+            }
+        } else {
+            // When collapsed, still count tabs for numbering
+            global_idx += tab_indices.len();
         }
-
-        // Add filter indicator if tab has active filter
-        if tab.filter.pattern.is_some() {
-            line.spans
-                .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
-        }
-
-        // Add follow indicator if tab is in follow mode
-        if tab.follow_mode {
-            line.spans
-                .push(Span::styled(" F", Style::default().fg(Color::Green)));
-        }
-
-        // Add source status indicator for discovered sources
-        if let Some(status) = tab.source_status {
-            let (indicator, color) = match status {
-                SourceStatus::Active => ("●", Color::Green),
-                SourceStatus::Ended => ("○", Color::DarkGray),
-            };
-            line.spans.push(Span::styled(
-                format!(" {}", indicator),
-                Style::default().fg(color),
-            ));
-        }
-
-        items.push(ListItem::new(line));
     }
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Sources"));
+    // Title and border styling
+    let title = if is_panel_focused {
+        " Sources "
+    } else {
+        "Sources"
+    };
+    let border_style = if is_panel_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title),
+    );
 
     f.render_widget(list, area);
 }
@@ -636,6 +708,18 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  Tab/S-Tab     Next/previous tab"),
         Line::from("  1-9           Jump to tab"),
         Line::from("  x, Ctrl+W     Close tab"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Source Panel",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Ctrl+P        Focus source panel"),
+        Line::from("  j/k, ↑/↓      Navigate tree"),
+        Line::from("  Space         Expand/collapse category"),
+        Line::from("  Enter         Select source"),
+        Line::from("  Esc           Return to log view"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "View",
