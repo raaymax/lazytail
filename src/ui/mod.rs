@@ -595,7 +595,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     // Help content
     let help_lines = vec![
         Line::from(vec![Span::styled(
-            "LazyTail - Keyboard Shortcuts",
+            "LazyTail - Quick Reference",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
@@ -607,31 +607,12 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  j / Down      Scroll down one line"),
-        Line::from("  k / Up        Scroll up one line"),
-        Line::from("  Ctrl+E        Scroll viewport down (keep selection)"),
-        Line::from("  Ctrl+Y        Scroll viewport up (keep selection)"),
-        Line::from("  PageDown      Scroll down one page"),
-        Line::from("  PageUp        Scroll up one page"),
-        Line::from("  g             Jump to start"),
-        Line::from("  G             Jump to end"),
-        Line::from("  :123          Jump to line 123"),
-        Line::from("  zz            Center selection on screen"),
-        Line::from("  zt            Move selection to top"),
-        Line::from("  zb            Move selection to bottom"),
-        Line::from("  Space         Toggle line expansion"),
-        Line::from("  c             Collapse all expanded lines"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Tabs",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Tab           Next tab"),
-        Line::from("  Shift+Tab     Previous tab"),
-        Line::from("  1-9           Select tab directly"),
-        Line::from("  x / Ctrl+W    Close current tab"),
+        Line::from("  j/k, ↑/↓      Move selection up/down"),
+        Line::from("  g / G         Jump to start / end"),
+        Line::from("  PageUp/Down   Scroll by page"),
+        Line::from("  Ctrl+E/Y      Scroll viewport (vim-style)"),
+        Line::from("  :123          Jump to line number"),
+        Line::from("  zz/zt/zb      Center/top/bottom view"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Filtering",
@@ -639,33 +620,63 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  /             Start live filter"),
-        Line::from("  Tab           Toggle Plain/Regex mode"),
+        Line::from("  /             Start filter (live preview)"),
+        Line::from("  Tab           Toggle Plain ↔ Regex mode"),
         Line::from("  Alt+C         Toggle case sensitivity"),
-        Line::from("  Enter         Close filter input (keep filter)"),
-        Line::from("  Esc           Clear filter / Cancel input"),
-        Line::from("  Up/Down       Navigate filter history"),
+        Line::from("  ↑/↓           Browse filter history"),
+        Line::from("  Enter         Apply filter"),
+        Line::from("  Esc           Clear filter"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Modes",
+            "Tabs",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
+        Line::from("  Tab/S-Tab     Next/previous tab"),
+        Line::from("  1-9           Jump to tab"),
+        Line::from("  x, Ctrl+W     Close tab"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "View",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Space         Expand/collapse line"),
+        Line::from("  c             Collapse all"),
         Line::from("  f             Toggle follow mode"),
-        Line::from("                (auto-scroll to new content)"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Other",
+            "Side Panel Indicators",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  ?             Show this help"),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("F", Style::default().fg(Color::Green)),
+            Span::raw("  Follow mode    "),
+            Span::styled("*", Style::default().fg(Color::Cyan)),
+            Span::raw("  Filter active"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("●", Style::default().fg(Color::Green)),
+            Span::raw("  Source active  "),
+            Span::styled("○", Style::default().fg(Color::DarkGray)),
+            Span::raw("  Source ended"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("⟳", Style::default().fg(Color::Magenta)),
+            Span::raw("  Loading"),
+        ]),
+        Line::from(""),
         Line::from("  q / Ctrl+C    Quit"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Press any key to close this help",
+            "Press any key to close",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),

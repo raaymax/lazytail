@@ -41,18 +41,44 @@ const FILTER_DEBOUNCE_MS: u64 = 500;
 
 #[derive(Parser, Debug)]
 #[command(name = "lazytail")]
-#[command(about = "A universal terminal-based log viewer with filtering support", long_about = None)]
+#[command(version)]
+#[command(about = "A fast terminal-based log viewer with live filtering")]
+#[command(
+    long_about = "A fast terminal-based log viewer with live filtering, regex support, \
+and multi-tab interface. Supports file watching, stdin piping, and source capture."
+)]
+#[command(after_help = "\
+EXAMPLES:
+    lazytail app.log                    View a single log file
+    lazytail app.log error.log          View multiple files in tabs
+    kubectl logs pod | lazytail         Pipe logs from any command
+    lazytail                            Discover sources from ~/.config/lazytail/data/
+
+CAPTURE MODE:
+    cmd | lazytail -n \"API\"             Capture stdin to ~/.config/lazytail/data/API.log
+                                        (tee-like: writes to file AND echoes to stdout)
+
+    Then in another terminal:
+    lazytail                            View all captured sources with live updates
+
+IN-APP HELP:
+    Press '?' inside the app to see all keyboard shortcuts.
+    Press '/' to start filtering, 'f' to toggle follow mode.
+")]
 struct Args {
-    /// Log files to view (multiple files will open in tabs, use - for stdin)
+    /// Log files to view (omit for source discovery mode)
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
-    /// Disable file watching
+    /// Disable file watching (files won't auto-reload on changes)
     #[arg(long = "no-watch")]
     no_watch: bool,
 
-    /// Capture mode: name for stdin source (creates ~/.config/lazytail/data/<NAME>.log)
-    #[arg(short = 'n', long = "name")]
+    /// Capture stdin to a named source file (tee-like behavior)
+    ///
+    /// Writes stdin to ~/.config/lazytail/data/<NAME>.log while echoing to stdout.
+    /// The source can then be viewed with 'lazytail' (discovery mode).
+    #[arg(short = 'n', long = "name", value_name = "NAME")]
     name: Option<String>,
 }
 
