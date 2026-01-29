@@ -66,10 +66,17 @@ pub fn is_pid_running(pid: u32) -> bool {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        // On macOS/BSD, use kill(pid, 0) - returns 0 if process exists
+        // PIDs that don't fit in i32 are invalid
+        let Ok(pid_i32) = i32::try_from(pid) else {
+            return false;
+        };
+        // PID 0 and negative PIDs have special meaning in kill()
+        if pid_i32 <= 0 {
+            return false;
+        }
         // SAFETY: kill with signal 0 doesn't actually send a signal,
         // it just checks if the process exists and we have permission
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        unsafe { libc::kill(pid_i32, 0) == 0 }
     }
 }
 
