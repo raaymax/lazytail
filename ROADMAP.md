@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.2.0)
+## Current Status (v0.3.0)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -27,14 +27,27 @@ This is a local planning document for upcoming features and improvements.
 - Tab navigation (Tab, Shift+Tab, 1-9)
 - AUR package available
 
+**v0.3.0 Features:**
+- Regex filter mode (Tab to toggle)
+- Case sensitivity toggle (Alt+C)
+- Filter history with mode persistence
+- Expandable log entries (Space to toggle, c to collapse)
+- Persistent filter history to disk
+- Stats panel (line counts)
+- Filter progress percentage display
+- Streaming filter with SIMD search (memmem) for better performance
+- Grep-style search for case-sensitive patterns
+
 ---
 
 ## Upcoming Features & Improvements
 
 ### 🔴 HIGH PRIORITY
 
-#### Phase 1: Multi-Tab Support (CLI Arguments)
+#### Phase 1: Multi-Tab Support (CLI Arguments) ✅
 **Goal:** View multiple log files in tabs within single UI instance
+
+**Status:** Complete (v0.2.0)
 
 ```bash
 lazytail api.log worker.log db.log
@@ -81,30 +94,30 @@ Two-panel layout:
 - Future: Bookmarks section at bottom for project-scoped quick access
 
 **Tasks:**
-- [ ] Multi-tab state management
-  - [ ] Add `Vec<TabState>` to App (selection, filter, scroll, follow mode per tab)
-  - [ ] Track active tab index
-  - [ ] Refactor single-file state into `TabState` struct
-- [ ] Side panel UI component
-  - [ ] Render source list on left
-  - [ ] Highlight active source
-  - [ ] Show status indicators (active/ended, filter active, follow mode)
+- [x] Multi-tab state management
+  - [x] Add `Vec<TabState>` to App (selection, filter, scroll, follow mode per tab)
+  - [x] Track active tab index
+  - [x] Refactor single-file state into `TabState` struct
+- [x] Side panel UI component
+  - [x] Render source list on left
+  - [x] Highlight active source
+  - [x] Show status indicators (active/ended, filter active, follow mode)
   - [ ] Toggle panel visibility keybinding
   - [ ] Configurable panel width
-- [ ] Tab navigation keybindings
-  - [ ] `Tab` / `Shift+Tab` to cycle sources
-  - [ ] `1-9` for direct source access
+- [x] Tab navigation keybindings
+  - [x] `Tab` / `Shift+Tab` to cycle sources
+  - [x] `1-9` for direct source access
   - [ ] Arrow keys to navigate panel when focused
-  - [ ] Show keybindings in help overlay
-- [ ] File watching for multiple files
-  - [ ] Watch all open files simultaneously
-  - [ ] Update correct tab on file change
-- [ ] CLI argument handling
-  - [ ] Accept multiple file paths
-  - [ ] Validate all files exist before starting
-- [ ] Backward compatibility
-  - [ ] Single file still works: `lazytail file.log`
-- [ ] Add tests for multi-tab behavior
+  - [x] Show keybindings in help overlay
+- [x] File watching for multiple files
+  - [x] Watch all open files simultaneously
+  - [x] Update correct tab on file change
+- [x] CLI argument handling
+  - [x] Accept multiple file paths
+  - [x] Validate all files exist before starting
+- [x] Backward compatibility
+  - [x] Single file still works: `lazytail file.log`
+- [x] Add tests for multi-tab behavior
 
 **Future Side Panel Enhancements:**
 - [ ] Tree structure with collapsible groups
@@ -620,10 +633,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 ## Future Ideas (Backlog)
 
 ### Performance & Scalability
+- [x] Streaming filter with mmap for large files
+- [x] SIMD-accelerated search using memchr/memmem
+- [x] Grep-style lazy line counting for case-sensitive search
 - [ ] Performance profiling on very large files (100GB+)
-- [ ] Consider mmap for extremely large files
 - [ ] Optimize ANSI parsing (cache parsed lines?)
 - [ ] Benchmark filtering performance
+- [ ] Further optimize case-insensitive search
 
 ### Features
 - [ ] JSON log parsing and formatted view
