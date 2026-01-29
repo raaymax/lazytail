@@ -14,6 +14,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
         InputMode::ZPending => handle_z_pending_mode(key),
+        InputMode::SourcePanel => handle_source_panel_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -99,6 +100,23 @@ fn handle_z_pending_mode(key: KeyEvent) -> Vec<AppEvent> {
 }
 
 /// Handle keyboard input in normal navigation mode
+/// Handle keyboard input in source panel focus mode
+fn handle_source_panel_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Esc => vec![AppEvent::UnfocusSourcePanel],
+        KeyCode::Up | KeyCode::Char('k') => vec![AppEvent::SourcePanelUp],
+        KeyCode::Down | KeyCode::Char('j') => vec![AppEvent::SourcePanelDown],
+        KeyCode::Char(' ') => vec![AppEvent::ToggleCategoryExpand],
+        KeyCode::Enter => vec![AppEvent::SelectSource],
+        KeyCode::Char('q') => vec![AppEvent::Quit],
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::Quit]
+        }
+        KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        _ => vec![],
+    }
+}
+
 fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
         KeyCode::Char('q') => vec![AppEvent::Quit],
@@ -112,6 +130,10 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         // Ctrl+Y - scroll viewport up (vim style)
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::ViewportUp, AppEvent::DisableFollowMode]
+        }
+        // Ctrl+P - focus source panel for tree navigation
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::FocusSourcePanel]
         }
         KeyCode::Down | KeyCode::Char('j') => {
             vec![AppEvent::ScrollDown, AppEvent::DisableFollowMode]

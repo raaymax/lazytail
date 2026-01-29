@@ -16,6 +16,44 @@ pub enum ViewMode {
     Filtered,
 }
 
+/// Source type for categorizing tabs in the tree view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceType {
+    /// Discovered sources from -n capture mode
+    Global,
+    /// Files passed as CLI arguments
+    File,
+    /// Stdin or pipe input
+    Pipe,
+}
+
+/// Selection state for the source panel tree
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeSelection {
+    /// A category header is selected
+    Category(SourceType),
+    /// An item within a category (category type, index within that category)
+    Item(SourceType, usize),
+}
+
+/// State for the source panel tree navigation
+#[derive(Debug)]
+pub struct SourcePanelState {
+    /// Currently selected tree item
+    pub selection: Option<TreeSelection>,
+    /// Whether each category is expanded: [Global, Files, Pipes]
+    pub expanded: [bool; 3],
+}
+
+impl Default for SourcePanelState {
+    fn default() -> Self {
+        Self {
+            selection: None,
+            expanded: [true, true, true], // All expanded by default
+        }
+    }
+}
+
 /// Filter state tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterState {
@@ -37,6 +75,8 @@ pub enum InputMode {
     EnteringLineJump,
     /// Waiting for second key after 'z' (for zz, zt, zb commands)
     ZPending,
+    /// Source panel is focused for tree navigation
+    SourcePanel,
 }
 
 /// Main application state
@@ -79,6 +119,9 @@ pub struct App {
 
     /// Time when pending filter should be triggered (for debouncing)
     pub pending_filter_at: Option<Instant>,
+
+    /// Source panel tree state
+    pub source_panel: SourcePanelState,
 }
 
 impl App {
@@ -112,6 +155,7 @@ impl App {
             regex_error: None,
             side_panel_width: 32,
             pending_filter_at: None,
+            source_panel: SourcePanelState::default(),
         }
     }
 
@@ -203,6 +247,110 @@ impl App {
     /// Close the currently active tab
     pub fn close_active_tab(&mut self) {
         self.close_tab(self.active_tab);
+    }
+
+    // === Source Panel Methods ===
+
+    /// Get tabs grouped by source type, returning (type, vec of global tab indices)
+    pub fn tabs_by_category(&self) -> [(SourceType, Vec<usize>); 3] {
+        let mut result = [
+            (SourceType::Global, Vec::new()),
+            (SourceType::File, Vec::new()),
+            (SourceType::Pipe, Vec::new()),
+        ];
+
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            match tab.source_type() {
+                SourceType::Global => result[0].1.push(idx),
+                SourceType::File => result[1].1.push(idx),
+                SourceType::Pipe => result[2].1.push(idx),
+            }
+        }
+
+        result
+    }
+
+    /// Find global tab index from category and in-category index
+    fn find_tab_index(&self, category: SourceType, idx: usize) -> Option<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.source_type() == category)
+            .nth(idx)
+            .map(|(i, _)| i)
+    }
+
+    /// Focus the source panel for tree navigation
+    fn focus_source_panel(&mut self) {
+        self.input_mode = InputMode::SourcePanel;
+
+        // Initialize selection to current tab if not set
+        if self.source_panel.selection.is_none() && !self.tabs.is_empty() {
+            let tab = &self.tabs[self.active_tab];
+            let stype = tab.source_type();
+            let idx = self.tabs[..self.active_tab]
+                .iter()
+                .filter(|t| t.source_type() == stype)
+                .count();
+            self.source_panel.selection = Some(TreeSelection::Item(stype, idx));
+        }
+    }
+
+    /// Navigate tree selection up or down
+    fn source_panel_navigate(&mut self, delta: i32) {
+        // Build flat list of navigable items
+        let categories = self.tabs_by_category();
+        let mut items: Vec<TreeSelection> = Vec::new();
+
+        for (cat, tab_indices) in &categories {
+            if tab_indices.is_empty() {
+                continue; // Skip empty categories
+            }
+            items.push(TreeSelection::Category(*cat));
+            let cat_idx = *cat as usize;
+            if self.source_panel.expanded[cat_idx] {
+                for i in 0..tab_indices.len() {
+                    items.push(TreeSelection::Item(*cat, i));
+                }
+            }
+        }
+
+        if items.is_empty() {
+            return;
+        }
+
+        // Find current position
+        let current_pos = self
+            .source_panel
+            .selection
+            .as_ref()
+            .and_then(|sel| items.iter().position(|x| x == sel))
+            .unwrap_or(0);
+
+        // Calculate new position (no wrapping)
+        let new_pos = (current_pos as i32 + delta)
+            .max(0)
+            .min(items.len() as i32 - 1) as usize;
+
+        self.source_panel.selection = Some(items[new_pos].clone());
+    }
+
+    /// Toggle expand/collapse on the selected category
+    fn toggle_category_expand(&mut self) {
+        if let Some(TreeSelection::Category(cat)) = self.source_panel.selection {
+            let idx = cat as usize;
+            self.source_panel.expanded[idx] = !self.source_panel.expanded[idx];
+        }
+    }
+
+    /// Select a source from the panel (switch to that tab)
+    fn select_source_from_panel(&mut self) {
+        if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection {
+            if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                self.active_tab = tab_idx;
+                self.input_mode = InputMode::Normal;
+            }
+        }
     }
 
     // === Delegated methods for backward compatibility ===
@@ -607,6 +755,16 @@ impl App {
             AppEvent::PrevTab => self.prev_tab(),
             AppEvent::SelectTab(index) => self.select_tab(index),
             AppEvent::CloseCurrentTab => self.close_active_tab(),
+
+            // Source panel events
+            AppEvent::FocusSourcePanel => self.focus_source_panel(),
+            AppEvent::UnfocusSourcePanel => {
+                self.input_mode = InputMode::Normal;
+            }
+            AppEvent::SourcePanelUp => self.source_panel_navigate(-1),
+            AppEvent::SourcePanelDown => self.source_panel_navigate(1),
+            AppEvent::ToggleCategoryExpand => self.toggle_category_expand(),
+            AppEvent::SelectSource => self.select_source_from_panel(),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
