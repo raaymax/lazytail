@@ -409,8 +409,19 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     drop(reader_guard);
 
     let title = build_title(tab);
+    let is_log_focused = app.input_mode != InputMode::SourcePanel;
+    let border_style = if is_log_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title),
+    );
 
     f.render_widget(list, area);
 
