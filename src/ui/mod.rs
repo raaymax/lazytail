@@ -1,4 +1,5 @@
 use crate::app::{App, FilterState, ViewMode};
+use crate::source::SourceStatus;
 use crate::tab::TabState;
 use anyhow::Result;
 use ratatui::{
@@ -162,6 +163,18 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
         if tab.follow_mode {
             line.spans
                 .push(Span::styled(" F", Style::default().fg(Color::Green)));
+        }
+
+        // Add source status indicator for discovered sources
+        if let Some(status) = tab.source_status {
+            let (indicator, color) = match status {
+                SourceStatus::Active => ("●", Color::Green),
+                SourceStatus::Ended => ("○", Color::DarkGray),
+            };
+            line.spans.push(Span::styled(
+                format!(" {}", indicator),
+                Style::default().fg(color),
+            ));
         }
 
         items.push(ListItem::new(line));
@@ -618,6 +631,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  Tab           Next tab"),
         Line::from("  Shift+Tab     Previous tab"),
         Line::from("  1-9           Select tab directly"),
+        Line::from("  x / Ctrl+W    Close current tab"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Filtering",

@@ -3,6 +3,7 @@ use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
+use crate::source::{DiscoveredSource, SourceStatus};
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -98,6 +99,8 @@ pub struct TabState {
     pub expansion: ExpansionState,
     /// Receiver for background stream loading (pipes/stdin)
     pub stream_receiver: Option<Receiver<StreamMessage>>,
+    /// Source status for discovered sources (Active/Ended)
+    pub source_status: Option<SourceStatus>,
 }
 
 impl TabState {
@@ -152,6 +155,7 @@ impl TabState {
                 filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
                 stream_receiver: None,
+                source_status: None,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -177,6 +181,7 @@ impl TabState {
                 filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
                 stream_receiver: Some(rx),
+                source_status: None,
             })
         }
     }
@@ -205,6 +210,39 @@ impl TabState {
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
             stream_receiver: Some(rx),
+            source_status: None,
+        })
+    }
+
+    /// Create a new tab from a discovered source
+    pub fn from_discovered_source(source: DiscoveredSource, watch: bool) -> Result<Self> {
+        let file_reader = FileReader::new(&source.log_path)?;
+        let watcher = if watch {
+            FileWatcher::new(&source.log_path).ok()
+        } else {
+            None
+        };
+
+        let total_lines = file_reader.total_lines();
+        let line_indices = (0..total_lines).collect();
+        let selected_line = total_lines.saturating_sub(1);
+
+        Ok(Self {
+            name: source.name,
+            source_path: Some(source.log_path),
+            mode: ViewMode::Normal,
+            total_lines,
+            line_indices,
+            scroll_position: 0,
+            selected_line,
+            follow_mode: true,
+            reader: Arc::new(Mutex::new(file_reader)),
+            watcher,
+            viewport: Viewport::new(selected_line),
+            filter: FilterConfig::default(),
+            expansion: ExpansionState::default(),
+            stream_receiver: None,
+            source_status: Some(source.status),
         })
     }
 

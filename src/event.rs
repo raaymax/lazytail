@@ -63,6 +63,7 @@ pub enum AppEvent {
     NextTab,
     PrevTab,
     SelectTab(usize),
+    CloseCurrentTab,
 
     // Mode toggles
     ToggleFollowMode,

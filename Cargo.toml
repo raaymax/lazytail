@@ -25,6 +25,7 @@ memmap2 = "0.9"
 memchr = "2"
 lru = "0.12"
 rayon = "1.10"
+signal-hook = "0.3"
 
 [dev-dependencies]
 tempfile = "3.0"

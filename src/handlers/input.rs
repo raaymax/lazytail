@@ -143,6 +143,11 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
             let index = (c as usize) - ('1' as usize);
             vec![AppEvent::SelectTab(index)]
         }
+        // Close current tab
+        KeyCode::Char('x') => vec![AppEvent::CloseCurrentTab],
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CloseCurrentTab]
+        }
         _ => vec![],
     }
 }

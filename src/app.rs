@@ -162,6 +162,38 @@ impl App {
         self.tabs.len()
     }
 
+    /// Add a new tab
+    pub fn add_tab(&mut self, tab: TabState) {
+        self.tabs.push(tab);
+    }
+
+    /// Close a tab by index
+    ///
+    /// If the last tab is closed, sets should_quit to true.
+    pub fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 {
+            // Don't close the last tab - quit instead
+            self.should_quit = true;
+            return;
+        }
+
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+
+            // Adjust active_tab if needed
+            if self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            } else if self.active_tab > index {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    /// Close the currently active tab
+    pub fn close_active_tab(&mut self) {
+        self.close_tab(self.active_tab);
+    }
+
     // === Delegated methods for backward compatibility ===
 
     /// Scroll down by one line
@@ -563,6 +595,7 @@ impl App {
             AppEvent::NextTab => self.next_tab(),
             AppEvent::PrevTab => self.prev_tab(),
             AppEvent::SelectTab(index) => self.select_tab(index),
+            AppEvent::CloseCurrentTab => self.close_active_tab(),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),

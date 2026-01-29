@@ -142,8 +142,10 @@ lazytail pod1.log pod2.log pod3.log
 
 ---
 
-#### Phase 2: Source Discovery
+#### Phase 2: Source Discovery ✅
 **Goal:** Auto-discover log sources from config directory
+
+**Status:** Complete
 
 ```bash
 lazytail              # No args → discover sources from ~/.config/lazytail/data/
@@ -163,21 +165,21 @@ lazytail api.log      # Explicit file → single tab (backward compatible)
 ```
 
 **Tasks:**
-- [ ] Config directory setup
-  - [ ] Create `~/.config/lazytail/data/` on first run
-  - [ ] Create `~/.config/lazytail/sources/` on first run
-- [ ] Source discovery (UI mode)
-  - [ ] Scan `data/` directory for `.log` files
-  - [ ] Check `sources/` for active markers (file exists + PID valid)
-  - [ ] Display discovered sources as tabs
-  - [ ] Show active/ended status indicator per tab
-- [ ] Watch for new sources
-  - [ ] Monitor `data/` directory for new files
-  - [ ] Add new tabs dynamically when sources appear
-- [ ] Tab management
-  - [ ] Close tab keybinding (e.g., `x` or `Ctrl+W`)
+- [x] Config directory setup
+  - [x] Create `~/.config/lazytail/data/` on first run
+  - [x] Create `~/.config/lazytail/sources/` on first run
+- [x] Source discovery (UI mode)
+  - [x] Scan `data/` directory for `.log` files
+  - [x] Check `sources/` for active markers (file exists + PID valid)
+  - [x] Display discovered sources as tabs
+  - [x] Show active/ended status indicator per tab
+- [x] Watch for new sources
+  - [x] Monitor `data/` directory for new files
+  - [x] Add new tabs dynamically when sources appear
+- [x] Tab management
+  - [x] Close tab keybinding (`x` or `Ctrl+W`)
   - [ ] Optionally delete source file on close
-- [ ] Add tests for discovery behavior
+- [x] Add tests for discovery behavior
 
 **Behavior:**
 - `lazytail` (no args) → discover mode, show all sources from config dir
@@ -186,8 +188,10 @@ lazytail api.log      # Explicit file → single tab (backward compatible)
 
 ---
 
-#### Phase 3: Source Capture Mode (Tee-like)
+#### Phase 3: Source Capture Mode (Tee-like) ✅
 **Goal:** Capture stdin to named source, viewable in UI
+
+**Status:** Complete
 
 ```bash
 # Capture logs from any command
@@ -200,24 +204,24 @@ lazytail -n "API" <(kubectl logs -f pod)
 ```
 
 **Tasks:**
-- [ ] CLI argument parsing
-  - [ ] `-n <name>` flag for source mode
-  - [ ] Detect stdin input
-- [ ] Source mode implementation
-  - [ ] Name collision detection (check marker + PID validity)
-  - [ ] Create marker file in `sources/` with PID
-  - [ ] Print header: `Serving "API" → ~/.config/lazytail/data/API.log`
-  - [ ] Read stdin line by line
-  - [ ] Write to log file (append)
-  - [ ] Echo to stdout (tee behavior)
-  - [ ] On EOF: remove marker, exit (file persists)
-- [ ] Signal handling
-  - [ ] Handle SIGINT/SIGTERM gracefully
-  - [ ] Clean up marker file on exit
-- [ ] Error handling
-  - [ ] Exit with error if name collision
-  - [ ] Handle write errors gracefully
-- [ ] Add tests for source mode
+- [x] CLI argument parsing
+  - [x] `-n <name>` flag for source mode
+  - [x] Detect stdin input
+- [x] Source mode implementation
+  - [x] Name collision detection (check marker + PID validity)
+  - [x] Create marker file in `sources/` with PID
+  - [x] Print header: `Serving "API" → ~/.config/lazytail/data/API.log`
+  - [x] Read stdin line by line
+  - [x] Write to log file (append)
+  - [x] Echo to stdout (tee behavior)
+  - [x] On EOF: remove marker, exit (file persists)
+- [x] Signal handling
+  - [x] Handle SIGINT/SIGTERM gracefully
+  - [x] Clean up marker file on exit
+- [x] Error handling
+  - [x] Exit with error if name collision
+  - [x] Handle write errors gracefully
+- [x] Add tests for source mode
 
 **Full Workflow:**
 ```bash
@@ -697,12 +701,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Stats panel (line counts)
 - Persistent filter history to disk
 
-### v0.4.0 (Next)
+### v0.4.0 ✅ (In Progress)
 **Focus: Source Discovery & Capture**
 - Auto-discover sources from `~/.config/lazytail/data/`
 - Source capture mode: `cmd | lazytail -n "Name"`
 - Active/ended status indicators
 - Dynamic tab creation for new sources
+- Close tab keybinding (`x` / `Ctrl+W`)
 
 ### v0.5.0 (Future)
 **Focus: Search & Highlighting**

@@ -222,7 +222,8 @@ fn stream_filter_grep_style(
         // Count lines from last counted position to this match
         // This is lazy - we only count lines in regions that have matches
         let line_num = if abs_pos >= counted_up_to_pos {
-            let additional_lines = memchr::memchr_iter(b'\n', &data[counted_up_to_pos..abs_pos]).count();
+            let additional_lines =
+                memchr::memchr_iter(b'\n', &data[counted_up_to_pos..abs_pos]).count();
             let line = counted_up_to_line + additional_lines;
 
             // Update our counting checkpoint to end of this line
@@ -255,7 +256,8 @@ fn stream_filter_grep_style(
 
     // Count total lines for progress (fast single pass)
     let total_lines = if counted_up_to_pos < data.len() {
-        counted_up_to_line + memchr::memchr_iter(b'\n', &data[counted_up_to_pos..]).count()
+        counted_up_to_line
+            + memchr::memchr_iter(b'\n', &data[counted_up_to_pos..]).count()
             + if data.last() != Some(&b'\n') { 1 } else { 0 }
     } else {
         counted_up_to_line

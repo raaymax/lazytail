@@ -93,9 +93,35 @@ app_logs | lazytail error.log <(kubectl logs pod-name)
 lazytail [OPTIONS] [FILES]...
 
 Options:
+  -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
   -h, --help               Print help
 ```
+
+### Source Discovery Mode
+
+Run `lazytail` with no arguments to auto-discover log sources:
+
+```bash
+lazytail  # Opens all *.log files from ~/.config/lazytail/data/
+```
+
+### Capture Mode
+
+Capture logs from any command to a named source (tee-like behavior):
+
+```bash
+# Terminal 1: Capture API logs
+kubectl logs -f api-pod | lazytail -n "API"
+
+# Terminal 2: Capture worker logs
+docker logs -f worker | lazytail -n "Worker"
+
+# Terminal 3: View all sources
+lazytail  # Shows tabs: [API] [Worker] with live status
+```
+
+Captured sources show active (●) or ended (○) status in the UI.
 
 ### Use Cases
 
