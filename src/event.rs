@@ -62,8 +62,6 @@ pub enum AppEvent {
     StreamComplete,
 
     // Tab navigation events
-    NextTab,
-    PrevTab,
     SelectTab(usize),
     CloseCurrentTab,
 
