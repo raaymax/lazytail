@@ -11,9 +11,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_os = "linux"))]
-use libc;
-
 /// Status of a discovered source
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceStatus {
