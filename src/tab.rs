@@ -3,7 +3,7 @@ use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
-use crate::source::{DiscoveredSource, SourceStatus};
+use crate::source::{check_source_status, DiscoveredSource, SourceStatus};
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -244,6 +244,16 @@ impl TabState {
             stream_receiver: None,
             source_status: Some(source.status),
         })
+    }
+
+    /// Refresh source status for discovered sources.
+    ///
+    /// Checks if the source process is still running and updates the status.
+    /// Only affects tabs created from discovered sources (source_status is Some).
+    pub fn refresh_source_status(&mut self) {
+        if self.source_status.is_some() {
+            self.source_status = Some(check_source_status(&self.name));
+        }
     }
 
     /// Append lines from background stream loading

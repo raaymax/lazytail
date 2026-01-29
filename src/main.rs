@@ -354,7 +354,12 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
             }
         }
 
-        // Phase 2.5: Check for new sources from directory watcher
+        // Phase 2.5: Refresh source status for discovered sources
+        for tab in &mut app.tabs {
+            tab.refresh_source_status();
+        }
+
+        // Phase 2.6: Check for new sources from directory watcher
         if let Some(ref watcher) = dir_watcher {
             while let Some(dir_event) = watcher.try_recv() {
                 match dir_event {
