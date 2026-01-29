@@ -705,7 +705,6 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  Tab/S-Tab     Next/previous tab"),
         Line::from("  1-9           Jump to tab"),
         Line::from("  x, Ctrl+W     Close tab"),
         Line::from(""),
@@ -715,7 +714,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  Ctrl+P        Focus source panel"),
+        Line::from("  Tab           Toggle panel focus"),
         Line::from("  j/k, ↑/↓      Navigate tree"),
         Line::from("  Space         Expand/collapse category"),
         Line::from("  Enter         Select source"),

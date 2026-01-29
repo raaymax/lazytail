@@ -177,24 +177,6 @@ impl App {
         &mut self.tabs[self.active_tab]
     }
 
-    /// Switch to the next tab
-    pub fn next_tab(&mut self) {
-        if !self.tabs.is_empty() {
-            self.active_tab = (self.active_tab + 1) % self.tabs.len();
-        }
-    }
-
-    /// Switch to the previous tab
-    pub fn prev_tab(&mut self) {
-        if !self.tabs.is_empty() {
-            self.active_tab = if self.active_tab == 0 {
-                self.tabs.len() - 1
-            } else {
-                self.active_tab - 1
-            };
-        }
-    }
-
     /// Switch to a specific tab by index
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -751,8 +733,6 @@ impl App {
             AppEvent::ViewportUp => self.viewport_up(),
 
             // Tab navigation events
-            AppEvent::NextTab => self.next_tab(),
-            AppEvent::PrevTab => self.prev_tab(),
             AppEvent::SelectTab(index) => self.select_tab(index),
             AppEvent::CloseCurrentTab => self.close_active_tab(),
 
@@ -1015,27 +995,19 @@ mod tests {
 
         assert_eq!(app.active_tab, 0);
 
-        app.next_tab();
-        assert_eq!(app.active_tab, 1);
-
-        app.next_tab();
-        assert_eq!(app.active_tab, 2);
-
-        // Wrap around
-        app.next_tab();
-        assert_eq!(app.active_tab, 0);
-
-        // Previous tab
-        app.prev_tab();
-        assert_eq!(app.active_tab, 2);
-
         // Direct selection
         app.select_tab(1);
         assert_eq!(app.active_tab, 1);
 
+        app.select_tab(2);
+        assert_eq!(app.active_tab, 2);
+
+        app.select_tab(0);
+        assert_eq!(app.active_tab, 0);
+
         // Invalid selection (out of bounds)
         app.select_tab(10);
-        assert_eq!(app.active_tab, 1); // Unchanged
+        assert_eq!(app.active_tab, 0); // Unchanged
     }
 
     #[test]
@@ -1054,12 +1026,12 @@ mod tests {
         assert_eq!(app.active_tab().mode, ViewMode::Filtered);
 
         // Switch to tab 1
-        app.next_tab();
+        app.select_tab(1);
         assert_eq!(app.active_tab().mode, ViewMode::Normal);
         assert!(app.active_tab().filter.pattern.is_none());
 
         // Tab 0 should still be filtered
-        app.prev_tab();
+        app.select_tab(0);
         assert_eq!(app.active_tab().mode, ViewMode::Filtered);
     }
 
@@ -1489,10 +1461,10 @@ mod tests {
 
         assert_eq!(app.active_tab, 0);
 
-        app.apply_event(AppEvent::NextTab);
+        app.apply_event(AppEvent::SelectTab(1));
         assert_eq!(app.active_tab, 1);
 
-        app.apply_event(AppEvent::PrevTab);
+        app.apply_event(AppEvent::SelectTab(0));
         assert_eq!(app.active_tab, 0);
 
         app.apply_event(AppEvent::SelectTab(1));
