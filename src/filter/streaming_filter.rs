@@ -88,7 +88,7 @@ fn stream_filter_impl(
     // Stream through file, processing each line
     while pos < data.len() {
         // Check cancellation less frequently for performance
-        if line_idx % CANCEL_CHECK_INTERVAL == 0 && cancel.is_cancelled() {
+        if line_idx.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -116,7 +116,7 @@ fn stream_filter_impl(
         pos = line_end + 1;
 
         // Send batch update periodically
-        if line_idx % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+        if line_idx.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
             all_matches.extend(batch_matches.iter().copied());
 
             let _ = tx.send(FilterProgress::PartialResults {
@@ -213,7 +213,7 @@ fn stream_filter_grep_style(
     // Search for pattern occurrences
     while let Some(match_offset) = finder.find(&data[search_pos..]) {
         check_count += 1;
-        if check_count % 10000 == 0 && cancel.is_cancelled() {
+        if check_count.is_multiple_of(10000) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -222,7 +222,8 @@ fn stream_filter_grep_style(
         // Count lines from last counted position to this match
         // This is lazy - we only count lines in regions that have matches
         let line_num = if abs_pos >= counted_up_to_pos {
-            let additional_lines = memchr::memchr_iter(b'\n', &data[counted_up_to_pos..abs_pos]).count();
+            let additional_lines =
+                memchr::memchr_iter(b'\n', &data[counted_up_to_pos..abs_pos]).count();
             let line = counted_up_to_line + additional_lines;
 
             // Update our counting checkpoint to end of this line
@@ -255,7 +256,8 @@ fn stream_filter_grep_style(
 
     // Count total lines for progress (fast single pass)
     let total_lines = if counted_up_to_pos < data.len() {
-        counted_up_to_line + memchr::memchr_iter(b'\n', &data[counted_up_to_pos..]).count()
+        counted_up_to_line
+            + memchr::memchr_iter(b'\n', &data[counted_up_to_pos..]).count()
             + if data.last() != Some(&b'\n') { 1 } else { 0 }
     } else {
         counted_up_to_line
@@ -303,7 +305,7 @@ fn stream_filter_fast_impl(
 
     while pos < data.len() {
         // Check cancellation less frequently
-        if line_idx % CANCEL_CHECK_INTERVAL == 0 && cancel.is_cancelled() {
+        if line_idx.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -333,7 +335,7 @@ fn stream_filter_fast_impl(
         pos = line_end + 1;
 
         // Send batch update periodically
-        if line_idx % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+        if line_idx.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
             all_matches.extend(batch_matches.iter().copied());
 
             let _ = tx.send(FilterProgress::PartialResults {
@@ -440,7 +442,7 @@ fn stream_filter_range_impl(
 
             lines_in_range += 1;
 
-            if lines_in_range % BATCH_SIZE == 0 && !batch_matches.is_empty() {
+            if lines_in_range.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
                 all_matches.extend(batch_matches.iter().copied());
 
                 if cancel.is_cancelled() {

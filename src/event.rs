@@ -54,15 +54,18 @@ pub enum AppEvent {
     },
 
     // Stream events (for background loading of pipes/stdin)
+    #[allow(dead_code)]
     StreamData {
         lines: Vec<String>,
     },
+    #[allow(dead_code)]
     StreamComplete,
 
     // Tab navigation events
     NextTab,
     PrevTab,
     SelectTab(usize),
+    CloseCurrentTab,
 
     // Mode toggles
     ToggleFollowMode,

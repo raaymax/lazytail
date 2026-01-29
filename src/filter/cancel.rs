@@ -36,6 +36,7 @@ impl CancelToken {
     /// Reset the cancellation state (use with caution)
     ///
     /// This is useful for reusing a token across multiple operations.
+    #[allow(dead_code)]
     pub fn reset(&self) {
         self.cancelled.store(false, Ordering::SeqCst);
     }

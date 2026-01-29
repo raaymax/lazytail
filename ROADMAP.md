@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.3.0)
+## Current Status (v0.4.0)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -37,6 +37,13 @@ This is a local planning document for upcoming features and improvements.
 - Filter progress percentage display
 - Streaming filter with SIMD search (memmem) for better performance
 - Grep-style search for case-sensitive patterns
+
+**v0.4.0 Features:**
+- Source discovery mode (`lazytail` with no args)
+- Source capture mode (`cmd | lazytail -n "Name"`)
+- Active/ended status indicators for discovered sources
+- Directory watcher for dynamic tab creation
+- Close tab keybinding (`x` / `Ctrl+W`)
 
 ---
 
@@ -142,8 +149,10 @@ lazytail pod1.log pod2.log pod3.log
 
 ---
 
-#### Phase 2: Source Discovery
+#### Phase 2: Source Discovery ✅
 **Goal:** Auto-discover log sources from config directory
+
+**Status:** Complete
 
 ```bash
 lazytail              # No args → discover sources from ~/.config/lazytail/data/
@@ -163,21 +172,21 @@ lazytail api.log      # Explicit file → single tab (backward compatible)
 ```
 
 **Tasks:**
-- [ ] Config directory setup
-  - [ ] Create `~/.config/lazytail/data/` on first run
-  - [ ] Create `~/.config/lazytail/sources/` on first run
-- [ ] Source discovery (UI mode)
-  - [ ] Scan `data/` directory for `.log` files
-  - [ ] Check `sources/` for active markers (file exists + PID valid)
-  - [ ] Display discovered sources as tabs
-  - [ ] Show active/ended status indicator per tab
-- [ ] Watch for new sources
-  - [ ] Monitor `data/` directory for new files
-  - [ ] Add new tabs dynamically when sources appear
-- [ ] Tab management
-  - [ ] Close tab keybinding (e.g., `x` or `Ctrl+W`)
+- [x] Config directory setup
+  - [x] Create `~/.config/lazytail/data/` on first run
+  - [x] Create `~/.config/lazytail/sources/` on first run
+- [x] Source discovery (UI mode)
+  - [x] Scan `data/` directory for `.log` files
+  - [x] Check `sources/` for active markers (file exists + PID valid)
+  - [x] Display discovered sources as tabs
+  - [x] Show active/ended status indicator per tab
+- [x] Watch for new sources
+  - [x] Monitor `data/` directory for new files
+  - [x] Add new tabs dynamically when sources appear
+- [x] Tab management
+  - [x] Close tab keybinding (`x` or `Ctrl+W`)
   - [ ] Optionally delete source file on close
-- [ ] Add tests for discovery behavior
+- [x] Add tests for discovery behavior
 
 **Behavior:**
 - `lazytail` (no args) → discover mode, show all sources from config dir
@@ -186,8 +195,10 @@ lazytail api.log      # Explicit file → single tab (backward compatible)
 
 ---
 
-#### Phase 3: Source Capture Mode (Tee-like)
+#### Phase 3: Source Capture Mode (Tee-like) ✅
 **Goal:** Capture stdin to named source, viewable in UI
+
+**Status:** Complete
 
 ```bash
 # Capture logs from any command
@@ -200,24 +211,24 @@ lazytail -n "API" <(kubectl logs -f pod)
 ```
 
 **Tasks:**
-- [ ] CLI argument parsing
-  - [ ] `-n <name>` flag for source mode
-  - [ ] Detect stdin input
-- [ ] Source mode implementation
-  - [ ] Name collision detection (check marker + PID validity)
-  - [ ] Create marker file in `sources/` with PID
-  - [ ] Print header: `Serving "API" → ~/.config/lazytail/data/API.log`
-  - [ ] Read stdin line by line
-  - [ ] Write to log file (append)
-  - [ ] Echo to stdout (tee behavior)
-  - [ ] On EOF: remove marker, exit (file persists)
-- [ ] Signal handling
-  - [ ] Handle SIGINT/SIGTERM gracefully
-  - [ ] Clean up marker file on exit
-- [ ] Error handling
-  - [ ] Exit with error if name collision
-  - [ ] Handle write errors gracefully
-- [ ] Add tests for source mode
+- [x] CLI argument parsing
+  - [x] `-n <name>` flag for source mode
+  - [x] Detect stdin input
+- [x] Source mode implementation
+  - [x] Name collision detection (check marker + PID validity)
+  - [x] Create marker file in `sources/` with PID
+  - [x] Print header: `Serving "API" → ~/.config/lazytail/data/API.log`
+  - [x] Read stdin line by line
+  - [x] Write to log file (append)
+  - [x] Echo to stdout (tee behavior)
+  - [x] On EOF: remove marker, exit (file persists)
+- [x] Signal handling
+  - [x] Handle SIGINT/SIGTERM gracefully
+  - [x] Clean up marker file on exit
+- [x] Error handling
+  - [x] Exit with error if name collision
+  - [x] Handle write errors gracefully
+- [x] Add tests for source mode
 
 **Full Workflow:**
 ```bash
@@ -244,6 +255,93 @@ lazytail
 - [ ] Memory-only mode with streaming (no file)
 - [ ] Merged chronological view across sources
 - [ ] Filter across all tabs simultaneously
+
+---
+
+#### Phase 5: Query Language (LogQL-style)
+**Goal:** Pipeline-based query language for advanced filtering and field extraction
+
+**Syntax:**
+```bash
+# Simple field filtering
+json | level == "error"
+json | status >= 500
+
+# Chained filters
+json | level =~ "error|fatal" | service == "api"
+
+# Different parsers
+logfmt | env == "production"
+pattern "<ip> - <method> <path> <status>" | status >= 400
+
+# Output formatting (future)
+json | level == "error" | line_format "{{.timestamp}} {{.message}}"
+```
+
+**Pipeline Stages:**
+| Stage | Description | Example |
+|-------|-------------|---------|
+| `json` | Parse line as JSON, extract fields | `json \| level == "error"` |
+| `logfmt` | Parse key=value format | `logfmt \| env == "prod"` |
+| `pattern` | Extract fields via pattern | `pattern "<ip> <method>"` |
+| `regex` | Extract named capture groups | `regex "(?P<code>\\d{3})"` |
+
+**Operators:**
+| Operator | Description |
+|----------|-------------|
+| `==`, `!=` | Equality |
+| `=~`, `!~` | Regex match |
+| `>`, `<`, `>=`, `<=` | Numeric comparison |
+| `contains` | Substring match |
+
+**Grammar:**
+```
+query     = stage ("|" stage)*
+stage     = parser | filter
+parser    = "json" | "logfmt" | pattern_expr | regex_expr
+filter    = field operator value
+operator  = "==" | "!=" | "=~" | "!~" | ">" | "<" | ">=" | "<="
+field     = identifier ("." identifier)*
+value     = string | number | regex
+```
+
+**Implementation Approach:**
+- Hand-written recursive descent parser (no external parser library)
+- Lexer → Parser → AST → Evaluator
+- Leverage existing `serde_json` for JSON parsing
+- Leverage existing `regex` crate for pattern matching
+
+**Tasks:**
+- [ ] Query language design
+  - [ ] Finalize grammar and syntax
+  - [ ] Document supported operators and stages
+- [ ] Lexer implementation
+  - [ ] Tokenize input string
+  - [ ] Handle strings, numbers, identifiers, operators
+- [ ] Parser implementation
+  - [ ] Recursive descent parser
+  - [ ] Build AST from tokens
+  - [ ] Error handling with position info
+- [ ] AST evaluation
+  - [ ] JSON field extraction
+  - [ ] Logfmt field extraction
+  - [ ] Pattern/regex field extraction
+  - [ ] Filter evaluation against extracted fields
+- [ ] UI integration
+  - [ ] Detect query mode (starts with parser stage)
+  - [ ] Syntax highlighting in filter input (future)
+  - [ ] Error display for invalid queries
+- [ ] Tests
+  - [ ] Lexer unit tests
+  - [ ] Parser unit tests
+  - [ ] Evaluation tests with sample log lines
+  - [ ] Integration tests
+
+**Phased Rollout:**
+1. **v1**: `json | field == "value"` - basic JSON filtering
+2. **v2**: Add `logfmt`, numeric operators, regex match (`=~`)
+3. **v3**: Add `pattern` extraction, nested field access (`user.id`)
+4. **v4**: Add `line_format` output formatting
 
 ---
 
@@ -697,12 +795,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Stats panel (line counts)
 - Persistent filter history to disk
 
-### v0.4.0 (Next)
+### v0.4.0 ✅ (Complete)
 **Focus: Source Discovery & Capture**
 - Auto-discover sources from `~/.config/lazytail/data/`
 - Source capture mode: `cmd | lazytail -n "Name"`
 - Active/ended status indicators
 - Dynamic tab creation for new sources
+- Close tab keybinding (`x` / `Ctrl+W`)
 
 ### v0.5.0 (Future)
 **Focus: Search & Highlighting**
@@ -714,6 +813,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - JSON log parsing and formatted view in expanded entries
 - Timestamp parsing and time-based filtering
 - Severity detection and filtering
+
+### v0.7.0 (Future)
+**Focus: Query Language**
+- Pipeline-based query syntax: `json | field == "value"`
+- JSON and logfmt field extraction
+- Pattern-based field extraction
+- Comparison and regex operators
 
 ### v1.0.0 (Future)
 **Focus: Feature Complete & Stable**

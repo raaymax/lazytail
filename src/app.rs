@@ -1,5 +1,6 @@
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
+use crate::source::{self, SourceStatus};
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -160,6 +161,48 @@ impl App {
     /// Get the number of tabs
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
+    }
+
+    /// Add a new tab
+    pub fn add_tab(&mut self, tab: TabState) {
+        self.tabs.push(tab);
+    }
+
+    /// Close a tab by index
+    ///
+    /// If the last tab is closed, sets should_quit to true.
+    /// If the tab is a discovered source with Ended status, deletes the source file.
+    pub fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 {
+            // Don't close the last tab - quit instead
+            self.should_quit = true;
+            return;
+        }
+
+        if index < self.tabs.len() {
+            let tab = &self.tabs[index];
+
+            // If this is an ended discovered source, delete it
+            if tab.source_status == Some(SourceStatus::Ended) {
+                if let Some(ref path) = tab.source_path {
+                    let _ = source::delete_source(&tab.name, path);
+                }
+            }
+
+            self.tabs.remove(index);
+
+            // Adjust active_tab if needed
+            if self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            } else if self.active_tab > index {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    /// Close the currently active tab
+    pub fn close_active_tab(&mut self) {
+        self.close_tab(self.active_tab);
     }
 
     // === Delegated methods for backward compatibility ===
@@ -563,6 +606,7 @@ impl App {
             AppEvent::NextTab => self.next_tab(),
             AppEvent::PrevTab => self.prev_tab(),
             AppEvent::SelectTab(index) => self.select_tab(index),
+            AppEvent::CloseCurrentTab => self.close_active_tab(),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),

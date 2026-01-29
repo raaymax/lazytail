@@ -1,10 +1,13 @@
 mod app;
 mod cache;
+mod capture;
+mod dir_watcher;
 mod event;
 mod filter;
 mod handlers;
 mod history;
 mod reader;
+mod source;
 mod tab;
 mod ui;
 mod viewport;
@@ -38,15 +41,45 @@ const FILTER_DEBOUNCE_MS: u64 = 500;
 
 #[derive(Parser, Debug)]
 #[command(name = "lazytail")]
-#[command(about = "A universal terminal-based log viewer with filtering support", long_about = None)]
+#[command(version)]
+#[command(about = "A fast terminal-based log viewer with live filtering")]
+#[command(
+    long_about = "A fast terminal-based log viewer with live filtering, regex support, \
+and multi-tab interface. Supports file watching, stdin piping, and source capture."
+)]
+#[command(after_help = "\
+EXAMPLES:
+    lazytail app.log                    View a single log file
+    lazytail app.log error.log          View multiple files in tabs
+    kubectl logs pod | lazytail         Pipe logs from any command
+    lazytail                            Discover sources from ~/.config/lazytail/data/
+
+CAPTURE MODE:
+    cmd | lazytail -n \"API\"             Capture stdin to ~/.config/lazytail/data/API.log
+                                        (tee-like: writes to file AND echoes to stdout)
+
+    Then in another terminal:
+    lazytail                            View all captured sources with live updates
+
+IN-APP HELP:
+    Press '?' inside the app to see all keyboard shortcuts.
+    Press '/' to start filtering, 'f' to toggle follow mode.
+")]
 struct Args {
-    /// Log files to view (multiple files will open in tabs, use - for stdin)
+    /// Log files to view (omit for source discovery mode)
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
-    /// Disable file watching
+    /// Disable file watching (files won't auto-reload on changes)
     #[arg(long = "no-watch")]
     no_watch: bool,
+
+    /// Capture stdin to a named source file (tee-like behavior)
+    ///
+    /// Writes stdin to ~/.config/lazytail/data/<NAME>.log while echoing to stdout.
+    /// The source can then be viewed with 'lazytail' (discovery mode).
+    #[arg(short = 'n', long = "name", value_name = "NAME")]
+    name: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -54,15 +87,23 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Auto-detect stdin: if nothing is piped and no files given, show usage
+    // Auto-detect stdin: if nothing is piped and no files given, check for other modes
     let stdin_is_tty = std::io::stdin().is_terminal();
     let has_piped_input = !stdin_is_tty;
 
+    // Mode 1: Capture mode (-n flag with stdin)
+    if let Some(name) = args.name {
+        if stdin_is_tty {
+            eprintln!("Error: Capture mode (-n) requires stdin input");
+            eprintln!("Usage: command | lazytail -n <NAME>");
+            std::process::exit(1);
+        }
+        return capture::run_capture_mode(name);
+    }
+
+    // Mode 2: Discovery mode (no files, no stdin)
     if args.files.is_empty() && !has_piped_input {
-        eprintln!("Usage: lazytail <FILE>...");
-        eprintln!("       command | lazytail");
-        eprintln!("       lazytail -  (explicit stdin)");
-        std::process::exit(1);
+        return run_discovery_mode(args.no_watch);
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -103,6 +144,74 @@ fn main() -> Result<()> {
 
     // Main loop
     let res = run_app(&mut terminal, &mut app);
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = res {
+        eprintln!("Error: {:?}", err);
+    }
+
+    Ok(())
+}
+
+/// Run in discovery mode: auto-discover sources from ~/.config/lazytail/data/
+fn run_discovery_mode(no_watch: bool) -> Result<()> {
+    use source::{discover_sources, ensure_directories};
+
+    // Ensure config directories exist
+    ensure_directories()?;
+
+    // Discover existing sources
+    let sources = discover_sources()?;
+
+    if sources.is_empty() {
+        eprintln!("No log sources found in ~/.config/lazytail/data/");
+        eprintln!();
+        eprintln!("To create sources, use capture mode:");
+        eprintln!("  command | lazytail -n <NAME>");
+        eprintln!();
+        eprintln!("Or specify files directly:");
+        eprintln!("  lazytail <FILE>...");
+        std::process::exit(0);
+    }
+
+    // Create tabs from discovered sources
+    let watch = !no_watch;
+    let tabs: Vec<tab::TabState> = sources
+        .into_iter()
+        .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
+        .collect();
+
+    if tabs.is_empty() {
+        eprintln!("Failed to open any log sources");
+        std::process::exit(1);
+    }
+
+    let mut app = App::with_tabs(tabs);
+
+    // Optionally set up directory watcher for new sources
+    let dir_watcher = if watch {
+        source::data_dir().and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
+    } else {
+        None
+    };
+
+    // Setup terminal
+    enable_raw_mode().context("Failed to enable raw mode")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Main loop with directory watcher
+    let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -222,6 +331,15 @@ fn trigger_filter(
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+    run_app_with_discovery(terminal, app, None)
+}
+
+/// Run the app with optional directory watcher for source discovery mode
+fn run_app_with_discovery<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    dir_watcher: Option<dir_watcher::DirectoryWatcher>,
+) -> Result<()> {
     use event::AppEvent;
 
     loop {
@@ -233,6 +351,45 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
             if Instant::now() >= trigger_at {
                 app.pending_filter_at = None;
                 trigger_live_filter_preview(app);
+            }
+        }
+
+        // Phase 2.5: Refresh source status for discovered sources
+        for tab in &mut app.tabs {
+            tab.refresh_source_status();
+        }
+
+        // Phase 2.6: Check for new sources from directory watcher
+        if let Some(ref watcher) = dir_watcher {
+            while let Some(dir_event) = watcher.try_recv() {
+                match dir_event {
+                    dir_watcher::DirEvent::NewFile(path) => {
+                        // Check if we already have this file open
+                        let already_open = app
+                            .tabs
+                            .iter()
+                            .any(|t| t.source_path.as_ref() == Some(&path));
+                        if !already_open {
+                            // Extract name from path
+                            if let Some(stem) = path.file_stem() {
+                                let name = stem.to_string_lossy().to_string();
+                                let status = source::check_source_status(&name);
+                                let source = source::DiscoveredSource {
+                                    name,
+                                    log_path: path,
+                                    status,
+                                };
+                                if let Ok(tab) = tab::TabState::from_discovered_source(source, true)
+                                {
+                                    app.add_tab(tab);
+                                }
+                            }
+                        }
+                    }
+                    dir_watcher::DirEvent::FileRemoved(_path) => {
+                        // Optionally handle file removal (don't close tab, just mark as unavailable)
+                    }
+                }
             }
         }
 

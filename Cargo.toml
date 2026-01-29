@@ -25,6 +25,10 @@ memmap2 = "0.9"
 memchr = "2"
 lru = "0.12"
 rayon = "1.10"
+signal-hook = "0.3"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.0"

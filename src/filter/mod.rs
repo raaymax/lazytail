@@ -1,5 +1,6 @@
 pub mod cancel;
 pub mod engine;
+#[allow(dead_code)]
 pub mod parallel_engine;
 pub mod regex_filter;
 pub mod streaming_filter;

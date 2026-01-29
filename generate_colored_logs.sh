@@ -2,8 +2,6 @@
 
 # Script to generate random colored log lines for testing
 
-LOG_FILE="${1:-live_test_colored.log}"
-
 # ANSI color codes
 COLOR_RESET="\033[0m"
 COLOR_RED="\033[0;31m"
@@ -68,12 +66,9 @@ ERROR_MESSAGES=(
     "Service unavailable"
 )
 
-echo "Generating colored logs to $LOG_FILE (Ctrl+C to stop)..."
-echo "You can run: cargo run --release -- $LOG_FILE"
+echo "Generating colored logs to STDOUT (Ctrl+C to stop)..."
 echo ""
 
-# Clear the log file
-> "$LOG_FILE"
 
 COUNTER=0
 
@@ -104,11 +99,7 @@ while true; do
     COLORED_MESSAGE="${COLOR_WHITE}${MESSAGE}${COLOR_RESET}"
 
     # Write colored log line
-    echo -e "$COLORED_TIMESTAMP $COLORED_LEVEL $COLORED_MESSAGE" >> "$LOG_FILE"
-
-    COUNTER=$((COUNTER + 1))
-    # Also print to terminal with colors
-    echo -e "[$COUNTER] $COLORED_TIMESTAMP $COLORED_LEVEL $COLORED_MESSAGE"
+    echo -e "$COLORED_TIMESTAMP $COLORED_LEVEL $COLORED_MESSAGE"
 
     # Sleep for 1 second
     sleep 0.1
