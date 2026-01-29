@@ -486,6 +486,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "libc",
  "lru",
  "memchr",
  "memmap2",

@@ -11,6 +11,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_os = "linux"))]
+use libc;
+
 /// Status of a discovered source
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceStatus {
@@ -55,8 +58,19 @@ pub fn ensure_directories() -> Result<()> {
 /// Check if a process with the given PID is running.
 ///
 /// On Linux, checks if /proc/<pid>/ exists.
+/// On macOS/BSD, uses kill(pid, 0) to check process existence.
 pub fn is_pid_running(pid: u32) -> bool {
-    Path::new(&format!("/proc/{}", pid)).exists()
+    #[cfg(target_os = "linux")]
+    {
+        Path::new(&format!("/proc/{}", pid)).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On macOS/BSD, use kill(pid, 0) - returns 0 if process exists
+        // SAFETY: kill with signal 0 doesn't actually send a signal,
+        // it just checks if the process exists and we have permission
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
 }
 
 /// Read the PID from a marker file.
