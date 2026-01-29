@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.3.0)
+## Current Status (v0.4.0)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -37,6 +37,13 @@ This is a local planning document for upcoming features and improvements.
 - Filter progress percentage display
 - Streaming filter with SIMD search (memmem) for better performance
 - Grep-style search for case-sensitive patterns
+
+**v0.4.0 Features:**
+- Source discovery mode (`lazytail` with no args)
+- Source capture mode (`cmd | lazytail -n "Name"`)
+- Active/ended status indicators for discovered sources
+- Directory watcher for dynamic tab creation
+- Close tab keybinding (`x` / `Ctrl+W`)
 
 ---
 
@@ -248,6 +255,93 @@ lazytail
 - [ ] Memory-only mode with streaming (no file)
 - [ ] Merged chronological view across sources
 - [ ] Filter across all tabs simultaneously
+
+---
+
+#### Phase 5: Query Language (LogQL-style)
+**Goal:** Pipeline-based query language for advanced filtering and field extraction
+
+**Syntax:**
+```bash
+# Simple field filtering
+json | level == "error"
+json | status >= 500
+
+# Chained filters
+json | level =~ "error|fatal" | service == "api"
+
+# Different parsers
+logfmt | env == "production"
+pattern "<ip> - <method> <path> <status>" | status >= 400
+
+# Output formatting (future)
+json | level == "error" | line_format "{{.timestamp}} {{.message}}"
+```
+
+**Pipeline Stages:**
+| Stage | Description | Example |
+|-------|-------------|---------|
+| `json` | Parse line as JSON, extract fields | `json \| level == "error"` |
+| `logfmt` | Parse key=value format | `logfmt \| env == "prod"` |
+| `pattern` | Extract fields via pattern | `pattern "<ip> <method>"` |
+| `regex` | Extract named capture groups | `regex "(?P<code>\\d{3})"` |
+
+**Operators:**
+| Operator | Description |
+|----------|-------------|
+| `==`, `!=` | Equality |
+| `=~`, `!~` | Regex match |
+| `>`, `<`, `>=`, `<=` | Numeric comparison |
+| `contains` | Substring match |
+
+**Grammar:**
+```
+query     = stage ("|" stage)*
+stage     = parser | filter
+parser    = "json" | "logfmt" | pattern_expr | regex_expr
+filter    = field operator value
+operator  = "==" | "!=" | "=~" | "!~" | ">" | "<" | ">=" | "<="
+field     = identifier ("." identifier)*
+value     = string | number | regex
+```
+
+**Implementation Approach:**
+- Hand-written recursive descent parser (no external parser library)
+- Lexer → Parser → AST → Evaluator
+- Leverage existing `serde_json` for JSON parsing
+- Leverage existing `regex` crate for pattern matching
+
+**Tasks:**
+- [ ] Query language design
+  - [ ] Finalize grammar and syntax
+  - [ ] Document supported operators and stages
+- [ ] Lexer implementation
+  - [ ] Tokenize input string
+  - [ ] Handle strings, numbers, identifiers, operators
+- [ ] Parser implementation
+  - [ ] Recursive descent parser
+  - [ ] Build AST from tokens
+  - [ ] Error handling with position info
+- [ ] AST evaluation
+  - [ ] JSON field extraction
+  - [ ] Logfmt field extraction
+  - [ ] Pattern/regex field extraction
+  - [ ] Filter evaluation against extracted fields
+- [ ] UI integration
+  - [ ] Detect query mode (starts with parser stage)
+  - [ ] Syntax highlighting in filter input (future)
+  - [ ] Error display for invalid queries
+- [ ] Tests
+  - [ ] Lexer unit tests
+  - [ ] Parser unit tests
+  - [ ] Evaluation tests with sample log lines
+  - [ ] Integration tests
+
+**Phased Rollout:**
+1. **v1**: `json | field == "value"` - basic JSON filtering
+2. **v2**: Add `logfmt`, numeric operators, regex match (`=~`)
+3. **v3**: Add `pattern` extraction, nested field access (`user.id`)
+4. **v4**: Add `line_format` output formatting
 
 ---
 
@@ -701,7 +795,7 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Stats panel (line counts)
 - Persistent filter history to disk
 
-### v0.4.0 ✅ (In Progress)
+### v0.4.0 ✅ (Complete)
 **Focus: Source Discovery & Capture**
 - Auto-discover sources from `~/.config/lazytail/data/`
 - Source capture mode: `cmd | lazytail -n "Name"`
@@ -719,6 +813,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - JSON log parsing and formatted view in expanded entries
 - Timestamp parsing and time-based filtering
 - Severity detection and filtering
+
+### v0.7.0 (Future)
+**Focus: Query Language**
+- Pipeline-based query syntax: `json | field == "value"`
+- JSON and logfmt field extraction
+- Pattern-based field extraction
+- Comparison and regex operators
 
 ### v1.0.0 (Future)
 **Focus: Feature Complete & Stable**
