@@ -183,6 +183,7 @@ Options:
       --no-watch           Disable file watching
       --mcp                Run as MCP server for AI assistants
   -h, --help               Print help
+  -V, --version            Print version
 ```
 
 ### Source Discovery Mode
