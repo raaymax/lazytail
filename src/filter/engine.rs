@@ -17,8 +17,11 @@ pub enum FilterProgress {
         matches: Vec<usize>,
         lines_processed: usize,
     },
-    /// Filtering complete (final matching line indices)
-    Complete(Vec<usize>),
+    /// Filtering complete (final matching line indices and total lines processed)
+    Complete {
+        matches: Vec<usize>,
+        lines_processed: usize,
+    },
     /// Error occurred
     Error(String),
 }
@@ -228,7 +231,10 @@ impl FilterEngine {
         let range_size = end.saturating_sub(start_line);
 
         if range_size == 0 {
-            tx.send(FilterProgress::Complete(vec![]))?;
+            tx.send(FilterProgress::Complete {
+                matches: vec![],
+                lines_processed: 0,
+            })?;
             return Ok(());
         }
 
@@ -283,7 +289,10 @@ impl FilterEngine {
 
         // Sort all matches and send final complete message
         all_matches.sort_unstable();
-        tx.send(FilterProgress::Complete(all_matches))?;
+        tx.send(FilterProgress::Complete {
+            matches: all_matches,
+            lines_processed: range_size,
+        })?;
 
         Ok(())
     }
@@ -321,7 +330,10 @@ impl FilterEngine {
         let range_size = end.saturating_sub(start_line);
 
         if range_size == 0 {
-            tx.send(FilterProgress::Complete(vec![]))?;
+            tx.send(FilterProgress::Complete {
+                matches: vec![],
+                lines_processed: 0,
+            })?;
             return Ok(());
         }
 
@@ -383,7 +395,10 @@ impl FilterEngine {
         }
 
         all_matches.sort_unstable();
-        tx.send(FilterProgress::Complete(all_matches))?;
+        tx.send(FilterProgress::Complete {
+            matches: all_matches,
+            lines_processed: range_size,
+        })?;
 
         Ok(())
     }
@@ -437,7 +452,10 @@ mod tests {
         // Collect all progress updates
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -462,7 +480,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -487,7 +508,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -508,7 +532,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -546,7 +573,9 @@ mod tests {
                 FilterProgress::PartialResults { .. } => {
                     // Partial results are fine, just continue
                 }
-                FilterProgress::Complete(indices) => {
+                FilterProgress::Complete {
+                    matches: indices, ..
+                } => {
                     final_result = Some(indices);
                     break;
                 }
@@ -581,7 +610,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -612,7 +644,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -637,7 +672,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -667,7 +705,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }

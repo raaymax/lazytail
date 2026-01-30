@@ -122,7 +122,10 @@ impl ParallelFilterEngine {
 
         // Check cancellation before starting
         if cancel.is_cancelled() {
-            tx.send(FilterProgress::Complete(vec![]))?;
+            tx.send(FilterProgress::Complete {
+                matches: vec![],
+                lines_processed: 0,
+            })?;
             return Ok(());
         }
 
@@ -169,7 +172,10 @@ impl ParallelFilterEngine {
         }
 
         drop(reader_guard);
-        tx.send(FilterProgress::Complete(matching_indices))?;
+        tx.send(FilterProgress::Complete {
+            matches: matching_indices,
+            lines_processed: end - start,
+        })?;
         Ok(())
     }
 
@@ -216,7 +222,10 @@ impl ParallelFilterEngine {
         };
 
         if cancel.is_cancelled() {
-            tx.send(FilterProgress::Complete(vec![]))?;
+            tx.send(FilterProgress::Complete {
+                matches: vec![],
+                lines_processed: 0,
+            })?;
             return Ok(());
         }
 
@@ -250,7 +259,10 @@ impl ParallelFilterEngine {
         // Flatten results (they're already in order because par_chunks preserves order)
         let matching_indices: Vec<usize> = chunk_results.into_iter().flatten().collect();
 
-        tx.send(FilterProgress::Complete(matching_indices))?;
+        tx.send(FilterProgress::Complete {
+            matches: matching_indices,
+            lines_processed: end - start,
+        })?;
         Ok(())
     }
 }
@@ -305,7 +317,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -327,7 +342,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -352,7 +370,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -385,7 +406,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -408,7 +432,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -430,7 +457,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
@@ -458,7 +488,10 @@ mod tests {
 
         let mut final_result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 final_result = Some(indices);
                 break;
             }
