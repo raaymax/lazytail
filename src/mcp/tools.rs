@@ -4,7 +4,6 @@ use super::types::*;
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
-use rmcp::handler::server::tool::Parameters;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
 use std::sync::Arc;
@@ -31,7 +30,7 @@ impl LazyTailMcp {
     #[tool(
         description = "Fetch lines from a log file. Returns up to 1000 lines starting from a given position."
     )]
-    fn get_lines(&self, Parameters(req): Parameters<GetLinesRequest>) -> String {
+    fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
         let count = req.count.min(1000);
 
         let reader_result = FileReader::new(&req.file);
@@ -66,11 +65,52 @@ impl LazyTailMcp {
             .unwrap_or_else(|e| format!("Error serializing response: {}", e))
     }
 
+    /// Fetch the last N lines from a log file.
+    #[tool(
+        description = "Fetch the last N lines from a log file. Useful for checking recent activity."
+    )]
+    fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
+        let count = req.count.min(1000);
+
+        let reader_result = FileReader::new(&req.file);
+        let mut reader = match reader_result {
+            Ok(r) => r,
+            Err(e) => {
+                return serde_json::to_string(&serde_json::json!({
+                    "error": format!("Failed to open file '{}': {}", req.file.display(), e)
+                }))
+                .unwrap_or_else(|_| "Error serializing response".to_string());
+            }
+        };
+
+        let total = reader.total_lines();
+        let start = total.saturating_sub(count);
+
+        let mut lines = Vec::new();
+        for i in start..total {
+            if let Ok(Some(content)) = reader.get_line(i) {
+                lines.push(LineInfo {
+                    line_number: i,
+                    content,
+                });
+            }
+        }
+
+        let response = GetLinesResponse {
+            lines,
+            total_lines: total,
+            has_more: start > 0,
+        };
+
+        serde_json::to_string_pretty(&response)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+    }
+
     /// Search for patterns in a log file using plain text or regex.
     #[tool(
         description = "Search for patterns in a log file using plain text or regex. Returns matching lines with optional context."
     )]
-    fn search(&self, Parameters(req): Parameters<SearchRequest>) -> String {
+    fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
         let max_results = req.max_results.min(1000);
         let context_lines = req.context_lines.min(50);
 
@@ -163,7 +203,7 @@ impl LazyTailMcp {
 
     /// Get context lines around a specific line number in a log file.
     #[tool(description = "Get context lines around a specific line number in a log file.")]
-    fn get_context(&self, Parameters(req): Parameters<GetContextRequest>) -> String {
+    fn get_context(&self, #[tool(aggr)] req: GetContextRequest) -> String {
         let before_count = req.before.min(50);
         let after_count = req.after.min(50);
 
@@ -241,7 +281,7 @@ impl LazyTailMcp {
     #[tool(
         description = "List available log sources from ~/.config/lazytail/data/. Shows captured sources with their status (active/ended)."
     )]
-    fn list_sources(&self, Parameters(_req): Parameters<ListSourcesRequest>) -> String {
+    fn list_sources(&self, #[tool(aggr)] _req: ListSourcesRequest) -> String {
         let data_dir = match source::data_dir() {
             Some(dir) => dir,
             None => {
@@ -299,6 +339,7 @@ impl LazyTailMcp {
 // Generate the tool_box function
 tool_box!(LazyTailMcp {
     get_lines,
+    get_tail,
     search,
     get_context,
     list_sources
@@ -315,8 +356,8 @@ impl ServerHandler for LazyTailMcp {
             instructions: Some(
                 "LazyTail MCP server for log file analysis. \
                  Use list_sources to discover available logs, \
-                 get_lines to read file contents, search to find patterns, \
-                 and get_context to explore surrounding lines."
+                 get_lines to read file contents, get_tail to read recent lines, \
+                 search to find patterns, and get_context to explore surrounding lines."
                     .into(),
             ),
             ..Default::default()

@@ -109,6 +109,16 @@ pub struct SearchMatch {
     pub after: Vec<String>,
 }
 
+/// Request to fetch the last N lines from a log file.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetTailRequest {
+    /// Path to the log file
+    pub file: PathBuf,
+    /// Number of lines to fetch from the end (default 100, max 1000)
+    #[serde(default = "default_count")]
+    pub count: usize,
+}
+
 /// Request to get context around a specific line.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetContextRequest {
