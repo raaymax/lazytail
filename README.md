@@ -54,12 +54,12 @@ cargo build --release --features mcp
 <summary><b>Claude Code Setup</b></summary>
 
 ```bash
-claude mcp add lazytail -- /path/to/lazytail --mcp
+claude mcp add lazytail -- lazytail --mcp
 ```
 
 Or with scope for all projects:
 ```bash
-claude mcp add lazytail --scope user -- /path/to/lazytail --mcp
+claude mcp add lazytail --scope user -- lazytail --mcp
 ```
 
 Verify with `claude mcp list` or `/mcp` command inside Claude Code.
@@ -73,7 +73,7 @@ Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.lazytail]
-command = ["/path/to/lazytail", "--mcp"]
+command = ["lazytail", "--mcp"]
 ```
 
 Verify with `codex mcp` or `/mcp` command inside Codex.
@@ -84,7 +84,7 @@ Verify with `codex mcp` or `/mcp` command inside Codex.
 <summary><b>Gemini CLI Setup</b></summary>
 
 ```bash
-gemini mcp add lazytail -- /path/to/lazytail --mcp
+gemini mcp add lazytail -- lazytail --mcp
 ```
 
 Or add to `~/.gemini/settings.json`:
@@ -93,7 +93,7 @@ Or add to `~/.gemini/settings.json`:
 {
   "mcpServers": {
     "lazytail": {
-      "command": "/path/to/lazytail",
+      "command": "lazytail",
       "args": ["--mcp"]
     }
   }
