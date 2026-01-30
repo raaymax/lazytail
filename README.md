@@ -1,8 +1,99 @@
 # LazyTail - Terminal-Based Log Viewer
 
-A fast, universal terminal-based log viewer with live filtering and follow mode. Works with any text log files from applications, services, containers, or systems.
+A fast, universal terminal-based log viewer with live filtering, follow mode, and **AI assistant integration via MCP**.
 
 ![LazyTail Screenshot](screenshot.png)
+
+## AI Assistant Integration (MCP)
+
+LazyTail works as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, letting AI assistants like **Claude**, **Codex**, and **Gemini** search and analyze your log files.
+
+```bash
+# Build with MCP support
+cargo build --release --features mcp
+```
+
+<details>
+<summary><b>Claude Code Setup</b></summary>
+
+```bash
+claude mcp add lazytail -- /path/to/lazytail --mcp
+```
+
+Or with scope for all projects:
+```bash
+claude mcp add lazytail --scope user -- /path/to/lazytail --mcp
+```
+
+Verify with `claude mcp list` or `/mcp` command inside Claude Code.
+
+</details>
+
+<details>
+<summary><b>OpenAI Codex Setup</b></summary>
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.lazytail]
+command = ["/path/to/lazytail", "--mcp"]
+```
+
+Verify with `codex mcp` or `/mcp` command inside Codex.
+
+</details>
+
+<details>
+<summary><b>Gemini CLI Setup</b></summary>
+
+```bash
+gemini mcp add lazytail -- /path/to/lazytail --mcp
+```
+
+Or add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "lazytail": {
+      "command": "/path/to/lazytail",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+Verify with `/mcp` command inside Gemini CLI.
+
+</details>
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_sources` | Discover available logs from `~/.config/lazytail/data/` |
+| `search` | Find patterns (plain text or regex) with optional context lines |
+| `get_tail` | Get the last N lines from a log file |
+| `get_lines` | Read lines from a specific position |
+| `get_context` | Get lines surrounding a specific line number |
+
+### What You Can Ask Your AI
+
+Once configured, ask your AI assistant:
+
+- *"What errors are in the API logs?"*
+- *"Search for 'connection refused' in all logs"*
+- *"Show me the last 100 lines of the worker log"*
+- *"What happened around line 1234?"*
+
+### Capture Logs for AI Analysis
+
+```bash
+# Capture your application logs
+kubectl logs -f my-pod | lazytail -n "MyApp"
+
+# Now your AI can discover and search "MyApp" logs via MCP
+```
 
 ## Features
 
@@ -95,6 +186,7 @@ lazytail [OPTIONS] [FILES]...
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
+      --mcp                Run as MCP server (requires mcp feature)
   -h, --help               Print help
 ```
 

@@ -30,9 +30,9 @@ impl Default for LazyTailMcp {
 
 #[tool(tool_box)]
 impl LazyTailMcp {
-    /// Fetch lines from a log file. Returns up to 1000 lines starting from a given position.
+    /// Fetch lines from a log file starting from a specific position.
     #[tool(
-        description = "Fetch lines from a log file. Returns up to 1000 lines starting from a given position."
+        description = "Fetch lines from a log file. Returns up to 1000 lines starting from a given position. Use this to read specific sections of a log file. For recent lines, prefer get_tail instead."
     )]
     fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
         let count = req.count.min(1000);
@@ -71,7 +71,7 @@ impl LazyTailMcp {
 
     /// Fetch the last N lines from a log file.
     #[tool(
-        description = "Fetch the last N lines from a log file. Useful for checking recent activity."
+        description = "Fetch the last N lines from a log file. Useful for checking recent activity. Returns up to 1000 lines from the end of the file."
     )]
     fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
         let count = req.count.min(1000);
@@ -112,7 +112,7 @@ impl LazyTailMcp {
 
     /// Search for patterns in a log file using plain text or regex.
     #[tool(
-        description = "Search for patterns in a log file using plain text or regex. Returns matching lines with optional context."
+        description = "Search for patterns in a log file. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000)."
     )]
     fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
         let max_results = req.max_results.min(1000);
@@ -300,7 +300,9 @@ impl LazyTailMcp {
     }
 
     /// Get context lines around a specific line number in a log file.
-    #[tool(description = "Get context lines around a specific line number in a log file.")]
+    #[tool(
+        description = "Get context lines around a specific line number in a log file. Useful for exploring what happened before and after a specific log entry. Returns the target line plus configurable lines before (default 5) and after (default 5)."
+    )]
     fn get_context(&self, #[tool(aggr)] req: GetContextRequest) -> String {
         let before_count = req.before.min(50);
         let after_count = req.after.min(50);
@@ -377,7 +379,7 @@ impl LazyTailMcp {
 
     /// List available log sources from the LazyTail data directory.
     #[tool(
-        description = "List available log sources from ~/.config/lazytail/data/. Shows captured sources with their status (active/ended)."
+        description = "List available log sources from ~/.config/lazytail/data/. Shows captured sources with their status (active if being written to, ended otherwise), file paths, and sizes. Use this first to discover what logs are available before searching."
     )]
     fn list_sources(&self, #[tool(aggr)] _req: ListSourcesRequest) -> String {
         let data_dir = match source::data_dir() {
@@ -453,9 +455,10 @@ impl ServerHandler for LazyTailMcp {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "LazyTail MCP server for log file analysis. \
-                 Use list_sources to discover available logs, \
-                 get_lines to read file contents, get_tail to read recent lines, \
-                 search to find patterns, and get_context to explore surrounding lines."
+                 Start with list_sources to discover available logs and their paths. \
+                 Use search to find patterns (supports regex), get_tail for recent activity, \
+                 get_lines to read specific sections, and get_context to explore around a line number. \
+                 Log sources are captured via 'cmd | lazytail -n NAME' and stored in ~/.config/lazytail/data/."
                     .into(),
             ),
             ..Default::default()
