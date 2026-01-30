@@ -952,7 +952,7 @@ Source Discovery & Capture:
 MCP Server Support:
 - MCP (Model Context Protocol) server via `--mcp` flag
 - Tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
-- Feature-gated build: `cargo build --features mcp`
+- MCP enabled by default in all builds
 - Streaming filter for grep-like performance on large files
 - Tested on 5GB+ log files
 
