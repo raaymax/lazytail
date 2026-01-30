@@ -3,6 +3,7 @@
 use super::types::*;
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
 use crate::reader::{file_reader::FileReader, LogReader};
+use crate::source;
 use rmcp::handler::server::tool::Parameters;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
@@ -235,13 +236,72 @@ impl LazyTailMcp {
         serde_json::to_string_pretty(&response)
             .unwrap_or_else(|e| format!("Error serializing response: {}", e))
     }
+
+    /// List available log sources from the LazyTail data directory.
+    #[tool(
+        description = "List available log sources from ~/.config/lazytail/data/. Shows captured sources with their status (active/ended)."
+    )]
+    fn list_sources(&self, Parameters(_req): Parameters<ListSourcesRequest>) -> String {
+        let data_dir = match source::data_dir() {
+            Some(dir) => dir,
+            None => {
+                return serde_json::to_string(&serde_json::json!({
+                    "error": "Could not determine data directory"
+                }))
+                .unwrap_or_else(|_| "Error serializing response".to_string());
+            }
+        };
+
+        // Get discovered sources
+        let discovered = match source::discover_sources() {
+            Ok(sources) => sources,
+            Err(e) => {
+                return serde_json::to_string(&serde_json::json!({
+                    "error": format!("Failed to discover sources: {}", e),
+                    "data_directory": data_dir.display().to_string()
+                }))
+                .unwrap_or_else(|_| "Error serializing response".to_string());
+            }
+        };
+
+        let mut sources = Vec::new();
+
+        for ds in discovered {
+            // Map source status
+            let status = match ds.status {
+                source::SourceStatus::Active => SourceStatus::Active,
+                source::SourceStatus::Ended => SourceStatus::Ended,
+            };
+
+            // Get file size
+            let size_bytes = std::fs::metadata(&ds.log_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+
+            sources.push(SourceInfo {
+                name: ds.name,
+                path: ds.log_path,
+                status,
+                size_bytes,
+            });
+        }
+
+        let response = ListSourcesResponse {
+            sources,
+            data_directory: data_dir,
+        };
+
+        serde_json::to_string_pretty(&response)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+    }
 }
 
 // Generate the tool_box function
 tool_box!(LazyTailMcp {
     get_lines,
     search,
-    get_context
+    get_context,
+    list_sources
 });
 
 impl ServerHandler for LazyTailMcp {
@@ -254,7 +314,8 @@ impl ServerHandler for LazyTailMcp {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "LazyTail MCP server for log file analysis. \
-                 Use get_lines to read file contents, search to find patterns, \
+                 Use list_sources to discover available logs, \
+                 get_lines to read file contents, search to find patterns, \
                  and get_context to explore surrounding lines."
                     .into(),
             ),

@@ -136,3 +136,39 @@ pub struct GetContextResponse {
     /// Total lines in the file
     pub total_lines: usize,
 }
+
+/// Request to list available sources (no parameters needed).
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ListSourcesRequest {}
+
+/// Response containing available log sources.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListSourcesResponse {
+    /// Available log sources
+    pub sources: Vec<SourceInfo>,
+    /// Path to the data directory
+    pub data_directory: PathBuf,
+}
+
+/// Information about a log source.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SourceInfo {
+    /// Source name (without .log extension)
+    pub name: String,
+    /// Full path to the log file
+    pub path: PathBuf,
+    /// Whether the source is actively being written to
+    pub status: SourceStatus,
+    /// File size in bytes
+    pub size_bytes: u64,
+}
+
+/// Status of a log source.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceStatus {
+    /// Source is actively being written to (capture process running)
+    Active,
+    /// Source capture has ended (file still available)
+    Ended,
+}
