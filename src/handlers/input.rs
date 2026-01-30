@@ -14,6 +14,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
         InputMode::ZPending => handle_z_pending_mode(key),
+        InputMode::SourcePanel => handle_source_panel_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -99,6 +100,23 @@ fn handle_z_pending_mode(key: KeyEvent) -> Vec<AppEvent> {
 }
 
 /// Handle keyboard input in normal navigation mode
+/// Handle keyboard input in source panel focus mode
+fn handle_source_panel_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Tab => vec![AppEvent::UnfocusSourcePanel],
+        KeyCode::Up | KeyCode::Char('k') => vec![AppEvent::SourcePanelUp],
+        KeyCode::Down | KeyCode::Char('j') => vec![AppEvent::SourcePanelDown],
+        KeyCode::Char(' ') => vec![AppEvent::ToggleCategoryExpand],
+        KeyCode::Enter => vec![AppEvent::SelectSource],
+        KeyCode::Char('q') => vec![AppEvent::Quit],
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::Quit]
+        }
+        KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        _ => vec![],
+    }
+}
+
 fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
     match key.code {
         KeyCode::Char('q') => vec![AppEvent::Quit],
@@ -135,9 +153,8 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
-        // Tab navigation
-        KeyCode::Tab => vec![AppEvent::NextTab],
-        KeyCode::BackTab => vec![AppEvent::PrevTab],
+        // Tab toggles source panel focus
+        KeyCode::Tab => vec![AppEvent::FocusSourcePanel],
         // Direct tab selection (1-9)
         KeyCode::Char(c @ '1'..='9') => {
             let index = (c as usize) - ('1' as usize);
@@ -397,19 +414,11 @@ mod tests {
     }
 
     #[test]
-    fn test_next_tab() {
+    fn test_tab_focuses_source_panel() {
         let (app, _file) = create_test_app();
         let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
-        assert_eq!(events, vec![AppEvent::NextTab]);
-    }
-
-    #[test]
-    fn test_prev_tab() {
-        let (app, _file) = create_test_app();
-        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
-        let events = handle_input_event(key, &app);
-        assert_eq!(events, vec![AppEvent::PrevTab]);
+        assert_eq!(events, vec![AppEvent::FocusSourcePanel]);
     }
 
     #[test]
