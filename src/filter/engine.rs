@@ -8,9 +8,9 @@ use std::thread;
 
 /// Filter progress update
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // lines_processed in Complete is only used by MCP feature
 pub enum FilterProgress {
     /// Currently processing (lines processed so far)
-    #[allow(dead_code)]
     Processing(usize),
     /// Partial results found (sent periodically so UI can show matches immediately)
     PartialResults {
