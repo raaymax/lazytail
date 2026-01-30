@@ -45,11 +45,6 @@ cargo install --path .
 
 LazyTail works as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, letting AI assistants like **Claude**, **Codex**, and **Gemini** search and analyze your log files.
 
-```bash
-# Build with MCP support
-cargo build --release --features mcp
-```
-
 <details>
 <summary><b>Claude Code Setup</b></summary>
 
@@ -186,7 +181,7 @@ lazytail [OPTIONS] [FILES]...
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
-      --mcp                Run as MCP server (requires mcp feature)
+      --mcp                Run as MCP server for AI assistants
   -h, --help               Print help
 ```
 
