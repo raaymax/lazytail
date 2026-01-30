@@ -33,7 +33,7 @@ rmcp = { version = "0.1", features = ["server", "transport-io"], optional = true
 schemars = { version = "0.8", optional = true }
 
 [features]
-default = []
+default = ["mcp"]
 mcp = ["dep:tokio", "dep:rmcp", "dep:schemars"]
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
