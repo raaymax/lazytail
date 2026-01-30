@@ -6,6 +6,8 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod reader;
 mod source;
 mod tab;
@@ -80,12 +82,26 @@ struct Args {
     /// The source can then be viewed with 'lazytail' (discovery mode).
     #[arg(short = 'n', long = "name", value_name = "NAME")]
     name: Option<String>,
+
+    /// Run as MCP (Model Context Protocol) server
+    ///
+    /// Starts an MCP server using stdio transport for AI assistant integration.
+    /// Provides tools for reading and searching log files.
+    #[cfg(feature = "mcp")]
+    #[arg(long = "mcp")]
+    mcp: bool,
 }
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
 
     let args = Args::parse();
+
+    // Mode 0: MCP server mode (--mcp flag)
+    #[cfg(feature = "mcp")]
+    if args.mcp {
+        return mcp::run_mcp_server();
+    }
 
     // Auto-detect stdin: if nothing is piped and no files given, check for other modes
     let stdin_is_tty = std::io::stdin().is_terminal();

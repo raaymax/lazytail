@@ -803,6 +803,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Dynamic tab creation for new sources
 - Close tab keybinding (`x` / `Ctrl+W`)
 
+### v0.4.1 ✅ (Complete)
+**Focus: MCP Server Support**
+- MCP (Model Context Protocol) server via `--mcp` flag
+- Tools: `get_lines`, `search`, `get_context`
+- Feature-gated build: `cargo build --features mcp`
+- Reuses existing FileReader and Filter for performance
+
 ### v0.5.0 (Future)
 **Focus: Search & Highlighting**
 - Search highlighting in results
