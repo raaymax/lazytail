@@ -1019,6 +1019,25 @@ Query Language Core (MCP-first):
 - Exclusion patterns (critical for noisy logs)
 
 ### v0.6.0 (Future)
+**Focus: Sidecar Index & Combined Sources**
+
+Sidecar Index (`.log.idx`):
+- Binary index file alongside each captured log
+- Store arrival timestamp + byte offset per line
+- Append to index in real-time during capture
+- Header with validation: file size, mtime, first-4KB hash
+- Auto-rebuild on corruption/truncation detection
+- Enables time-based operations and merging
+
+Combined Source View:
+- Merge multiple sources into single chronological view
+- Use sidecar timestamps for captured sources
+- Parse timestamps from log content for external files
+- Fallback to arrival order for streaming, concatenation for static
+- Source-colored lines or `[SOURCE]` prefix
+- Filter by source: `source:API`
+
+### v0.7.0 (Future)
 **Focus: Query Language - Time & Aggregation**
 - Timestamp field detection and parsing
 - Time range filtering (after/before)
@@ -1026,14 +1045,14 @@ Query Language Core (MCP-first):
 - `top N` limiting
 - Multi-source search tool
 
-### v0.7.0 (Future)
+### v0.8.0 (Future)
 **Focus: Query Language - Text Parser (UI)**
 - Text query syntax: `json | level == "error"`
 - Recursive descent parser
 - UI integration with syntax highlighting
 - Query history with mode persistence
 
-### v0.8.0 (Future)
+### v0.9.0 (Future)
 **Focus: Log Intelligence**
 - `logfmt` and `pattern` parsers
 - Nested field access (`user.id`)
@@ -1043,7 +1062,6 @@ Query Language Core (MCP-first):
 ### v1.0.0 (Future)
 **Focus: Feature Complete & Stable**
 - All core features stable and documented
-- Merged chronological view
 - Performance optimizations
 - Comprehensive test coverage
 
