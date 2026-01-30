@@ -4,6 +4,43 @@ A fast, universal terminal-based log viewer with live filtering, follow mode, an
 
 ![LazyTail Screenshot](screenshot.png)
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
+# or
+wget -qO- https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
+```
+
+That's it! The script auto-detects your OS and architecture, downloads the latest release, and installs to `~/.local/bin`.
+
+<details>
+<summary>Alternative installation methods</summary>
+
+### Custom install directory
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | INSTALL_DIR=/usr/local/bin bash
+```
+
+### Arch Linux (AUR)
+
+```bash
+yay -S lazytail
+```
+
+### Build from source
+
+Requires Rust 1.70+:
+
+```bash
+git clone https://github.com/raaymax/lazytail.git
+cd lazytail
+cargo install --path .
+```
+
+</details>
+
 ## AI Assistant Integration (MCP)
 
 LazyTail works as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, letting AI assistants like **Claude**, **Codex**, and **Gemini** search and analyze your log files.
@@ -112,43 +149,6 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 - **Vim-style navigation** - Familiar keybindings for efficient navigation
 
 Press `?` in the app to see all keyboard shortcuts.
-
-## Installation
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
-# or
-wget -qO- https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash
-```
-
-That's it! The script auto-detects your OS and architecture, downloads the latest release, and installs to `~/.local/bin`.
-
-<details>
-<summary>Alternative installation methods</summary>
-
-### Custom install directory
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | INSTALL_DIR=/usr/local/bin bash
-```
-
-### Arch Linux (AUR)
-
-```bash
-yay -S lazytail
-```
-
-### Build from source
-
-Requires Rust 1.70+:
-
-```bash
-git clone https://github.com/raaymax/lazytail.git
-cd lazytail
-cargo install --path .
-```
-
-</details>
 
 ## Usage
 
