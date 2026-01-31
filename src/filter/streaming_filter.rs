@@ -80,6 +80,7 @@ fn stream_filter_impl(
         return Ok(());
     }
 
+    // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
     let mmap = unsafe { Mmap::map(&file)? };
     let data = &mmap[..];
 
@@ -204,6 +205,7 @@ fn stream_filter_grep_style(
         return Ok(());
     }
 
+    // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
     let mmap = unsafe { Mmap::map(&file)? };
     let data = &mmap[..];
 
@@ -303,6 +305,7 @@ fn stream_filter_fast_impl(
         return Ok(());
     }
 
+    // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
     let mmap = unsafe { Mmap::map(&file)? };
     let data = &mmap[..];
 
@@ -428,6 +431,7 @@ fn stream_filter_range_impl(
         return Ok(());
     }
 
+    // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
     let mmap = unsafe { Mmap::map(&file)? };
     let data = &mmap[..];
 

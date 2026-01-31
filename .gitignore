@@ -8,3 +8,4 @@ AGENTS.md
 pkg/
 PKGBUILD
 .SRCINFO
+aur/

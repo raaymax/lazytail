@@ -1,4 +1,13 @@
 //! MCP tool implementations for log file analysis.
+//!
+//! Note on blocking: Tool handlers are synchronous as required by rmcp. The `search` tool
+//! spawns a filter thread and blocks waiting for results. This is acceptable because:
+//! 1. MCP stdio transport processes requests sequentially (one at a time)
+//! 2. The actual filtering work runs on a dedicated thread, not blocking the tokio runtime
+//! 3. Only the channel recv() blocks, which is waiting on real work
+//!
+//! If concurrent request handling is needed in the future, consider wrapping heavy
+//! operations in `tokio::task::spawn_blocking`.
 
 use super::types::*;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
@@ -10,7 +19,14 @@ use memmap2::Mmap;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
 use std::fs::File;
+use std::path::Path;
 use std::sync::Arc;
+
+/// Create a JSON error response string.
+fn error_response(message: impl std::fmt::Display) -> String {
+    serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
+        .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
+}
 
 /// LazyTail MCP server providing log file analysis tools.
 #[derive(Clone)]
@@ -37,14 +53,14 @@ impl LazyTailMcp {
     fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
         let count = req.count.min(1000);
 
-        let reader_result = FileReader::new(&req.file);
-        let mut reader = match reader_result {
+        let mut reader = match FileReader::new(&req.file) {
             Ok(r) => r,
             Err(e) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": format!("Failed to open file '{}': {}", req.file.display(), e)
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
+                return error_response(format!(
+                    "Failed to open file '{}': {}",
+                    req.file.display(),
+                    e
+                ))
             }
         };
 
@@ -76,14 +92,14 @@ impl LazyTailMcp {
     fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
         let count = req.count.min(1000);
 
-        let reader_result = FileReader::new(&req.file);
-        let mut reader = match reader_result {
+        let mut reader = match FileReader::new(&req.file) {
             Ok(r) => r,
             Err(e) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": format!("Failed to open file '{}': {}", req.file.display(), e)
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
+                return error_response(format!(
+                    "Failed to open file '{}': {}",
+                    req.file.display(),
+                    e
+                ))
             }
         };
 
@@ -123,16 +139,13 @@ impl LazyTailMcp {
             SearchMode::Plain => Arc::new(StringFilter::new(&req.pattern, req.case_sensitive)),
             SearchMode::Regex => match RegexFilter::new(&req.pattern, req.case_sensitive) {
                 Ok(f) => Arc::new(f),
-                Err(e) => {
-                    return serde_json::to_string(&serde_json::json!({
-                        "error": format!("Invalid regex pattern: {}", e)
-                    }))
-                    .unwrap_or_else(|_| "Error serializing response".to_string());
-                }
+                Err(e) => return error_response(format!("Invalid regex pattern: {}", e)),
             },
         };
 
-        // Run streaming filter (grep-like performance)
+        // Run streaming filter (grep-like performance).
+        // The filter runs on a dedicated thread; we block here waiting for results.
+        // See module doc for why this is acceptable in the current MCP design.
         let rx = match streaming_filter::run_streaming_filter(
             req.file.clone(),
             filter,
@@ -140,10 +153,11 @@ impl LazyTailMcp {
         ) {
             Ok(rx) => rx,
             Err(e) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": format!("Failed to search file '{}': {}", req.file.display(), e)
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
+                return error_response(format!(
+                    "Failed to search file '{}': {}",
+                    req.file.display(),
+                    e
+                ))
             }
         };
 
@@ -170,12 +184,7 @@ impl LazyTailMcp {
                 FilterProgress::Processing(n) => {
                     lines_searched = n;
                 }
-                FilterProgress::Error(e) => {
-                    return serde_json::to_string(&serde_json::json!({
-                        "error": format!("Search error: {}", e)
-                    }))
-                    .unwrap_or_else(|_| "Error serializing response".to_string());
-                }
+                FilterProgress::Error(e) => return error_response(format!("Search error: {}", e)),
             }
         }
 
@@ -189,12 +198,7 @@ impl LazyTailMcp {
         } else {
             match Self::get_lines_content(&req.file, &matching_indices, context_lines) {
                 Ok(m) => m,
-                Err(e) => {
-                    return serde_json::to_string(&serde_json::json!({
-                        "error": format!("Failed to read line content: {}", e)
-                    }))
-                    .unwrap_or_else(|_| "Error serializing response".to_string());
-                }
+                Err(e) => return error_response(format!("Failed to read line content: {}", e)),
             }
         };
 
@@ -209,9 +213,19 @@ impl LazyTailMcp {
             .unwrap_or_else(|e| format!("Error serializing response: {}", e))
     }
 
-    /// Get line content and context using mmap (no index building required)
+    /// Fetch line content and context for search matches using a single-pass mmap scan.
+    ///
+    /// This is a specialized batch operation that differs from `FileReader`:
+    /// - `FileReader`: Builds a full line index, optimized for random access to any line
+    /// - This function: Single sequential pass, only extracts specific lines + context
+    ///
+    /// For search results with context, this approach is more efficient because:
+    /// 1. We know exactly which lines we need upfront (matches + context)
+    /// 2. Single pass through file up to the last needed line, then early exit
+    /// 3. No index structure overhead - just a BTreeSet of needed line numbers
+    /// 4. Handles overlapping context ranges efficiently via deduplication
     fn get_lines_content(
-        path: &std::path::Path,
+        path: &Path,
         line_indices: &[usize],
         context_lines: usize,
     ) -> anyhow::Result<Vec<SearchMatch>> {
@@ -220,6 +234,9 @@ impl LazyTailMcp {
         }
 
         let file = File::open(path)?;
+        // SAFETY: The file handle is kept open for the lifetime of the mmap.
+        // We only perform read operations on the mapped memory.
+        // The file is opened read-only and we don't modify it.
         let mmap = unsafe { Mmap::map(&file)? };
         let data = &mmap[..];
 
@@ -307,24 +324,24 @@ impl LazyTailMcp {
         let before_count = req.before.min(50);
         let after_count = req.after.min(50);
 
-        let reader_result = FileReader::new(&req.file);
-        let mut reader = match reader_result {
+        let mut reader = match FileReader::new(&req.file) {
             Ok(r) => r,
             Err(e) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": format!("Failed to open file '{}': {}", req.file.display(), e)
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
+                return error_response(format!(
+                    "Failed to open file '{}': {}",
+                    req.file.display(),
+                    e
+                ))
             }
         };
 
         let total = reader.total_lines();
 
         if req.line_number >= total {
-            return serde_json::to_string(&serde_json::json!({
-                "error": format!("Line {} does not exist (file has {} lines)", req.line_number, total)
-            }))
-            .unwrap_or_else(|_| "Error serializing response".to_string());
+            return error_response(format!(
+                "Line {} does not exist (file has {} lines)",
+                req.line_number, total
+            ));
         }
 
         // Get before lines
@@ -342,12 +359,7 @@ impl LazyTailMcp {
         // Get target line
         let target_content = match reader.get_line(req.line_number) {
             Ok(Some(c)) => c,
-            _ => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": "Failed to read target line"
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
-            }
+            _ => return error_response("Failed to read target line"),
         };
         let target_line = LineInfo {
             line_number: req.line_number,
@@ -384,24 +396,13 @@ impl LazyTailMcp {
     fn list_sources(&self, #[tool(aggr)] _req: ListSourcesRequest) -> String {
         let data_dir = match source::data_dir() {
             Some(dir) => dir,
-            None => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": "Could not determine data directory"
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
-            }
+            None => return error_response("Could not determine data directory"),
         };
 
         // Get discovered sources
         let discovered = match source::discover_sources() {
             Ok(sources) => sources,
-            Err(e) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "error": format!("Failed to discover sources: {}", e),
-                    "data_directory": data_dir.display().to_string()
-                }))
-                .unwrap_or_else(|_| "Error serializing response".to_string());
-            }
+            Err(e) => return error_response(format!("Failed to discover sources: {}", e)),
         };
 
         let mut sources = Vec::new();
