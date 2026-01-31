@@ -275,6 +275,26 @@ After merging the release PR:
 - Binaries are uploaded to the release page
 - Users can download the new release
 
+## Pre-Commit Checklist
+
+**All of the following MUST pass before committing any changes:**
+
+```bash
+# 1. Format code
+cargo fmt
+
+# 2. Run linter and fix any warnings
+cargo clippy
+
+# 3. Verify types compile
+cargo check
+
+# 4. Run tests
+cargo test
+```
+
+These checks are enforced by CI - PRs will not be merged if any check fails.
+
 ## Pull Request Guidelines
 
 1. **Create a feature branch**: Don't commit directly to master
@@ -286,12 +306,7 @@ After merging the release PR:
 
 3. **Add tests**: If adding new functionality, include tests
 
-4. **Run checks locally**: Before pushing, run:
-   ```bash
-   cargo test
-   cargo clippy
-   cargo fmt
-   ```
+4. **Run pre-commit checks**: Before pushing, ensure all checks pass (see Pre-Commit Checklist above)
 
 5. **Write clear PR descriptions**: Explain what the PR does and why
 

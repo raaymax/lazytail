@@ -73,7 +73,10 @@ fn stream_filter_impl(
     let metadata = file.metadata()?;
 
     if metadata.len() == 0 {
-        tx.send(FilterProgress::Complete(vec![]))?;
+        tx.send(FilterProgress::Complete {
+            matches: vec![],
+            lines_processed: 0,
+        })?;
         return Ok(());
     }
 
@@ -132,7 +135,10 @@ fn stream_filter_impl(
 
     // Add remaining matches
     all_matches.extend(batch_matches);
-    tx.send(FilterProgress::Complete(all_matches))?;
+    tx.send(FilterProgress::Complete {
+        matches: all_matches,
+        lines_processed: line_idx,
+    })?;
 
     Ok(())
 }
@@ -191,7 +197,10 @@ fn stream_filter_grep_style(
     let metadata = file.metadata()?;
 
     if metadata.len() == 0 || pattern.is_empty() {
-        tx.send(FilterProgress::Complete(vec![]))?;
+        tx.send(FilterProgress::Complete {
+            matches: vec![],
+            lines_processed: 0,
+        })?;
         return Ok(());
     }
 
@@ -268,7 +277,10 @@ fn stream_filter_grep_style(
         lines_processed: total_lines,
     });
 
-    tx.send(FilterProgress::Complete(matches))?;
+    tx.send(FilterProgress::Complete {
+        matches,
+        lines_processed: total_lines,
+    })?;
     Ok(())
 }
 
@@ -284,7 +296,10 @@ fn stream_filter_fast_impl(
     let metadata = file.metadata()?;
 
     if metadata.len() == 0 || pattern.is_empty() {
-        tx.send(FilterProgress::Complete(vec![]))?;
+        tx.send(FilterProgress::Complete {
+            matches: vec![],
+            lines_processed: 0,
+        })?;
         return Ok(());
     }
 
@@ -350,7 +365,10 @@ fn stream_filter_fast_impl(
     }
 
     all_matches.extend(batch_matches);
-    tx.send(FilterProgress::Complete(all_matches))?;
+    tx.send(FilterProgress::Complete {
+        matches: all_matches,
+        lines_processed: line_idx,
+    })?;
 
     Ok(())
 }
@@ -403,7 +421,10 @@ fn stream_filter_range_impl(
     let metadata = file.metadata()?;
 
     if metadata.len() == 0 || start_line >= end_line {
-        tx.send(FilterProgress::Complete(vec![]))?;
+        tx.send(FilterProgress::Complete {
+            matches: vec![],
+            lines_processed: 0,
+        })?;
         return Ok(());
     }
 
@@ -465,7 +486,10 @@ fn stream_filter_range_impl(
     }
 
     all_matches.extend(batch_matches);
-    tx.send(FilterProgress::Complete(all_matches))?;
+    tx.send(FilterProgress::Complete {
+        matches: all_matches,
+        lines_processed: lines_in_range,
+    })?;
 
     Ok(())
 }
@@ -503,7 +527,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -523,7 +550,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -543,7 +573,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -566,7 +599,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -586,7 +622,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -610,7 +649,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }
@@ -634,7 +676,10 @@ mod tests {
 
         let mut result = None;
         while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete(indices) = progress {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
                 result = Some(indices);
                 break;
             }

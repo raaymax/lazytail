@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.4.0)
+## Current Status (v0.4.0 - In Progress)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -38,12 +38,15 @@ This is a local planning document for upcoming features and improvements.
 - Streaming filter with SIMD search (memmem) for better performance
 - Grep-style search for case-sensitive patterns
 
-**v0.4.0 Features:**
+**v0.4.0 Features (In Progress):**
 - Source discovery mode (`lazytail` with no args)
 - Source capture mode (`cmd | lazytail -n "Name"`)
 - Active/ended status indicators for discovered sources
 - Directory watcher for dynamic tab creation
 - Close tab keybinding (`x` / `Ctrl+W`)
+- MCP server support (`lazytail --mcp`)
+- MCP tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
+- Streaming filter optimization for MCP (grep-like performance on 5GB+ files)
 
 ---
 
@@ -258,90 +261,153 @@ lazytail
 
 ---
 
-#### Phase 5: Query Language (LogQL-style)
-**Goal:** Pipeline-based query language for advanced filtering and field extraction
+#### Phase 5: Query Language (LogQL-style) 🔴 HIGHEST PRIORITY
+**Goal:** Unified pipeline-based query language for filtering, time ranges, and aggregation - with dual input formats (text for UI, JSON for MCP/LLMs)
 
-**Syntax:**
+**Architecture:**
+```
+┌─────────────────────┐      ┌─────────────────────┐
+│  Text Query (UI)    │      │  JSON Query (MCP)   │
+│                     │      │                     │
+│ json | level=="err" │      │ {"parser":"json",   │
+│                     │      │  "filters":[...]}   │
+└──────────┬──────────┘      └──────────┬──────────┘
+           │  parse                     │  deserialize
+           ▼                            ▼
+      ┌────────────────────────────────────┐
+      │         FilterQuery (AST)          │
+      └──────────────────┬─────────────────┘
+                         │  execute
+                         ▼
+                  ┌─────────────┐
+                  │   Results   │
+                  └─────────────┘
+```
+
+**Key Insight:** MCP tool parameters ARE the query language for LLMs. Design rich structured JSON parameters that compile to the same AST as text queries.
+
+**Text Syntax (for humans):**
 ```bash
-# Simple field filtering
-json | level == "error"
-json | status >= 500
+# Field filtering
+json | level == "error" | service =~ "api|worker"
 
-# Chained filters
-json | level =~ "error|fatal" | service == "api"
+# Exclusion (critical for noisy logs)
+json | level == "error" | msg !~ "kscreen|systemd"
 
-# Different parsers
-logfmt | env == "production"
-pattern "<ip> - <method> <path> <status>" | status >= 400
+# Time filtering
+json | time > "2024-01-28T10:00:00" | time < "2024-01-28T11:00:00"
 
-# Output formatting (future)
-json | level == "error" | line_format "{{.timestamp}} {{.message}}"
+# Aggregation
+json | level == "error" | count by (service)
+json | count by (level) | top 10
+```
+
+**JSON Syntax (for MCP/LLMs):**
+```json
+{
+  "parser": "json",
+  "filters": [
+    {"field": "level", "op": "==", "value": "error"},
+    {"field": "service", "op": "=~", "value": "api|worker"}
+  ],
+  "exclude": [
+    {"field": "msg", "pattern": "kscreen|systemd"}
+  ],
+  "time_range": {
+    "field": "timestamp",
+    "after": "2024-01-28T10:00:00",
+    "before": "2024-01-28T11:00:00"
+  },
+  "aggregate": {
+    "count_by": "service",
+    "limit": 10
+  }
+}
 ```
 
 **Pipeline Stages:**
-| Stage | Description | Example |
-|-------|-------------|---------|
-| `json` | Parse line as JSON, extract fields | `json \| level == "error"` |
-| `logfmt` | Parse key=value format | `logfmt \| env == "prod"` |
-| `pattern` | Extract fields via pattern | `pattern "<ip> <method>"` |
-| `regex` | Extract named capture groups | `regex "(?P<code>\\d{3})"` |
+| Stage | Text Syntax | JSON Field | Description |
+|-------|-------------|------------|-------------|
+| Parser | `json`, `logfmt`, `pattern "..."` | `parser` | Extract fields from line |
+| Filter | `field == "value"` | `filters[]` | Include matching lines |
+| Exclude | `field !~ "pattern"` | `exclude[]` | Remove matching lines |
+| Time | `time > "..."` | `time_range` | Filter by timestamp |
+| Aggregate | `count by (field)` | `aggregate` | Group and count |
+| Limit | `top N` | `aggregate.limit` | Limit results |
 
 **Operators:**
-| Operator | Description |
-|----------|-------------|
-| `==`, `!=` | Equality |
-| `=~`, `!~` | Regex match |
-| `>`, `<`, `>=`, `<=` | Numeric comparison |
-| `contains` | Substring match |
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `==`, `!=` | Equality | `level == "error"` |
+| `=~`, `!~` | Regex match/exclude | `msg !~ "kscreen"` |
+| `>`, `<`, `>=`, `<=` | Comparison (numeric/time) | `status >= 500` |
+| `contains` | Substring match | `msg contains "timeout"` |
 
-**Grammar:**
-```
-query     = stage ("|" stage)*
-stage     = parser | filter
-parser    = "json" | "logfmt" | pattern_expr | regex_expr
-filter    = field operator value
-operator  = "==" | "!=" | "=~" | "!~" | ">" | "<" | ">=" | "<="
-field     = identifier ("." identifier)*
-value     = string | number | regex
+**FilterQuery AST (Rust):**
+```rust
+struct FilterQuery {
+    parser: Parser,                    // json, logfmt, pattern, raw
+    filters: Vec<FieldFilter>,         // field op value
+    exclude: Vec<ExcludePattern>,      // negative filters
+    time_range: Option<TimeRange>,     // after/before timestamps
+    aggregate: Option<Aggregation>,    // count_by, limit
+}
+
+enum Parser {
+    Raw,                               // plain text (default)
+    Json,                              // parse as JSON
+    Logfmt,                            // parse key=value
+    Pattern(String),                   // extract via pattern
+}
+
+struct FieldFilter {
+    field: String,                     // e.g., "level" or "user.id"
+    op: Operator,                      // ==, !=, =~, !~, >, <, etc.
+    value: Value,                      // string, number, regex
+}
+
+struct Aggregation {
+    count_by: Option<String>,          // group by field
+    limit: Option<usize>,              // top N
+}
 ```
 
-**Implementation Approach:**
-- Hand-written recursive descent parser (no external parser library)
-- Lexer → Parser → AST → Evaluator
-- Leverage existing `serde_json` for JSON parsing
-- Leverage existing `regex` crate for pattern matching
+**Implementation Order (MCP-first):**
+1. **Define AST structs** with serde derives
+2. **Build executor** that processes FilterQuery
+3. **JSON deserialization** → MCP tools work immediately
+4. **Text parser** → UI gets query language later
 
 **Tasks:**
-- [ ] Query language design
-  - [ ] Finalize grammar and syntax
-  - [ ] Document supported operators and stages
-- [ ] Lexer implementation
-  - [ ] Tokenize input string
-  - [ ] Handle strings, numbers, identifiers, operators
-- [ ] Parser implementation
-  - [ ] Recursive descent parser
-  - [ ] Build AST from tokens
-  - [ ] Error handling with position info
-- [ ] AST evaluation
-  - [ ] JSON field extraction
-  - [ ] Logfmt field extraction
-  - [ ] Pattern/regex field extraction
-  - [ ] Filter evaluation against extracted fields
-- [ ] UI integration
-  - [ ] Detect query mode (starts with parser stage)
-  - [ ] Syntax highlighting in filter input (future)
-  - [ ] Error display for invalid queries
-- [ ] Tests
-  - [ ] Lexer unit tests
-  - [ ] Parser unit tests
-  - [ ] Evaluation tests with sample log lines
-  - [ ] Integration tests
-
-**Phased Rollout:**
-1. **v1**: `json | field == "value"` - basic JSON filtering
-2. **v2**: Add `logfmt`, numeric operators, regex match (`=~`)
-3. **v3**: Add `pattern` extraction, nested field access (`user.id`)
-4. **v4**: Add `line_format` output formatting
+- [ ] Phase 1: Core AST & JSON Interface (MCP)
+  - [ ] Define `FilterQuery` and related structs with `#[derive(Deserialize)]`
+  - [ ] Implement executor for basic filters (`==`, `!=`, `=~`, `!~`)
+  - [ ] JSON parser support (serde_json field extraction)
+  - [ ] Wire up to MCP `search` tool as `query` parameter
+  - [ ] Tests with JSON input
+- [ ] Phase 2: Exclusion & Time Filtering
+  - [ ] Implement exclude patterns (critical for noisy logs!)
+  - [ ] Timestamp field detection (common field names)
+  - [ ] Time range filtering (after/before)
+  - [ ] Tests for exclusion and time filtering
+- [ ] Phase 3: Aggregation
+  - [ ] Implement `count by (field)`
+  - [ ] Implement `top N` / limit
+  - [ ] Return aggregation results as structured JSON
+  - [ ] New MCP tool or extend search response
+- [ ] Phase 4: Text Parser (UI)
+  - [ ] Lexer for text query syntax
+  - [ ] Recursive descent parser → AST
+  - [ ] Error messages with position info
+  - [ ] UI integration (filter input mode)
+- [ ] Phase 5: Advanced Parsers
+  - [ ] `logfmt` parser (key=value)
+  - [ ] `pattern` parser (extract fields via template)
+  - [ ] Nested field access (`user.id`, `request.headers.host`)
+- [ ] Phase 6: Polish
+  - [ ] Syntax highlighting in filter input
+  - [ ] Query history with mode
+  - [ ] Documentation and examples
 
 ---
 
@@ -734,12 +800,83 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - [x] Streaming filter with mmap for large files
 - [x] SIMD-accelerated search using memchr/memmem
 - [x] Grep-style lazy line counting for case-sensitive search
+- [x] MCP search optimized with streaming filter (tested on 5GB+ files)
+- [x] FilterProgress::Complete includes lines_processed for accurate tracking
 - [ ] Performance profiling on very large files (100GB+)
 - [ ] Optimize ANSI parsing (cache parsed lines?)
 - [ ] Benchmark filtering performance
 - [ ] Further optimize case-insensitive search
 
 ### Features
+
+#### Project-Scoped Instances (lazytail.yaml) 🔴 HIGH PRIORITY
+**Goal:** Per-project log sources and configuration, auto-discovered by ancestry
+
+**Discovery Order:**
+1. Check current dir and ancestors for `lazytail.yaml`
+2. If found → project mode (use `.lazytail/` in that dir)
+3. If not found → global mode (`~/.config/lazytail/`)
+
+**Directory Structure:**
+```
+my-project/
+├── lazytail.yaml          # Config (committed to git)
+├── .lazytail/             # Data (gitignored)
+│   ├── data/              # Captured logs
+│   ├── sources/           # Active markers
+│   └── history.json       # Project-specific filter history
+└── src/
+```
+
+**`lazytail.yaml` Example:**
+```yaml
+# Source definitions (path-based only)
+sources:
+  - name: Database
+    path: /var/log/postgresql/postgresql.log
+  - name: App
+    path: ./logs/app.log  # Relative to project root
+  - name: Nginx
+    path: /var/log/nginx/access.log
+
+# Filter presets (for UI and MCP)
+filters:
+  errors: "level == 'error'"
+  slow-queries: "duration > 1000"
+  auth: "service =~ 'auth|login'"
+
+# MCP settings
+mcp:
+  enabled: true
+  # expose_global: false  # Don't show ~/.config/lazytail sources
+```
+
+**Benefits:**
+- Team shares source definitions via git
+- AI assistants (Claude Code) auto-discover project logs
+- No pollution of global config
+- Project-specific filter history
+- Different projects can have different log setups
+
+**Tasks:**
+- [ ] Config file discovery (walk ancestors for `lazytail.yaml`)
+- [ ] Parse YAML config with serde
+- [ ] Create `.lazytail/` directory structure
+- [ ] Support `path:` sources (watch existing file)
+- [ ] Relative path resolution from project root
+- [ ] Filter presets in config
+- [ ] MCP: detect project root and scope sources
+- [ ] Fallback to global `~/.config/lazytail/` when no project found
+
+---
+
+- [ ] Configuration file (`~/.config/lazytail/config.toml`)
+  - System-wide log source definitions (name, path, pattern)
+  - Pre-configured sources appear automatically in discovery mode
+  - Custom source groups/categories
+  - Default filter patterns per source
+  - UI preferences (colors, panel width, default modes)
+  - MCP server settings (enabled tools, access control)
 - [ ] JSON log parsing and formatted view
   - Detect JSON lines automatically
   - Pretty-print JSON in dedicated view mode
@@ -761,6 +898,13 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
   - Parse timestamps from all sources
   - Display merged timeline
   - Color-code by source
+- [ ] Command-based sources (future consideration)
+  - Define sources as commands in config: `command: "docker logs -f api"`
+  - LazyTail spawns and manages the process
+  - Auto-restart on failure?
+  - Security implications (arbitrary command execution)
+  - Alternative: keep using `cmd | lazytail -n "Name"` pattern
+  - Needs more thought on UX and lifecycle management
 
 ### Developer Experience
 - [ ] Integration tests for full app behavior
@@ -795,36 +939,129 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Stats panel (line counts)
 - Persistent filter history to disk
 
-### v0.4.0 ✅ (Complete)
-**Focus: Source Discovery & Capture**
+### v0.4.0 (Current - In Progress)
+**Focus: Source Discovery, Capture & MCP Server**
+
+Source Discovery & Capture:
 - Auto-discover sources from `~/.config/lazytail/data/`
 - Source capture mode: `cmd | lazytail -n "Name"`
 - Active/ended status indicators
 - Dynamic tab creation for new sources
 - Close tab keybinding (`x` / `Ctrl+W`)
 
-### v0.5.0 (Future)
-**Focus: Search & Highlighting**
-- Search highlighting in results
-- Filter across all tabs simultaneously
+MCP Server Support:
+- MCP (Model Context Protocol) server via `--mcp` flag
+- Tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
+- MCP enabled by default in all builds
+- Streaming filter for grep-like performance on large files
+- Tested on 5GB+ log files
+
+---
+
+#### MCP Tools Roadmap
+
+**Current Tools (v0.4.0):**
+| Tool | Purpose | Status |
+|------|---------|--------|
+| `list_sources` | Discover available log sources | ✅ Complete |
+| `get_lines` | Read lines from position | ✅ Complete |
+| `get_tail` | Read last N lines | ✅ Complete |
+| `search` | Find pattern matches | ✅ Complete (basic) |
+| `get_context` | Get lines around a match | ✅ Complete |
+
+**Current `search` Parameters:**
+| Parameter | Type | Status |
+|-----------|------|--------|
+| `file` | PathBuf | ✅ Done |
+| `pattern` | String | ✅ Done |
+| `mode` | plain/regex | ✅ Done |
+| `case_sensitive` | bool | ✅ Done |
+| `max_results` | usize | ✅ Done |
+| `context_lines` | usize | ✅ Done |
+| `exclude` | Vec<String> | ❌ Missing |
+| `time_range` | TimeRange | ❌ Missing |
+| `query` | FilterQuery | ❌ Missing |
+
+**Planned `search` Enhancements (v0.5.0):**
+| Feature | Purpose | Priority |
+|---------|---------|----------|
+| `exclude` param | Filter out noise (e.g., kscreen spam) | 🔴 High |
+| `query` param | Full FilterQuery JSON for field filtering | 🔴 High |
+| `time_range` param | Filter by timestamp range | 🟡 Medium |
+
+**Planned New Tools (v0.5.0+):**
+| Tool | Purpose | Priority |
+|------|---------|----------|
+| `summarize` | Log overview: line count, time range, top patterns, top services | 🟡 Medium |
+| `search_sources` | Search multiple sources at once, grouped results | 🟡 Medium |
+| `aggregate` | Count by field, top N results | 🟡 Medium |
+
+**Internal Improvements Done:**
+- ✅ Streaming filter with mmap (grep-like performance)
+- ✅ SIMD-accelerated search (memchr/memmem)
+- ✅ `lines_searched` tracking in FilterProgress::Complete
+- ✅ Single-pass content extraction for matched lines
+
+### v0.5.0 (Next) 🔴 HIGH PRIORITY
+**Focus: Project-Scoped Instances & Query Language Core**
+
+Project-Scoped Instances:
+- `lazytail.yaml` discovery (walk ancestors)
+- `.lazytail/` directory for project data
+- Path-based source definitions
+- MCP auto-detects project root and scopes sources
+- Fallback to global `~/.config/lazytail/`
+
+Query Language Core (MCP-first):
+- FilterQuery AST with serde derives
+- JSON query interface for MCP tools
+- Basic filters: `==`, `!=`, `=~`, `!~`
+- Exclusion patterns (critical for noisy logs)
 
 ### v0.6.0 (Future)
-**Focus: Log Intelligence**
-- JSON log parsing and formatted view in expanded entries
-- Timestamp parsing and time-based filtering
-- Severity detection and filtering
+**Focus: Sidecar Index & Combined Sources**
+
+Sidecar Index (`.log.idx`):
+- Binary index file alongside each captured log
+- Store arrival timestamp + byte offset per line
+- Append to index in real-time during capture
+- Header with validation: file size, mtime, first-4KB hash
+- Auto-rebuild on corruption/truncation detection
+- Enables time-based operations and merging
+
+Combined Source View:
+- Merge multiple sources into single chronological view
+- Use sidecar timestamps for captured sources
+- Parse timestamps from log content for external files
+- Fallback to arrival order for streaming, concatenation for static
+- Source-colored lines or `[SOURCE]` prefix
+- Filter by source: `source:API`
 
 ### v0.7.0 (Future)
-**Focus: Query Language**
-- Pipeline-based query syntax: `json | field == "value"`
-- JSON and logfmt field extraction
-- Pattern-based field extraction
-- Comparison and regex operators
+**Focus: Query Language - Time & Aggregation**
+- Timestamp field detection and parsing
+- Time range filtering (after/before)
+- `count by (field)` aggregation
+- `top N` limiting
+- Multi-source search tool
+
+### v0.8.0 (Future)
+**Focus: Query Language - Text Parser (UI)**
+- Text query syntax: `json | level == "error"`
+- Recursive descent parser
+- UI integration with syntax highlighting
+- Query history with mode persistence
+
+### v0.9.0 (Future)
+**Focus: Log Intelligence**
+- `logfmt` and `pattern` parsers
+- Nested field access (`user.id`)
+- Severity detection and filtering
+- JSON formatting in expanded view
 
 ### v1.0.0 (Future)
 **Focus: Feature Complete & Stable**
 - All core features stable and documented
-- Merged chronological view
 - Performance optimizations
 - Comprehensive test coverage
 

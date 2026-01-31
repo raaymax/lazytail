@@ -17,7 +17,10 @@ pub fn handle_filter_progress(progress: FilterProgress, is_incremental: bool) ->
                 lines_processed,
             }]
         }
-        FilterProgress::Complete(matching_indices) => {
+        FilterProgress::Complete {
+            matches: matching_indices,
+            ..
+        } => {
             vec![AppEvent::FilterComplete {
                 indices: matching_indices,
                 incremental: is_incremental,
@@ -42,7 +45,10 @@ mod tests {
 
     #[test]
     fn test_filter_complete_full() {
-        let progress = FilterProgress::Complete(vec![1, 5, 10]);
+        let progress = FilterProgress::Complete {
+            matches: vec![1, 5, 10],
+            lines_processed: 100,
+        };
         let events = handle_filter_progress(progress, false);
         assert_eq!(
             events,
@@ -55,7 +61,10 @@ mod tests {
 
     #[test]
     fn test_filter_complete_incremental() {
-        let progress = FilterProgress::Complete(vec![100, 105]);
+        let progress = FilterProgress::Complete {
+            matches: vec![100, 105],
+            lines_processed: 200,
+        };
         let events = handle_filter_progress(progress, true);
         assert_eq!(
             events,

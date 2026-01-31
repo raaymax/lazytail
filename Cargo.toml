@@ -27,6 +27,15 @@ lru = "0.12"
 rayon = "1.10"
 signal-hook = "0.3"
 
+# MCP server dependencies (optional)
+tokio = { version = "1", features = ["full"], optional = true }
+rmcp = { version = "0.1", features = ["server", "transport-io"], optional = true }
+schemars = { version = "0.8", optional = true }
+
+[features]
+default = ["mcp"]
+mcp = ["dep:tokio", "dep:rmcp", "dep:schemars"]
+
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 libc = "0.2"
 
