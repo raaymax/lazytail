@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.0](https://github.com/raaymax/lazytail/compare/v0.3.0...v0.4.0) (2026-01-31)
+
+
+### Features
+
+* add filter progress percentage and streaming filter ([0b2e1e3](https://github.com/raaymax/lazytail/commit/0b2e1e332fae4b99787f317004ff6d44eca375ec))
+* add get_tail MCP tool and fix parameter schemas ([1fecd64](https://github.com/raaymax/lazytail/commit/1fecd642a4f88d411791da510f8a5d579860a95c))
+* add list_sources MCP tool ([fb6aea0](https://github.com/raaymax/lazytail/commit/fb6aea079561b1c711bacc538106ea1bab3be6d9))
+* add MCP server support ([a11401d](https://github.com/raaymax/lazytail/commit/a11401dca565ce341ce6e31bf7b58539264db106))
+* add source discovery and capture mode ([9ab50c2](https://github.com/raaymax/lazytail/commit/9ab50c25dff3daf7a7334ad4517bf5beceb561bf))
+* add source discovery and capture mode (Phase 2 & 3) ([cba0796](https://github.com/raaymax/lazytail/commit/cba07965b1af63d947a7c05c4b6a3e0536745fce))
+* add tree-like source panel with category navigation ([5dd3903](https://github.com/raaymax/lazytail/commit/5dd390386860777698b3d6a0e2e86a9204cd1c2f))
+* background loading for pipes and stdin ([b440ba1](https://github.com/raaymax/lazytail/commit/b440ba115f58482493d5abfe6cc1f51486596d5b))
+* delete ended sources when closing tab ([d7896d0](https://github.com/raaymax/lazytail/commit/d7896d0aed54bae39e6cbbb8e38ebe0b137e8e72))
+* enable MCP feature by default ([7d11c03](https://github.com/raaymax/lazytail/commit/7d11c038be3019d62618b02db419b7de3d7da039))
+* highlight focused panel border ([1ecf14d](https://github.com/raaymax/lazytail/commit/1ecf14d8ca3b5afd7416be3abebfb6268c1c263d))
+* **mcp:** add MCP server for AI assistant integration ([439383b](https://github.com/raaymax/lazytail/commit/439383b9405b3bf5eaf6df9fa3f4aa20a2641afb))
+* optimize MCP search with streaming filter and fix lines_searched tracking ([4add1d4](https://github.com/raaymax/lazytail/commit/4add1d4e8e6cfafc5e882bce675e21b52512585a))
+* tree-like source panel with Tab navigation ([d058405](https://github.com/raaymax/lazytail/commit/d05840559c9cbcedb2d1b8d3ba55805767fa5745))
+
+
+### Bug Fixes
+
+* allow dead_code for FilterProgress to fix CI without MCP feature ([861489a](https://github.com/raaymax/lazytail/commit/861489ad92ce489c9db8b8e9be5ff43e893d95c5))
+* comprehensive bug fixes from code review ([a45926a](https://github.com/raaymax/lazytail/commit/a45926a9520b1638f45f19d8018f269bd00b2f68))
+* handle edge cases in is_pid_running for macOS ([5dae000](https://github.com/raaymax/lazytail/commit/5dae0000e7781b14af8e7d8aee971ca240f4f8e0))
+* make is_pid_running cross-platform for macOS ([ef48663](https://github.com/raaymax/lazytail/commit/ef4866369d3a9676b32f9235a9d5362b27e5a9f5))
+* multiple filtering and input handling improvements ([628d36a](https://github.com/raaymax/lazytail/commit/628d36a16e1ad7e27bee730ae32af37598be716c))
+* prevent results blink when changing filter ([d6a0e13](https://github.com/raaymax/lazytail/commit/d6a0e13bb3daf0749bccc2f0e2fdc9e3792080cd))
+* process one key event per iteration for multi-key sequences ([cb8a2f6](https://github.com/raaymax/lazytail/commit/cb8a2f612cad1e04d0d7d625768cf0e2c529a145))
+* refresh source status on each render cycle ([0d2301f](https://github.com/raaymax/lazytail/commit/0d2301fcd5c835ab1e57fe19eb928faab2ba69d6))
+* remove redundant libc import ([9ff9144](https://github.com/raaymax/lazytail/commit/9ff9144ac131ab633d5b582fef46b4f20e720d48))
+* resolve clippy warnings for newer Rust versions ([c7e8f2a](https://github.com/raaymax/lazytail/commit/c7e8f2afd6cd459d65b7e9de438c3227a120fa3d))
+
 ## [0.3.0](https://github.com/raaymax/lazytail/compare/0.2.0...v0.3.0) (2026-01-26)
 
 
