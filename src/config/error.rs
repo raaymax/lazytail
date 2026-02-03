@@ -49,7 +49,8 @@ impl ConfigError {
         let (line, column) = extract_location(&error_str);
 
         // Try to find unknown field and generate suggestion
-        let suggestion = extract_unknown_field(&error_str).and_then(|field| find_suggestion(&field));
+        let suggestion =
+            extract_unknown_field(&error_str).and_then(|field| find_suggestion(&field));
 
         ConfigError::Parse {
             path,
