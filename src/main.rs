@@ -1,6 +1,7 @@
 mod app;
 mod cache;
 mod capture;
+mod config;
 mod dir_watcher;
 mod event;
 mod filter;
@@ -91,6 +92,10 @@ struct Args {
     #[cfg(feature = "mcp")]
     #[arg(long = "mcp")]
     mcp: bool,
+
+    /// Verbose output (show config discovery paths)
+    #[arg(short = 'v', long = "verbose")]
+    verbose: bool,
 }
 
 fn main() -> Result<()> {
@@ -101,6 +106,41 @@ fn main() -> Result<()> {
     // Cleanup stale markers from previous SIGKILL scenarios
     // This runs before any mode to ensure collision checks work correctly
     source::cleanup_stale_markers();
+
+    // Config discovery - run before mode dispatch
+    // Phase 3 will use this for config loading; for now we just report in verbose mode
+    let (discovery, searched_paths) = config::discovery::discover_verbose();
+    if args.verbose {
+        for path in &searched_paths {
+            eprintln!("[discovery] Searched: {}", path.display());
+        }
+        eprintln!(
+            "[discovery] Project root: {}",
+            discovery
+                .project_root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+        eprintln!(
+            "[discovery] Project config: {}",
+            discovery
+                .project_config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+        eprintln!(
+            "[discovery] Global config: {}",
+            discovery
+                .global_config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+    }
+    // Store discovery result for future use (Phase 3)
+    let _discovery = discovery;
 
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]

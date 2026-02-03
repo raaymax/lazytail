@@ -33,7 +33,9 @@ impl DiscoveryResult {
     /// This is `project_root/.lazytail` - used by Phase 4 for storing
     /// project-specific streams and state.
     pub fn data_dir(&self) -> Option<PathBuf> {
-        self.project_root.as_ref().map(|root| root.join(DATA_DIR_NAME))
+        self.project_root
+            .as_ref()
+            .map(|root| root.join(DATA_DIR_NAME))
     }
 
     /// Returns true if any config was found (project or global).
@@ -130,7 +132,10 @@ mod tests {
 
         let result = with_cwd(temp.path(), discover);
 
-        assert!(result.project_config.is_some(), "project_config should be Some");
+        assert!(
+            result.project_config.is_some(),
+            "project_config should be Some"
+        );
         let found_config = result.project_config.unwrap();
         // Compare canonicalized paths to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
         assert_eq!(
@@ -152,7 +157,10 @@ mod tests {
 
         let result = with_cwd(&subdir, discover);
 
-        assert!(result.project_config.is_some(), "project_config should be Some");
+        assert!(
+            result.project_config.is_some(),
+            "project_config should be Some"
+        );
         let found_config = result.project_config.unwrap();
         // Compare canonicalized paths
         assert_eq!(
@@ -239,11 +247,18 @@ mod tests {
         let (result, searched_paths) = with_cwd(temp.path(), discover_verbose);
 
         // Should have searched multiple directories
-        assert!(!searched_paths.is_empty(), "searched_paths should not be empty");
+        assert!(
+            !searched_paths.is_empty(),
+            "searched_paths should not be empty"
+        );
 
         // Last path should be root (/)
         let last_path = searched_paths.last().unwrap();
-        assert_eq!(last_path, &PathBuf::from("/"), "last searched path should be /");
+        assert_eq!(
+            last_path,
+            &PathBuf::from("/"),
+            "last searched path should be /"
+        );
 
         // No config found
         assert!(result.project_config.is_none());
