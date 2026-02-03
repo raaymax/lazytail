@@ -26,6 +26,9 @@ memchr = "2"
 lru = "0.12"
 rayon = "1.10"
 signal-hook = "0.3"
+serde-saphyr = "0.0"
+strsim = "0.11"
+thiserror = "2.0"
 
 # MCP server dependencies (optional)
 tokio = { version = "1", features = ["full"], optional = true }
