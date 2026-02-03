@@ -30,10 +30,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. After SIGKILL (kill -9), restarting lazytail detects and cleans stale markers
   4. Double Ctrl+C forces immediate exit without hanging
   5. capture.rs signal handler does not call process::exit() directly
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 01-01: TBD during planning
+- [ ] 01-01-PLAN.md — Signal module, capture.rs refactor, stale marker cleanup
 
 ### Phase 2: Config Discovery
 **Goal**: Application finds project root and config files by walking directory tree
@@ -99,7 +99,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Signal Infrastructure | 0/? | Not started | - |
+| 1. Signal Infrastructure | 0/1 | Planned | - |
 | 2. Config Discovery | 0/? | Not started | - |
 | 3. Config Loading | 0/? | Not started | - |
 | 4. Project-Local Streams | 0/? | Not started | - |
