@@ -8,10 +8,10 @@
 
 ### Signal Handling
 
-- [ ] **SIG-01**: Graceful shutdown on SIGINT/SIGTERM cleans up stream markers before exit
-- [ ] **SIG-02**: Fix capture.rs signal handler — remove process::exit(), let main thread handle cleanup
-- [ ] **SIG-03**: Stale marker detection on startup — recover from SIGKILL by checking if PID still running
-- [ ] **SIG-04**: Double Ctrl+C support — first triggers graceful shutdown, second forces immediate exit
+- [x] **SIG-01**: Graceful shutdown on SIGINT/SIGTERM cleans up stream markers before exit
+- [x] **SIG-02**: Fix capture.rs signal handler — remove process::exit(), let main thread handle cleanup
+- [x] **SIG-03**: Stale marker detection on startup — recover from SIGKILL by checking if PID still running
+- [x] **SIG-04**: Double Ctrl+C support — first triggers graceful shutdown, second forces immediate exit
 
 ### Config Discovery
 
@@ -63,10 +63,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SIG-01 | Phase 1 | pending |
-| SIG-02 | Phase 1 | pending |
-| SIG-03 | Phase 1 | pending |
-| SIG-04 | Phase 1 | pending |
+| SIG-01 | Phase 1 | complete |
+| SIG-02 | Phase 1 | complete |
+| SIG-03 | Phase 1 | complete |
+| SIG-04 | Phase 1 | complete |
 | DISC-01 | Phase 2 | pending |
 | DISC-02 | Phase 2 | pending |
 | DISC-03 | Phase 2 | pending |
