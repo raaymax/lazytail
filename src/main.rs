@@ -98,6 +98,10 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // Cleanup stale markers from previous SIGKILL scenarios
+    // This runs before any mode to ensure collision checks work correctly
+    source::cleanup_stale_markers();
+
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
     if args.mcp {

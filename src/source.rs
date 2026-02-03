@@ -205,6 +205,51 @@ pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove marker files for processes that are no longer running.
+///
+/// Called at startup to recover from SIGKILL scenarios where the capture
+/// process was killed without cleanup. Errors are logged to stderr but
+/// don't prevent startup.
+pub fn cleanup_stale_markers() {
+    let Some(sources) = sources_dir() else {
+        return;
+    };
+
+    if !sources.exists() {
+        return;
+    }
+
+    let entries = match fs::read_dir(&sources) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Warning: Could not read sources directory: {}", e);
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+
+        // Skip non-files
+        if !path.is_file() {
+            continue;
+        }
+
+        // Read PID from marker
+        if let Some(pid) = read_marker_pid(&path) {
+            // Only remove if process is definitely not running
+            if !is_pid_running(pid) {
+                // Remove silently - user doesn't need to know
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
 /// Validate a source name for use in capture mode.
 pub fn validate_source_name(name: &str) -> Result<()> {
     if name.is_empty() {
