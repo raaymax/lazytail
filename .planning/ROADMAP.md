@@ -41,13 +41,13 @@ Plans:
 **Requirements**: DISC-01, DISC-02, DISC-03
 **Success Criteria** (what must be TRUE):
   1. Running lazytail in a subdirectory finds lazytail.yaml in parent directories
-  2. Running lazytail in a directory with .lazytail/ recognizes it as project root
+  2. Running lazytail in a directory with lazytail.yaml recognizes it as project root
   3. Running lazytail without any config file works normally using defaults
-  4. Discovery stops at filesystem boundaries ($HOME, /, different mount points)
-**Plans**: TBD
+  4. Discovery stops at filesystem root (/)
+**Plans:** 1 plan
 
 Plans:
-- [ ] 02-01: TBD during planning
+- [ ] 02-01-PLAN.md — Config discovery module with verbose output integration
 
 ### Phase 3: Config Loading
 **Goal**: Application parses YAML config and merges multiple configuration sources with clear precedence
@@ -100,7 +100,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Signal Infrastructure | 1/1 | Complete | 2026-02-03 |
-| 2. Config Discovery | 0/? | Not started | - |
+| 2. Config Discovery | 0/1 | Not started | - |
 | 3. Config Loading | 0/? | Not started | - |
 | 4. Project-Local Streams | 0/? | Not started | - |
 | 5. Config Commands | 0/? | Not started | - |
