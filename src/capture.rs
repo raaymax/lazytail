@@ -7,18 +7,15 @@
 //! - Creates a marker file for source discovery
 //! - Cleans up marker on exit (EOF or signal)
 
+use crate::signal::setup_shutdown_handlers;
 use crate::source::{
     check_source_status, create_marker, data_dir, ensure_directories, remove_marker,
     validate_source_name, SourceStatus,
 };
 use anyhow::{Context, Result};
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
+use std::sync::atomic::Ordering;
 
 /// Run in capture mode: tee stdin to a named log file.
 ///
@@ -48,23 +45,8 @@ pub fn run_capture_mode(name: String) -> Result<()> {
     // 4. Create marker file with our PID
     create_marker(&name)?;
 
-    // 5. Setup signal handler for cleanup
-    let running = Arc::new(AtomicBool::new(true));
-    let name_for_signal = name.clone();
-    let running_for_signal = Arc::clone(&running);
-
-    thread::spawn(move || {
-        let mut signals = match Signals::new([SIGINT, SIGTERM]) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-
-        if signals.forever().next().is_some() {
-            running_for_signal.store(false, Ordering::SeqCst);
-            let _ = remove_marker(&name_for_signal);
-            std::process::exit(0);
-        }
-    });
+    // 5. Setup signal handlers (flag-based, supports double Ctrl+C for force quit)
+    let shutdown_flag = setup_shutdown_handlers()?;
 
     // 6. Open/create log file
     let log_path = data_dir()
@@ -86,7 +68,8 @@ pub fn run_capture_mode(name: String) -> Result<()> {
     let reader = BufReader::new(stdin.lock());
 
     for line in reader.lines() {
-        if !running.load(Ordering::SeqCst) {
+        // Check for shutdown signal
+        if shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
 
@@ -113,7 +96,7 @@ pub fn run_capture_mode(name: String) -> Result<()> {
         }
     }
 
-    // 9. Cleanup on EOF
+    // 9. Cleanup on EOF or signal - always reached (no process::exit in signal handler)
     remove_marker(&name)?;
 
     Ok(())
