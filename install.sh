@@ -99,7 +99,7 @@ if [ "$DISTRO" = "arch" ]; then
         fi
 
         echo "Do you want to install via AUR now using $AUR_HELPER? [Y/n]"
-        read -r response
+        read -r response < /dev/tty
 
         case "$response" in
             [nN][oO]|[nN])
@@ -140,7 +140,7 @@ if [ "$DISTRO" = "arch" ]; then
         echo ""
         echo "Or continue with binary install..."
         echo "Press Ctrl+C to cancel, or Enter to continue..."
-        read -r
+        read -r < /dev/tty
         echo ""
     fi
 fi
@@ -152,7 +152,8 @@ if check_existing_install; then
     echo "  1) Update existing installation"
     echo "  2) Cancel"
     echo ""
-    read -p "Choice [1-2]: " choice
+    echo -n "Choice [1-2]: "
+    read -r choice < /dev/tty
 
     case $choice in
         1)
@@ -227,3 +228,283 @@ echo -e "${BLUE}Note:${NC} To update in the future, re-run this script."
 if [ "$DISTRO" = "arch" ]; then
     echo "Consider switching to AUR for automatic updates: ${GREEN}yay -S lazytail${NC}"
 fi
+
+# MCP Configuration Section
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}AI Assistant Integration (MCP)${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "LazyTail can integrate with AI assistants via MCP (Model Context Protocol)."
+echo "This allows AI assistants to search and analyze your log files."
+echo ""
+
+# Get the installed binary path
+LAZYTAIL_BIN="$INSTALL_DIR/lazytail"
+
+# Helper function to add JSON entry to mcpServers
+add_mcp_json_config() {
+    local config_file="$1"
+    local config_dir=$(dirname "$config_file")
+
+    mkdir -p "$config_dir"
+
+    if [ -f "$config_file" ]; then
+        # File exists - check if lazytail already configured
+        if grep -q '"lazytail"' "$config_file" 2>/dev/null; then
+            echo -e "  ${YELLOW}⚠ lazytail already configured in $config_file${NC}"
+            return 0
+        fi
+
+        # Add to existing mcpServers or create mcpServers section
+        if grep -q '"mcpServers"' "$config_file" 2>/dev/null; then
+            # Add to existing mcpServers - insert after "mcpServers": {
+            sed -i 's/"mcpServers"[[:space:]]*:[[:space:]]*{/"mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    },/' "$config_file"
+        else
+            # Add mcpServers section before closing brace
+            sed -i 's/}$/,\n  "mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    }\n  }\n}/' "$config_file"
+        fi
+    else
+        # Create new file
+        cat > "$config_file" << EOF
+{
+  "mcpServers": {
+    "lazytail": {
+      "command": "$LAZYTAIL_BIN",
+      "args": ["--mcp"]
+    }
+  }
+}
+EOF
+    fi
+    echo -e "  ${GREEN}✓ Configured in $config_file${NC}"
+}
+
+# Helper function for TOML config (Codex)
+add_mcp_toml_config() {
+    local config_file="$1"
+    local config_dir=$(dirname "$config_file")
+
+    mkdir -p "$config_dir"
+
+    if [ -f "$config_file" ]; then
+        if grep -q '\[mcp_servers\.lazytail\]' "$config_file" 2>/dev/null; then
+            echo -e "  ${YELLOW}⚠ lazytail already configured in $config_file${NC}"
+            return 0
+        fi
+        # Append to existing file
+        echo "" >> "$config_file"
+        cat >> "$config_file" << EOF
+[mcp_servers.lazytail]
+command = ["$LAZYTAIL_BIN", "--mcp"]
+EOF
+    else
+        cat > "$config_file" << EOF
+[mcp_servers.lazytail]
+command = ["$LAZYTAIL_BIN", "--mcp"]
+EOF
+    fi
+    echo -e "  ${GREEN}✓ Configured in $config_file${NC}"
+}
+
+# Detect available AI assistants
+ASSISTANTS_FOUND=()
+
+# Claude Code
+if command -v claude &> /dev/null; then
+    ASSISTANTS_FOUND+=("claude_code")
+fi
+
+# Claude Desktop
+if [ -d "$HOME/.config/Claude" ] || [ -d "$HOME/Library/Application Support/Claude" ]; then
+    ASSISTANTS_FOUND+=("claude_desktop")
+fi
+
+# OpenAI Codex
+if command -v codex &> /dev/null || [ -d "$HOME/.codex" ]; then
+    ASSISTANTS_FOUND+=("codex")
+fi
+
+# Gemini CLI
+if command -v gemini &> /dev/null || [ -d "$HOME/.gemini" ]; then
+    ASSISTANTS_FOUND+=("gemini")
+fi
+
+# Cursor
+if [ -d "$HOME/.cursor" ] || command -v cursor &> /dev/null; then
+    ASSISTANTS_FOUND+=("cursor")
+fi
+
+# Windsurf
+if [ -d "$HOME/.codeium" ] || command -v windsurf &> /dev/null; then
+    ASSISTANTS_FOUND+=("windsurf")
+fi
+
+# Zed
+if [ -d "$HOME/.config/zed" ] || command -v zed &> /dev/null; then
+    ASSISTANTS_FOUND+=("zed")
+fi
+
+if [ ${#ASSISTANTS_FOUND[@]} -eq 0 ]; then
+    echo "No supported AI assistants detected."
+    echo ""
+    echo "To manually configure MCP later, see: https://github.com/$REPO#ai-assistant-integration-mcp"
+else
+    echo "Detected AI assistants: ${ASSISTANTS_FOUND[*]}"
+    echo ""
+
+    # Claude Code
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " claude_code " ]]; then
+        echo -e "${BLUE}Claude Code${NC}"
+        echo "  Configure MCP for Claude Code? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                if claude mcp add lazytail --scope user -- "$LAZYTAIL_BIN" --mcp 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ Added via 'claude mcp add'${NC}"
+                else
+                    echo -e "  ${RED}✗ Failed to add via CLI. Try manually: claude mcp add lazytail -- $LAZYTAIL_BIN --mcp${NC}"
+                fi
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Claude Desktop
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " claude_desktop " ]]; then
+        echo -e "${BLUE}Claude Desktop${NC}"
+        echo "  Configure MCP for Claude Desktop? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                if [ "$PLATFORM" = "macos" ]; then
+                    CONFIG_FILE="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+                else
+                    CONFIG_FILE="$HOME/.config/Claude/claude_desktop_config.json"
+                fi
+                add_mcp_json_config "$CONFIG_FILE"
+                ;;
+        esac
+        echo ""
+    fi
+
+    # OpenAI Codex
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " codex " ]]; then
+        echo -e "${BLUE}OpenAI Codex${NC}"
+        echo "  Configure MCP for Codex? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                add_mcp_toml_config "$HOME/.codex/config.toml"
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Gemini CLI
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " gemini " ]]; then
+        echo -e "${BLUE}Gemini CLI${NC}"
+        echo "  Configure MCP for Gemini CLI? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                if command -v gemini &> /dev/null; then
+                    if gemini mcp add lazytail -- "$LAZYTAIL_BIN" --mcp 2>/dev/null; then
+                        echo -e "  ${GREEN}✓ Added via 'gemini mcp add'${NC}"
+                    else
+                        add_mcp_json_config "$HOME/.gemini/settings.json"
+                    fi
+                else
+                    add_mcp_json_config "$HOME/.gemini/settings.json"
+                fi
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Cursor
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " cursor " ]]; then
+        echo -e "${BLUE}Cursor${NC}"
+        echo "  Configure MCP for Cursor (global)? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                add_mcp_json_config "$HOME/.cursor/mcp.json"
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Windsurf
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " windsurf " ]]; then
+        echo -e "${BLUE}Windsurf${NC}"
+        echo "  Configure MCP for Windsurf? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                add_mcp_json_config "$HOME/.codeium/windsurf/mcp_config.json"
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Zed
+    if [[ " ${ASSISTANTS_FOUND[*]} " =~ " zed " ]]; then
+        echo -e "${BLUE}Zed${NC}"
+        echo "  Configure MCP for Zed? [Y/n]"
+        read -r response < /dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                echo "  Skipped."
+                ;;
+            *)
+                ZED_SETTINGS="$HOME/.config/zed/settings.json"
+                if [ -f "$ZED_SETTINGS" ]; then
+                    if grep -q '"lazytail"' "$ZED_SETTINGS" 2>/dev/null; then
+                        echo -e "  ${YELLOW}⚠ lazytail already configured in $ZED_SETTINGS${NC}"
+                    else
+                        echo -e "  ${YELLOW}⚠ Zed requires manual configuration.${NC}"
+                        echo "  Add to $ZED_SETTINGS under 'context_servers':"
+                        echo ""
+                        echo "    \"context_servers\": {"
+                        echo "      \"lazytail\": {"
+                        echo "        \"command\": { \"path\": \"$LAZYTAIL_BIN\", \"args\": [\"--mcp\"] }"
+                        echo "      }"
+                        echo "    }"
+                    fi
+                else
+                    echo -e "  ${YELLOW}⚠ Zed settings not found. Add to $ZED_SETTINGS:${NC}"
+                    echo ""
+                    echo "    \"context_servers\": {"
+                    echo "      \"lazytail\": {"
+                    echo "        \"command\": { \"path\": \"$LAZYTAIL_BIN\", \"args\": [\"--mcp\"] }"
+                    echo "      }"
+                    echo "    }"
+                fi
+                ;;
+        esac
+        echo ""
+    fi
+fi
+
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Installation complete! Run 'lazytail --help' to get started."
