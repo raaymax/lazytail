@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** Fast, keyboard-driven log exploration across multiple sources with live updates
-**Current focus:** Phase 3 - Config Loading (Plan 1 of 2 complete)
+**Current focus:** Phase 3 - Config Loading (Complete)
 
 ## Current Position
 
 Phase: 3 of 5 (Config Loading)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-03 - Completed 03-01-PLAN.md (Config Loading Infrastructure)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-03 - Completed 03-02-PLAN.md (Config Integration)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: 9 min
-- Total execution time: 0.47 hours
+- Total execution time: 0.63 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [█████░░░░░] 50%
 |-------|-------|-------|----------|
 | 01-signal-infrastructure | 1 | 8 min | 8 min |
 | 02-config-discovery | 1 | 12 min | 12 min |
-| 03-config-loading | 1 | 8 min | 8 min |
+| 03-config-loading | 2 | 18 min | 9 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 12 min, 8 min
+- Last 5 plans: 8 min, 12 min, 8 min, 10 min
 - Trend: Consistent ~10 min average
 
 *Updated after each plan completion*
@@ -59,6 +59,10 @@ Recent decisions affecting current work:
 - [03-01]: Project name takes precedence when merging configs
 - [03-01]: Sources kept in separate groups (project vs global)
 - [03-01]: Graceful degradation: empty Config when no configs exist
+- [03-02]: ProjectSource and GlobalSource added to beginning of SourceType enum
+- [03-02]: Disabled tabs created for missing config sources (shown grayed)
+- [03-02]: Config tabs prepended before CLI and discovery tabs
+- [03-02]: Captured renamed from Global in UI for clarity
 
 ### Pending Todos
 
@@ -71,5 +75,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 03-01-PLAN.md
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
