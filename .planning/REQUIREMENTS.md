@@ -63,26 +63,26 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SIG-01 | — | pending |
-| SIG-02 | — | pending |
-| SIG-03 | — | pending |
-| SIG-04 | — | pending |
-| DISC-01 | — | pending |
-| DISC-02 | — | pending |
-| DISC-03 | — | pending |
-| LOAD-01 | — | pending |
-| LOAD-02 | — | pending |
-| LOAD-03 | — | pending |
-| OPT-01 | — | pending |
-| OPT-02 | — | pending |
-| OPT-03 | — | pending |
-| OPT-04 | — | pending |
-| OPT-05 | — | pending |
-| PROJ-01 | — | pending |
-| PROJ-02 | — | pending |
-| CMD-01 | — | pending |
-| CMD-02 | — | pending |
-| CMD-03 | — | pending |
+| SIG-01 | Phase 1 | pending |
+| SIG-02 | Phase 1 | pending |
+| SIG-03 | Phase 1 | pending |
+| SIG-04 | Phase 1 | pending |
+| DISC-01 | Phase 2 | pending |
+| DISC-02 | Phase 2 | pending |
+| DISC-03 | Phase 2 | pending |
+| LOAD-01 | Phase 3 | pending |
+| LOAD-02 | Phase 3 | pending |
+| LOAD-03 | Phase 3 | pending |
+| OPT-01 | Phase 3 | pending |
+| OPT-02 | Phase 3 | pending |
+| OPT-03 | Phase 3 | pending |
+| OPT-04 | Phase 3 | pending |
+| OPT-05 | Phase 3 | pending |
+| PROJ-01 | Phase 4 | pending |
+| PROJ-02 | Phase 4 | pending |
+| CMD-01 | Phase 5 | pending |
+| CMD-02 | Phase 5 | pending |
+| CMD-03 | Phase 5 | pending |
 
 ---
 *Last updated: 2026-02-03*
