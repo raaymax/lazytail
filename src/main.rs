@@ -18,7 +18,7 @@ mod viewport;
 mod watcher;
 
 use anyhow::{Context, Result};
-use app::{App, FilterState, ViewMode};
+use app::{App, FilterState, SourceType, ViewMode};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -108,7 +108,6 @@ fn main() -> Result<()> {
     source::cleanup_stale_markers();
 
     // Config discovery - run before mode dispatch
-    // Phase 3 will use this for config loading; for now we just report in verbose mode
     let (discovery, searched_paths) = config::discovery::discover_verbose();
     if args.verbose {
         for path in &searched_paths {
@@ -139,8 +138,27 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| "not found".to_string())
         );
     }
-    // Store discovery result for future use (Phase 3)
-    let _discovery = discovery;
+
+    // Load config from discovered files
+    let config_result = config::load(&discovery);
+    let (cfg, mut config_errors) = match config_result {
+        Ok(c) => (c, Vec::new()),
+        Err(err) => {
+            let err_msg = err.to_string();
+            (config::Config::default(), vec![err_msg])
+        }
+    };
+
+    if args.verbose {
+        if let Some(name) = &cfg.name {
+            eprintln!("[config] Project name: {}", name);
+        }
+        eprintln!("[config] Project sources: {}", cfg.project_sources.len());
+        eprintln!("[config] Global sources: {}", cfg.global_sources.len());
+        for err in &config_errors {
+            eprintln!("[config] Error: {}", err);
+        }
+    }
 
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
@@ -164,15 +182,33 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if args.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(args.no_watch);
+        return run_discovery_mode(args.no_watch, cfg, config_errors);
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
     let watch = !args.no_watch;
 
-    // Build tabs, treating "-" as stdin
+    // Build tabs from config sources first
     let mut tabs = Vec::new();
+
+    // Add project sources
+    for source in &cfg.project_sources {
+        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Add global sources
+    for source in &cfg.global_sources {
+        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Build tabs from CLI args, treating "-" as stdin
     let mut stdin_used = false;
 
     // If stdin has piped data, always include it as the first tab
@@ -192,6 +228,11 @@ fn main() -> Result<()> {
         } else {
             tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
         }
+    }
+
+    // Log config errors to stderr (debug source is a future enhancement)
+    for err in &config_errors {
+        eprintln!("[config error] {}", err);
     }
 
     let mut app = App::with_tabs(tabs);
@@ -223,7 +264,11 @@ fn main() -> Result<()> {
 }
 
 /// Run in discovery mode: auto-discover sources from ~/.config/lazytail/data/
-fn run_discovery_mode(no_watch: bool) -> Result<()> {
+fn run_discovery_mode(
+    no_watch: bool,
+    cfg: config::Config,
+    mut config_errors: Vec<String>,
+) -> Result<()> {
     use source::{discover_sources, ensure_directories};
 
     // Ensure config directories exist
@@ -232,27 +277,47 @@ fn run_discovery_mode(no_watch: bool) -> Result<()> {
     // Discover existing sources
     let sources = discover_sources()?;
 
-    if sources.is_empty() {
-        eprintln!("No log sources found in ~/.config/lazytail/data/");
-        eprintln!();
-        eprintln!("To create sources, use capture mode:");
-        eprintln!("  command | lazytail -n <NAME>");
-        eprintln!();
-        eprintln!("Or specify files directly:");
-        eprintln!("  lazytail <FILE>...");
-        std::process::exit(0);
+    let watch = !no_watch;
+
+    // Build tabs from config sources first
+    let mut tabs = Vec::new();
+
+    // Add project sources
+    for source in &cfg.project_sources {
+        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
     }
 
-    // Create tabs from discovered sources
-    let watch = !no_watch;
-    let tabs: Vec<tab::TabState> = sources
+    // Add global sources
+    for source in &cfg.global_sources {
+        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Add discovered sources
+    let discovery_tabs: Vec<tab::TabState> = sources
         .into_iter()
         .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
         .collect();
+    tabs.extend(discovery_tabs);
+
+    // Log config errors to stderr (debug source is a future enhancement)
+    for err in &config_errors {
+        eprintln!("[config error] {}", err);
+    }
 
     if tabs.is_empty() {
-        eprintln!("Failed to open any log sources");
-        std::process::exit(1);
+        eprintln!("No log sources found.");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  1. Create a lazytail.yaml config file in your project");
+        eprintln!("  2. Use capture mode: command | lazytail -n <NAME>");
+        eprintln!("  3. Specify files directly: lazytail <FILE>...");
+        std::process::exit(0);
     }
 
     let mut app = App::with_tabs(tabs);
