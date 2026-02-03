@@ -9,6 +9,7 @@ mod history;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
+mod signal;
 mod source;
 mod tab;
 mod ui;
@@ -24,7 +25,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::{
-    cancel::CancelToken, engine::FilterEngine, regex_filter::RegexFilter, streaming_filter,
+    cancel::CancelToken, engine::FilterEngine, query, regex_filter::RegexFilter, streaming_filter,
     string_filter::StringFilter, Filter, FilterMode,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -258,6 +259,12 @@ fn trigger_filter(
         cancel.cancel();
     }
 
+    // Check for query syntax (json | ... or logfmt | ...)
+    if query::is_query_syntax(&pattern) {
+        trigger_query_filter(tab, pattern, start_line, end_line);
+        return;
+    }
+
     let case_sensitive = mode.is_case_sensitive();
     let is_regex = mode.is_regex();
 
@@ -339,6 +346,76 @@ fn trigger_filter(
             } else {
                 Arc::new(StringFilter::new(&pattern, case_sensitive))
             };
+            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
+        }
+    };
+
+    tab.filter.receiver = Some(receiver);
+}
+
+/// Trigger a query-based filter (json | ... or logfmt | ...)
+fn trigger_query_filter(
+    tab: &mut tab::TabState,
+    pattern: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) {
+    // Parse the query
+    let filter_query = match query::parse_query(&pattern) {
+        Ok(q) => q,
+        Err(_) => return, // Invalid query, don't filter
+    };
+
+    // Create QueryFilter
+    let query_filter = match query::QueryFilter::new(filter_query) {
+        Ok(f) => f,
+        Err(_) => return, // Invalid filter (e.g., bad regex)
+    };
+
+    let filter: Arc<dyn Filter> = Arc::new(query_filter);
+
+    // Create new cancel token for this operation
+    let cancel = CancelToken::new();
+    tab.filter.cancel_token = Some(cancel.clone());
+
+    // For incremental filtering
+    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
+        tab.filter.is_incremental = true;
+
+        if let Some(path) = &tab.source_path {
+            match streaming_filter::run_streaming_filter_range(
+                path.clone(),
+                filter,
+                start,
+                end,
+                cancel,
+            ) {
+                Ok(rx) => rx,
+                Err(_) => return,
+            }
+        } else {
+            FilterEngine::run_filter_range(
+                tab.reader.clone(),
+                filter,
+                FILTER_PROGRESS_INTERVAL,
+                start,
+                end,
+                cancel,
+            )
+        }
+    } else {
+        // Full filtering
+        tab.filter.needs_clear = true;
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
+        tab.filter.is_incremental = false;
+
+        if let Some(path) = &tab.source_path {
+            match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
+                Ok(rx) => rx,
+                Err(_) => return,
+            }
+        } else {
             FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
         }
     };
