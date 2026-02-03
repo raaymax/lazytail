@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** Fast, keyboard-driven log exploration across multiple sources with live updates
-**Current focus:** Phase 2 complete, ready for Phase 3 - Config Loading
+**Current focus:** Phase 3 - Config Loading (Plan 1 of 2 complete)
 
 ## Current Position
 
-Phase: 2 of 5 (Config Discovery)
-Plan: 1 of 1 in current phase
-Status: Phase complete, verified
-Last activity: 2026-02-03 — Completed 02-01-PLAN.md (Config Discovery)
+Phase: 3 of 5 (Config Loading)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-03 - Completed 03-01-PLAN.md (Config Loading Infrastructure)
 
-Progress: [████░░░░░░] 40%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: 10 min
-- Total execution time: 0.33 hours
+- Total plans completed: 3
+- Average duration: 9 min
+- Total execution time: 0.47 hours
 
 **By Phase:**
 
@@ -29,10 +29,11 @@ Progress: [████░░░░░░] 40%
 |-------|-------|-------|----------|
 | 01-signal-infrastructure | 1 | 8 min | 8 min |
 | 02-config-discovery | 1 | 12 min | 12 min |
+| 03-config-loading | 1 | 8 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 12 min
-- Trend: Consistent, slightly longer for config work
+- Last 5 plans: 8 min, 12 min, 8 min
+- Trend: Consistent ~10 min average
 
 *Updated after each plan completion*
 
@@ -53,6 +54,11 @@ Recent decisions affecting current work:
 - [02-01]: Global config checked before parent walk, but doesn't stop project search
 - [02-01]: Verbose mode shows full search path, not just results
 - [02-01]: Discovery runs early, before mode dispatch
+- [03-01]: Use serde-saphyr instead of unmaintained serde-yaml
+- [03-01]: 0.8 Jaro-Winkler threshold for typo suggestions
+- [03-01]: Project name takes precedence when merging configs
+- [03-01]: Sources kept in separate groups (project vs global)
+- [03-01]: Graceful degradation: empty Config when no configs exist
 
 ### Pending Todos
 
@@ -65,5 +71,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 02-01-PLAN.md
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
