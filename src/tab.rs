@@ -1,4 +1,5 @@
 use crate::app::{FilterState, SourceType, ViewMode};
+use crate::config;
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
@@ -101,6 +102,10 @@ pub struct TabState {
     pub stream_receiver: Option<Receiver<StreamMessage>>,
     /// Source status for discovered sources (Active/Ended)
     pub source_status: Option<SourceStatus>,
+    /// Source type from config (ProjectSource or GlobalSource)
+    pub config_source_type: Option<SourceType>,
+    /// Whether this source is disabled (file doesn't exist)
+    pub disabled: bool,
 }
 
 impl TabState {
@@ -110,8 +115,12 @@ impl TabState {
         self.expansion.expanded_lines.contains(&file_line_number)
     }
 
-    /// Get the source type for this tab (Global, File, or Pipe)
+    /// Get the source type for this tab (ProjectSource, GlobalSource, Global, File, or Pipe)
     pub fn source_type(&self) -> SourceType {
+        // Config source type takes precedence
+        if let Some(source_type) = self.config_source_type {
+            return source_type;
+        }
         if self.source_status.is_some() {
             SourceType::Global
         } else if self.source_path.is_some() {
@@ -167,6 +176,8 @@ impl TabState {
                 expansion: ExpansionState::default(),
                 stream_receiver: None,
                 source_status: None,
+                config_source_type: None,
+                disabled: false,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -193,6 +204,8 @@ impl TabState {
                 expansion: ExpansionState::default(),
                 stream_receiver: Some(rx),
                 source_status: None,
+                config_source_type: None,
+                disabled: false,
             })
         }
     }
@@ -222,6 +235,8 @@ impl TabState {
             expansion: ExpansionState::default(),
             stream_receiver: Some(rx),
             source_status: None,
+            config_source_type: None,
+            disabled: false,
         })
     }
 
@@ -254,6 +269,82 @@ impl TabState {
             expansion: ExpansionState::default(),
             stream_receiver: None,
             source_status: Some(source.status),
+            config_source_type: None,
+            disabled: false,
+        })
+    }
+
+    /// Create a new tab from a config source.
+    ///
+    /// If the source file doesn't exist, creates a disabled placeholder tab.
+    /// Otherwise creates a normal file tab with the config source type set.
+    pub fn from_config_source(
+        source: &config::Source,
+        source_type: SourceType,
+        watch: bool,
+    ) -> Result<Self> {
+        // If source doesn't exist, create disabled placeholder tab
+        if !source.exists {
+            return Self::disabled_source(source.name.clone(), source.path.clone(), source_type);
+        }
+
+        // Create normal file tab
+        let file_reader = FileReader::new(&source.path)?;
+        let watcher = if watch {
+            FileWatcher::new(&source.path).ok()
+        } else {
+            None
+        };
+
+        let total_lines = file_reader.total_lines();
+        let line_indices = (0..total_lines).collect();
+        let selected_line = total_lines.saturating_sub(1);
+
+        Ok(Self {
+            name: source.name.clone(),
+            source_path: Some(source.path.clone()),
+            mode: ViewMode::Normal,
+            total_lines,
+            line_indices,
+            scroll_position: 0,
+            selected_line,
+            follow_mode: true,
+            reader: Arc::new(Mutex::new(file_reader)),
+            watcher,
+            viewport: Viewport::new(selected_line),
+            filter: FilterConfig::default(),
+            expansion: ExpansionState::default(),
+            stream_receiver: None,
+            source_status: None,
+            config_source_type: Some(source_type),
+            disabled: false,
+        })
+    }
+
+    /// Create a disabled tab for a missing source (shown grayed out in UI).
+    fn disabled_source(name: String, path: PathBuf, source_type: SourceType) -> Result<Self> {
+        // Use an empty stream reader as a placeholder
+        let stream_reader = StreamReader::new_incremental();
+        let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
+
+        Ok(Self {
+            name,
+            source_path: Some(path),
+            mode: ViewMode::Normal,
+            total_lines: 0,
+            line_indices: Vec::new(),
+            scroll_position: 0,
+            selected_line: 0,
+            follow_mode: false,
+            reader,
+            watcher: None,
+            viewport: Viewport::new(0),
+            filter: FilterConfig::default(),
+            expansion: ExpansionState::default(),
+            stream_receiver: None,
+            source_status: None,
+            config_source_type: Some(source_type),
+            disabled: true,
         })
     }
 
