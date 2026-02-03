@@ -127,7 +127,9 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
 
         // Category header
         let cat_name = match cat {
-            SourceType::Global => "Global",
+            SourceType::ProjectSource => "Project Sources",
+            SourceType::GlobalSource => "Global Sources",
+            SourceType::Global => "Captured",
             SourceType::File => "Files",
             SourceType::Pipe => "Pipes",
         };
@@ -178,7 +180,10 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
                     tab.name.clone()
                 };
 
-                let item_style = if is_tree_selected {
+                let item_style = if tab.disabled {
+                    // Disabled sources (file doesn't exist) shown grayed out
+                    Style::default().fg(Color::DarkGray)
+                } else if is_tree_selected {
                     Style::default()
                         .bg(Color::DarkGray)
                         .fg(Color::White)
@@ -488,11 +493,24 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
-    let label = app.current_filter_mode.prompt_label();
-    let input_text = format!("{}: {}", label, app.get_input());
+    let input = app.get_input();
+
+    // Detect if this is query syntax for display purposes
+    let is_query = crate::filter::query::is_query_syntax(input);
+
+    let label = if is_query {
+        "Query"
+    } else {
+        app.current_filter_mode.prompt_label()
+    };
+    let input_text = format!("{}: {}", label, input);
 
     // Determine border color based on mode and validation state
-    let border_color = if app.current_filter_mode.is_regex() {
+    let border_color = if app.query_error.is_some() {
+        Color::Red // Invalid query
+    } else if is_query {
+        Color::Magenta // Valid query mode
+    } else if app.current_filter_mode.is_regex() {
         if app.regex_error.is_some() {
             Color::Red // Invalid regex
         } else {
@@ -503,7 +521,9 @@ fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     };
 
     // Build help text with mode hint
-    let mode_hint = if app.current_filter_mode.is_regex() {
+    let mode_hint = if is_query {
+        "Query"
+    } else if app.current_filter_mode.is_regex() {
         "Tab: Plain"
     } else {
         "Tab: Regex"
