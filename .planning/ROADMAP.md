@@ -13,7 +13,7 @@ This roadmap delivers project-scoped configuration and robust signal handling to
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Signal Infrastructure** - Robust signal handling with cleanup coordination
-- [ ] **Phase 2: Config Discovery** - Find project root and config files
+- [x] **Phase 2: Config Discovery** - Find project root and config files
 - [ ] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
 - [ ] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
 - [ ] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
@@ -47,7 +47,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md — Config discovery module with verbose output integration
+- [x] 02-01-PLAN.md — Config discovery module with verbose output integration
 
 ### Phase 3: Config Loading
 **Goal**: Application parses YAML config and merges multiple configuration sources with clear precedence
@@ -100,7 +100,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Signal Infrastructure | 1/1 | Complete | 2026-02-03 |
-| 2. Config Discovery | 0/1 | Not started | - |
+| 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
 | 3. Config Loading | 0/? | Not started | - |
 | 4. Project-Local Streams | 0/? | Not started | - |
 | 5. Config Commands | 0/? | Not started | - |

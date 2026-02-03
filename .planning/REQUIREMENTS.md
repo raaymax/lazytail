@@ -15,9 +15,9 @@
 
 ### Config Discovery
 
-- [ ] **DISC-01**: Project root discovery — walk up directories looking for lazytail.yaml or .lazytail/
-- [ ] **DISC-02**: Graceful missing config — tool works without config file using defaults
-- [ ] **DISC-03**: Filesystem boundary checks — stop at root and $HOME to prevent slow traversal
+- [x] **DISC-01**: Project root discovery — walk up directories looking for lazytail.yaml or .lazytail/
+- [x] **DISC-02**: Graceful missing config — tool works without config file using defaults
+- [x] **DISC-03**: Filesystem boundary checks — stop at root and $HOME to prevent slow traversal
 
 ### Config Loading
 
@@ -67,9 +67,9 @@
 | SIG-02 | Phase 1 | complete |
 | SIG-03 | Phase 1 | complete |
 | SIG-04 | Phase 1 | complete |
-| DISC-01 | Phase 2 | pending |
-| DISC-02 | Phase 2 | pending |
-| DISC-03 | Phase 2 | pending |
+| DISC-01 | Phase 2 | complete |
+| DISC-02 | Phase 2 | complete |
+| DISC-03 | Phase 2 | complete |
 | LOAD-01 | Phase 3 | pending |
 | LOAD-02 | Phase 3 | pending |
 | LOAD-03 | Phase 3 | pending |
