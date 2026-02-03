@@ -52,17 +52,19 @@ Plans:
 ### Phase 3: Config Loading
 **Goal**: Application parses YAML config and merges multiple configuration sources with clear precedence
 **Depends on**: Phase 2
-**Requirements**: LOAD-01, LOAD-02, LOAD-03, OPT-01, OPT-02, OPT-03, OPT-04, OPT-05
+**Requirements**: LOAD-01, LOAD-02, LOAD-03, OPT-01, OPT-02
+**Note**: OPT-03, OPT-04, OPT-05 (follow, filter, streams_dir) deferred per CONTEXT.md - only `name` and `sources` for now
 **Success Criteria** (what must be TRUE):
-  1. lazytail.yaml with `name`, `sources`, `follow`, `filter`, `streams_dir` options parses correctly
-  2. CLI arguments override config file values (e.g., `--filter` overrides config `filter`)
-  3. Project config overrides global config (~/.config/lazytail/config.yaml)
-  4. Parse errors show file path, line number, and clear error message
-  5. Named sources from config can be opened with file paths
-**Plans**: TBD
+  1. lazytail.yaml with `name` and `sources` options parses correctly
+  2. Project config overrides global config for name; sources kept in separate groups
+  3. Parse errors show file path, line number, and "did you mean" suggestions
+  4. Named sources from config appear in side panel
+  5. Sources with missing files shown grayed out/disabled
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD during planning
+- [ ] 03-01-PLAN.md — Config loading infrastructure (types, parser, errors)
+- [ ] 03-02-PLAN.md — Integration with main.rs and UI (source categories)
 
 ### Phase 4: Project-Local Streams
 **Goal**: Streams captured within a project are stored locally in .lazytail/ directory
@@ -101,6 +103,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Signal Infrastructure | 1/1 | Complete | 2026-02-03 |
 | 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
-| 3. Config Loading | 0/? | Not started | - |
+| 3. Config Loading | 0/2 | In Progress | - |
 | 4. Project-Local Streams | 0/? | Not started | - |
 | 5. Config Commands | 0/? | Not started | - |
