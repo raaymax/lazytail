@@ -35,8 +35,8 @@
 
 ### Project-Local Streams
 
-- [ ] **PROJ-01**: .lazytail/ directory — create project-local directory for stream storage
-- [ ] **PROJ-02**: Context-aware capture — `lazytail -n` writes to project .lazytail/ when in project, global otherwise
+- [x] **PROJ-01**: .lazytail/ directory — create project-local directory for stream storage
+- [x] **PROJ-02**: Context-aware capture — `lazytail -n` writes to project .lazytail/ when in project, global otherwise
 
 ### Config Commands
 
@@ -78,8 +78,8 @@
 | OPT-03 | - | deferred |
 | OPT-04 | - | deferred |
 | OPT-05 | - | deferred |
-| PROJ-01 | Phase 4 | pending |
-| PROJ-02 | Phase 4 | pending |
+| PROJ-01 | Phase 4 | complete |
+| PROJ-02 | Phase 4 | complete |
 | CMD-01 | Phase 5 | pending |
 | CMD-02 | Phase 5 | pending |
 | CMD-03 | Phase 5 | pending |

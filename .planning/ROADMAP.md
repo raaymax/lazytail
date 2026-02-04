@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Signal Infrastructure** - Robust signal handling with cleanup coordination
 - [x] **Phase 2: Config Discovery** - Find project root and config files
 - [x] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
-- [ ] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
+- [x] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
 - [ ] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
 
 ## Phase Details
@@ -78,8 +78,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Context-aware directory functions and capture mode integration
-- [ ] 04-02-PLAN.md — Discovery mode with dual-location source scanning
+- [x] 04-01-PLAN.md — Context-aware directory functions and capture mode integration
+- [x] 04-02-PLAN.md — Discovery mode with dual-location source scanning
 
 ### Phase 5: Config Commands
 **Goal**: Developer experience commands for config initialization, validation, and introspection
@@ -105,5 +105,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Signal Infrastructure | 1/1 | Complete | 2026-02-03 |
 | 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
 | 3. Config Loading | 2/2 | Complete | 2026-02-04 |
-| 4. Project-Local Streams | 0/2 | Not started | - |
+| 4. Project-Local Streams | 2/2 | Complete | 2026-02-04 |
 | 5. Config Commands | 0/? | Not started | - |
