@@ -105,8 +105,9 @@ pub fn ensure_directories_for_context(discovery: &DiscoveryResult) -> Result<()>
             .with_context(|| format!("Failed to create data directory: {}", data.display()))?;
     }
     if let Some(sources) = resolve_sources_dir(discovery) {
-        create_secure_dir(&sources)
-            .with_context(|| format!("Failed to create sources directory: {}", sources.display()))?;
+        create_secure_dir(&sources).with_context(|| {
+            format!("Failed to create sources directory: {}", sources.display())
+        })?;
     }
     Ok(())
 }
@@ -250,7 +251,8 @@ pub fn check_source_status_for_context(name: &str, discovery: &DiscoveryResult) 
 ///
 /// Uses atomic creation to prevent races. Writes the current PID.
 pub fn create_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Result<()> {
-    let sources = resolve_sources_dir(discovery).context("Could not determine sources directory")?;
+    let sources =
+        resolve_sources_dir(discovery).context("Could not determine sources directory")?;
     create_secure_dir(&sources).context("Failed to create sources directory")?;
 
     let marker_path = sources.join(name);

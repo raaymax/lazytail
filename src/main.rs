@@ -177,7 +177,7 @@ fn main() -> Result<()> {
             eprintln!("Usage: command | lazytail -n <NAME>");
             std::process::exit(1);
         }
-        return capture::run_capture_mode(name);
+        return capture::run_capture_mode(name, &discovery);
     }
 
     // Mode 2: Discovery mode (no files, no stdin)
