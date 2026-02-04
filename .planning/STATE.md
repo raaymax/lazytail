@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** Fast, keyboard-driven log exploration across multiple sources with live updates
-**Current focus:** Phase 4 - Project-Local Streams
+**Current focus:** Phase 4 - Project-Local Streams (Complete)
 
 ## Current Position
 
 Phase: 4 of 5 (Project-Local Streams)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-04 - Completed 04-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-04 - Completed 04-02-PLAN.md
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
-- Average duration: 9 min
-- Total execution time: 0.73 hours
+- Total plans completed: 6
+- Average duration: 8 min
+- Total execution time: 0.85 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [███████░░░] 70%
 | 01-signal-infrastructure | 1 | 8 min | 8 min |
 | 02-config-discovery | 1 | 12 min | 12 min |
 | 03-config-loading | 2 | 18 min | 9 min |
-| 04-project-local-streams | 1 | 8 min | 8 min |
+| 04-project-local-streams | 2 | 15 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 12 min, 8 min, 10 min, 8 min
-- Trend: Consistent ~10 min average
+- Last 5 plans: 12 min, 8 min, 10 min, 8 min, 7 min
+- Trend: Consistent ~9 min average
 
 *Updated after each plan completion*
 
@@ -67,6 +67,10 @@ Recent decisions affecting current work:
 - [04-01]: Context-aware functions use _for_context variants for backward compatibility
 - [04-01]: Secure permissions (0700) on Unix only via cfg(unix)
 - [04-01]: Location indicator (project/global) shown in capture header
+- [04-02]: SourceLocation enum for tracking source origin (Project, Global)
+- [04-02]: Project sources shadow global sources with same name
+- [04-02]: scan_data_directory helper extracted for code reuse
+- [04-02]: watched_location parameter passed through for correct location assignment
 
 ### Pending Todos
 
@@ -79,5 +83,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 04-01-PLAN.md
+Stopped at: Completed 04-02-PLAN.md (Phase 04 complete)
 Resume file: None
