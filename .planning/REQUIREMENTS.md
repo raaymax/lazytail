@@ -21,17 +21,17 @@
 
 ### Config Loading
 
-- [ ] **LOAD-01**: YAML format support — parse lazytail.yaml using serde-saphyr
-- [ ] **LOAD-02**: Hierarchical precedence — CLI args override project config override global config
-- [ ] **LOAD-03**: Clear error messages — show file path and line number on parse errors
+- [x] **LOAD-01**: YAML format support — parse lazytail.yaml using serde-saphyr
+- [x] **LOAD-02**: Hierarchical precedence — CLI args override project config override global config
+- [x] **LOAD-03**: Clear error messages — show file path and line number on parse errors
 
 ### Config Options
 
-- [ ] **OPT-01**: `name` option — project display name shown in UI
-- [ ] **OPT-02**: `sources` option — file-based source definitions with paths/globs
-- [ ] **OPT-03**: `follow` option — default auto-follow mode for new tabs
-- [ ] **OPT-04**: `filter` option — default filter pattern applied on startup
-- [ ] **OPT-05**: `streams_dir` option — custom location for project streams (default: .lazytail/)
+- [x] **OPT-01**: `name` option — project display name shown in UI
+- [x] **OPT-02**: `sources` option — file-based source definitions with paths/globs
+- [ ] **OPT-03**: `follow` option — default auto-follow mode for new tabs (deferred)
+- [ ] **OPT-04**: `filter` option — default filter pattern applied on startup (deferred)
+- [ ] **OPT-05**: `streams_dir` option — custom location for project streams (deferred)
 
 ### Project-Local Streams
 
@@ -70,14 +70,14 @@
 | DISC-01 | Phase 2 | complete |
 | DISC-02 | Phase 2 | complete |
 | DISC-03 | Phase 2 | complete |
-| LOAD-01 | Phase 3 | pending |
-| LOAD-02 | Phase 3 | pending |
-| LOAD-03 | Phase 3 | pending |
-| OPT-01 | Phase 3 | pending |
-| OPT-02 | Phase 3 | pending |
-| OPT-03 | Phase 3 | pending |
-| OPT-04 | Phase 3 | pending |
-| OPT-05 | Phase 3 | pending |
+| LOAD-01 | Phase 3 | complete |
+| LOAD-02 | Phase 3 | complete |
+| LOAD-03 | Phase 3 | complete |
+| OPT-01 | Phase 3 | complete |
+| OPT-02 | Phase 3 | complete |
+| OPT-03 | - | deferred |
+| OPT-04 | - | deferred |
+| OPT-05 | - | deferred |
 | PROJ-01 | Phase 4 | pending |
 | PROJ-02 | Phase 4 | pending |
 | CMD-01 | Phase 5 | pending |
@@ -85,4 +85,4 @@
 | CMD-03 | Phase 5 | pending |
 
 ---
-*Last updated: 2026-02-03*
+*Last updated: 2026-02-04*

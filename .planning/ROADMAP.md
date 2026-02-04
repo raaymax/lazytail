@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Signal Infrastructure** - Robust signal handling with cleanup coordination
 - [x] **Phase 2: Config Discovery** - Find project root and config files
-- [ ] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
+- [x] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
 - [ ] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
 - [ ] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
 
@@ -63,8 +63,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Config loading infrastructure (types, parser, errors)
-- [ ] 03-02-PLAN.md — Integration with main.rs and UI (source categories)
+- [x] 03-01-PLAN.md — Config loading infrastructure (types, parser, errors)
+- [x] 03-02-PLAN.md — Integration with main.rs and UI (source categories)
 
 ### Phase 4: Project-Local Streams
 **Goal**: Streams captured within a project are stored locally in .lazytail/ directory
@@ -103,6 +103,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Signal Infrastructure | 1/1 | Complete | 2026-02-03 |
 | 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
-| 3. Config Loading | 0/2 | In Progress | - |
+| 3. Config Loading | 2/2 | Complete | 2026-02-04 |
 | 4. Project-Local Streams | 0/? | Not started | - |
 | 5. Config Commands | 0/? | Not started | - |
