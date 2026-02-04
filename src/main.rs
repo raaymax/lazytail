@@ -182,7 +182,7 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if args.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(args.no_watch, cfg, config_errors);
+        return run_discovery_mode(args.no_watch, cfg, config_errors, &discovery);
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -263,19 +263,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run in discovery mode: auto-discover sources from ~/.config/lazytail/data/
+/// Run in discovery mode: auto-discover sources from project and global data directories
 fn run_discovery_mode(
     no_watch: bool,
     cfg: config::Config,
     mut config_errors: Vec<String>,
+    discovery: &config::DiscoveryResult,
 ) -> Result<()> {
-    use source::{discover_sources, ensure_directories};
+    use source::{discover_sources_for_context, ensure_directories_for_context};
 
-    // Ensure config directories exist
-    ensure_directories()?;
+    // Ensure config directories exist (project or global based on context)
+    ensure_directories_for_context(discovery)?;
 
-    // Discover existing sources
-    let sources = discover_sources()?;
+    // Discover existing sources from both project and global directories
+    let sources = discover_sources_for_context(discovery)?;
 
     let watch = !no_watch;
 
@@ -323,8 +324,14 @@ fn run_discovery_mode(
     let mut app = App::with_tabs(tabs);
 
     // Optionally set up directory watcher for new sources
+    // Watch project data dir if in project, otherwise global
     let dir_watcher = if watch {
-        source::data_dir().and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
+        let watch_dir = if discovery.project_root.is_some() {
+            source::resolve_data_dir(discovery)
+        } else {
+            source::data_dir()
+        };
+        watch_dir.and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
     } else {
         None
     };
@@ -336,8 +343,15 @@ fn run_discovery_mode(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Determine watched location for newly discovered sources
+    let watched_location = if discovery.project_root.is_some() {
+        Some(source::SourceLocation::Project)
+    } else {
+        Some(source::SourceLocation::Global)
+    };
+
     // Main loop with directory watcher
-    let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher);
+    let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher, watched_location);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -533,7 +547,7 @@ fn trigger_query_filter(
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    run_app_with_discovery(terminal, app, None)
+    run_app_with_discovery(terminal, app, None, None)
 }
 
 /// Run the app with optional directory watcher for source discovery mode
@@ -541,6 +555,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     dir_watcher: Option<dir_watcher::DirectoryWatcher>,
+    watched_location: Option<source::SourceLocation>,
 ) -> Result<()> {
     use event::AppEvent;
 
@@ -580,9 +595,9 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     name,
                                     log_path: path,
                                     status,
-                                    // New files discovered via watcher are from the watched directory
-                                    // (global or project depending on context - defaulting to Global for now)
-                                    location: source::SourceLocation::Global,
+                                    // Use the location of the watched directory
+                                    location: watched_location
+                                        .unwrap_or(source::SourceLocation::Global),
                                 };
                                 if let Ok(tab) = tab::TabState::from_discovered_source(source, true)
                                 {
