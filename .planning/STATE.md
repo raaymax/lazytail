@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** Fast, keyboard-driven log exploration across multiple sources with live updates
-**Current focus:** Phase 3 complete, ready for Phase 4 - Project-Local Streams
+**Current focus:** Phase 4 - Project-Local Streams
 
 ## Current Position
 
-Phase: 3 of 5 (Config Loading)
-Plan: 2 of 2 in current phase
-Status: Phase complete, verified
-Last activity: 2026-02-04 - Phase 3 verified and complete
+Phase: 4 of 5 (Project-Local Streams)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-04 - Completed 04-01-PLAN.md
 
-Progress: [██████░░░░] 60%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 9 min
-- Total execution time: 0.63 hours
+- Total execution time: 0.73 hours
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [██████░░░░] 60%
 | 01-signal-infrastructure | 1 | 8 min | 8 min |
 | 02-config-discovery | 1 | 12 min | 12 min |
 | 03-config-loading | 2 | 18 min | 9 min |
+| 04-project-local-streams | 1 | 8 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 12 min, 8 min, 10 min
+- Last 5 plans: 12 min, 8 min, 10 min, 8 min
 - Trend: Consistent ~10 min average
 
 *Updated after each plan completion*
@@ -63,6 +64,9 @@ Recent decisions affecting current work:
 - [03-02]: Disabled tabs created for missing config sources (shown grayed)
 - [03-02]: Config tabs prepended before CLI and discovery tabs
 - [03-02]: Captured renamed from Global in UI for clarity
+- [04-01]: Context-aware functions use _for_context variants for backward compatibility
+- [04-01]: Secure permissions (0700) on Unix only via cfg(unix)
+- [04-01]: Location indicator (project/global) shown in capture header
 
 ### Pending Todos
 
@@ -74,6 +78,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-03
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-02-04
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
