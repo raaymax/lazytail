@@ -24,6 +24,15 @@ pub enum SourceStatus {
     Ended,
 }
 
+/// Location where a source was discovered
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceLocation {
+    /// Source is in project-local .lazytail/data/
+    Project,
+    /// Source is in global ~/.config/lazytail/data/
+    Global,
+}
+
 /// A discovered log source
 #[derive(Debug, Clone)]
 pub struct DiscoveredSource {
@@ -33,6 +42,8 @@ pub struct DiscoveredSource {
     pub log_path: PathBuf,
     /// Whether the source is currently active
     pub status: SourceStatus,
+    /// Where the source was discovered (project-local or global)
+    pub location: SourceLocation,
 }
 
 /// Get the data directory path: ~/.config/lazytail/data/
@@ -165,22 +176,22 @@ pub fn check_source_status(name: &str) -> SourceStatus {
     }
 }
 
-/// Discover all log sources from the data directory.
+/// Scan a data directory for log sources.
 ///
-/// Scans ~/.config/lazytail/data/ for .log files and checks
-/// their status against the sources/ markers.
-pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
-    let Some(data) = data_dir() else {
-        return Ok(Vec::new());
-    };
-
-    if !data.exists() {
+/// Helper function that scans a directory for .log files and returns
+/// discovered sources with the specified location.
+fn scan_data_directory(
+    dir: &Path,
+    sources_dir: Option<&Path>,
+    location: SourceLocation,
+) -> Result<Vec<DiscoveredSource>> {
+    if !dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut sources = Vec::new();
 
-    for entry in fs::read_dir(&data).context("Failed to read data directory")? {
+    for entry in fs::read_dir(dir).context("Failed to read data directory")? {
         let entry = entry?;
         let path = entry.path();
 
@@ -188,12 +199,19 @@ pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
         if path.extension().is_some_and(|ext| ext == "log") {
             if let Some(stem) = path.file_stem() {
                 let name = stem.to_string_lossy().to_string();
-                let status = check_source_status(&name);
+
+                // Check status using the provided sources directory
+                let status = if let Some(src_dir) = sources_dir {
+                    check_source_status_in_dir(&name, src_dir)
+                } else {
+                    SourceStatus::Ended
+                };
 
                 sources.push(DiscoveredSource {
                     name,
                     log_path: path,
                     status,
+                    location,
                 });
             }
         }
@@ -203,6 +221,81 @@ pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
     sources.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(sources)
+}
+
+/// Check the status of a source by name in a specific sources directory.
+fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatus {
+    let marker_path = sources_dir.join(name);
+    if !marker_path.exists() {
+        return SourceStatus::Ended;
+    }
+
+    match read_marker_pid(&marker_path) {
+        Some(pid) if is_pid_running(pid) => SourceStatus::Active,
+        _ => SourceStatus::Ended,
+    }
+}
+
+/// Discover all log sources from the data directory.
+///
+/// Scans ~/.config/lazytail/data/ for .log files and checks
+/// their status against the sources/ markers.
+pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
+    let Some(data) = data_dir() else {
+        return Ok(Vec::new());
+    };
+
+    let sources_path = sources_dir();
+    scan_data_directory(&data, sources_path.as_deref(), SourceLocation::Global)
+}
+
+/// Discover log sources from both project and global data directories.
+///
+/// Scans both the project-local `.lazytail/data/` (if in a project) and the
+/// global `~/.config/lazytail/data/` directories for log sources.
+///
+/// Project sources appear first in the result and shadow global sources
+/// with the same name (i.e., if a source exists in both locations, only
+/// the project-local version is returned).
+pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<DiscoveredSource>> {
+    let mut all_sources = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    // First, scan project data directory if in a project
+    if discovery.project_root.is_some() {
+        if let Some(project_data) = resolve_data_dir(discovery) {
+            let project_sources = resolve_sources_dir(discovery);
+            let sources = scan_data_directory(
+                &project_data,
+                project_sources.as_deref(),
+                SourceLocation::Project,
+            )?;
+
+            for source in sources {
+                seen_names.insert(source.name.clone());
+                all_sources.push(source);
+            }
+        }
+    }
+
+    // Then, scan global data directory
+    if let Some(global_data) = data_dir() {
+        let global_sources_path = sources_dir();
+        let sources = scan_data_directory(
+            &global_data,
+            global_sources_path.as_deref(),
+            SourceLocation::Global,
+        )?;
+
+        // Only add global sources that aren't shadowed by project sources
+        for source in sources {
+            if !seen_names.contains(&source.name) {
+                all_sources.push(source);
+            }
+        }
+    }
+
+    Ok(all_sources)
 }
 
 /// Create a marker file for the given source name.
@@ -400,9 +493,12 @@ mod tests {
     {
         let temp = TempDir::new().unwrap();
         let old_home = env::var("HOME").ok();
+        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
 
-        // Set HOME to temp dir so dirs::config_dir() uses it
+        // Set both HOME and XDG_CONFIG_HOME so dirs::config_dir() uses temp dir
+        // On Linux, XDG_CONFIG_HOME takes precedence
         env::set_var("HOME", temp.path());
+        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
 
         f(temp.path());
 
@@ -411,6 +507,12 @@ mod tests {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
+        }
+        // Restore XDG_CONFIG_HOME
+        if let Some(xdg) = old_xdg {
+            env::set_var("XDG_CONFIG_HOME", xdg);
+        } else {
+            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 
@@ -510,9 +612,11 @@ mod tests {
             // Sources should be sorted by name
             assert_eq!(sources[0].name, "api");
             assert_eq!(sources[0].status, SourceStatus::Active);
+            assert_eq!(sources[0].location, SourceLocation::Global);
 
             assert_eq!(sources[1].name, "worker");
             assert_eq!(sources[1].status, SourceStatus::Ended);
+            assert_eq!(sources[1].location, SourceLocation::Global);
         });
     }
 
@@ -681,5 +785,161 @@ mod tests {
             check_source_status_for_context("test", &discovery),
             SourceStatus::Ended
         );
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_discover_sources_for_context_project_before_global() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+
+        let old_home = env::var("HOME").ok();
+        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
+        env::set_var("HOME", temp.path());
+        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        // Create project data directory
+        let project_data = project_root.join(".lazytail").join("data");
+        fs::create_dir_all(&project_data).unwrap();
+
+        // Create global data directory
+        let global_data = temp.path().join(".config").join("lazytail").join("data");
+        fs::create_dir_all(&global_data).unwrap();
+
+        // Create sources in both locations
+        fs::write(project_data.join("proj-source.log"), "project").unwrap();
+        fs::write(global_data.join("glob-source.log"), "global").unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        let sources = discover_sources_for_context(&discovery).unwrap();
+
+        // Should have 2 sources
+        assert_eq!(sources.len(), 2);
+
+        // Project source should be first
+        assert_eq!(sources[0].name, "proj-source");
+        assert_eq!(sources[0].location, SourceLocation::Project);
+
+        // Global source should be second
+        assert_eq!(sources[1].name, "glob-source");
+        assert_eq!(sources[1].location, SourceLocation::Global);
+
+        // Restore HOME
+        if let Some(home) = old_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        // Restore XDG_CONFIG_HOME
+        if let Some(xdg) = old_xdg {
+            env::set_var("XDG_CONFIG_HOME", xdg);
+        } else {
+            env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_discover_sources_for_context_project_shadows_global() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+
+        let old_home = env::var("HOME").ok();
+        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
+        env::set_var("HOME", temp.path());
+        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        // Create project data directory
+        let project_data = project_root.join(".lazytail").join("data");
+        fs::create_dir_all(&project_data).unwrap();
+
+        // Create global data directory
+        let global_data = temp.path().join(".config").join("lazytail").join("data");
+        fs::create_dir_all(&global_data).unwrap();
+
+        // Create same-named source in both locations
+        fs::write(project_data.join("shared.log"), "project version").unwrap();
+        fs::write(global_data.join("shared.log"), "global version").unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        let sources = discover_sources_for_context(&discovery).unwrap();
+
+        // Should only have 1 source (project shadows global)
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "shared");
+        assert_eq!(sources[0].location, SourceLocation::Project);
+
+        // Restore HOME
+        if let Some(home) = old_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        // Restore XDG_CONFIG_HOME
+        if let Some(xdg) = old_xdg {
+            env::set_var("XDG_CONFIG_HOME", xdg);
+        } else {
+            env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_discover_sources_for_context_empty_project_dir() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+
+        let old_home = env::var("HOME").ok();
+        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
+        env::set_var("HOME", temp.path());
+        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        // Create empty project data directory
+        let project_data = project_root.join(".lazytail").join("data");
+        fs::create_dir_all(&project_data).unwrap();
+
+        // Create global data directory with a source
+        let global_data = temp.path().join(".config").join("lazytail").join("data");
+        fs::create_dir_all(&global_data).unwrap();
+        fs::write(global_data.join("global.log"), "global").unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        let sources = discover_sources_for_context(&discovery).unwrap();
+
+        // Should only have global source
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "global");
+        assert_eq!(sources[0].location, SourceLocation::Global);
+
+        // Restore HOME
+        if let Some(home) = old_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        // Restore XDG_CONFIG_HOME
+        if let Some(xdg) = old_xdg {
+            env::set_var("XDG_CONFIG_HOME", xdg);
+        } else {
+            env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 }

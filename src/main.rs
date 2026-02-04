@@ -580,6 +580,9 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     name,
                                     log_path: path,
                                     status,
+                                    // New files discovered via watcher are from the watched directory
+                                    // (global or project depending on context - defaulting to Global for now)
+                                    location: source::SourceLocation::Global,
                                 };
                                 if let Ok(tab) = tab::TabState::from_discovered_source(source, true)
                                 {
