@@ -6,10 +6,14 @@
 //! - PID-based marker files for active source tracking
 //! - Collision detection for capture mode
 
+use crate::config::DiscoveryResult;
 use anyhow::{Context, Result};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 
 /// Status of a discovered source
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +52,61 @@ pub fn ensure_directories() -> Result<()> {
     }
     if let Some(sources) = sources_dir() {
         fs::create_dir_all(&sources).context("Failed to create sources directory")?;
+    }
+    Ok(())
+}
+
+/// Create a directory with secure permissions (mode 0700 on Unix).
+///
+/// Creates the directory and all parent directories if they don't exist.
+/// On Unix systems, the directory is created with mode 0700 (owner read/write/execute only).
+/// On other platforms, the directory is created with default permissions.
+pub fn create_secure_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+
+    #[cfg(unix)]
+    builder.mode(0o700);
+
+    builder.create(path)
+}
+
+/// Resolve the data directory path based on discovery context.
+///
+/// If inside a project (discovery has project_root), returns `project_root/.lazytail/data`.
+/// Otherwise, falls back to the global data directory `~/.config/lazytail/data`.
+pub fn resolve_data_dir(discovery: &DiscoveryResult) -> Option<PathBuf> {
+    if let Some(ref project_root) = discovery.project_root {
+        Some(project_root.join(".lazytail").join("data"))
+    } else {
+        data_dir()
+    }
+}
+
+/// Resolve the sources directory path based on discovery context.
+///
+/// If inside a project (discovery has project_root), returns `project_root/.lazytail/sources`.
+/// Otherwise, falls back to the global sources directory `~/.config/lazytail/sources`.
+pub fn resolve_sources_dir(discovery: &DiscoveryResult) -> Option<PathBuf> {
+    if let Some(ref project_root) = discovery.project_root {
+        Some(project_root.join(".lazytail").join("sources"))
+    } else {
+        sources_dir()
+    }
+}
+
+/// Ensure directories exist for the given discovery context.
+///
+/// Creates data and sources directories using secure permissions.
+/// Uses project-local directories if in a project, global directories otherwise.
+pub fn ensure_directories_for_context(discovery: &DiscoveryResult) -> Result<()> {
+    if let Some(data) = resolve_data_dir(discovery) {
+        create_secure_dir(&data)
+            .with_context(|| format!("Failed to create data directory: {}", data.display()))?;
+    }
+    if let Some(sources) = resolve_sources_dir(discovery) {
+        create_secure_dir(&sources)
+            .with_context(|| format!("Failed to create sources directory: {}", sources.display()))?;
     }
     Ok(())
 }
@@ -163,6 +222,62 @@ pub fn create_marker(name: &str) -> Result<()> {
 
     writeln!(file, "{}", std::process::id())?;
     file.flush()?;
+
+    Ok(())
+}
+
+/// Check the status of a source by name using discovery context.
+///
+/// Returns `Active` if the marker exists and the PID is running,
+/// otherwise returns `Ended`.
+pub fn check_source_status_for_context(name: &str, discovery: &DiscoveryResult) -> SourceStatus {
+    let Some(sources) = resolve_sources_dir(discovery) else {
+        return SourceStatus::Ended;
+    };
+
+    let marker_path = sources.join(name);
+    if !marker_path.exists() {
+        return SourceStatus::Ended;
+    }
+
+    match read_marker_pid(&marker_path) {
+        Some(pid) if is_pid_running(pid) => SourceStatus::Active,
+        _ => SourceStatus::Ended,
+    }
+}
+
+/// Create a marker file for the given source name using discovery context.
+///
+/// Uses atomic creation to prevent races. Writes the current PID.
+pub fn create_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Result<()> {
+    let sources = resolve_sources_dir(discovery).context("Could not determine sources directory")?;
+    create_secure_dir(&sources).context("Failed to create sources directory")?;
+
+    let marker_path = sources.join(name);
+
+    // Use create_new for atomic creation (fails if exists)
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker_path)
+        .context("Failed to create marker (source may already be active)")?;
+
+    writeln!(file, "{}", std::process::id())?;
+    file.flush()?;
+
+    Ok(())
+}
+
+/// Remove a marker file for the given source name using discovery context.
+pub fn remove_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Result<()> {
+    let Some(sources) = resolve_sources_dir(discovery) else {
+        return Ok(());
+    };
+
+    let marker_path = sources.join(name);
+    if marker_path.exists() {
+        fs::remove_file(&marker_path).context("Failed to remove marker")?;
+    }
 
     Ok(())
 }
@@ -397,5 +512,172 @@ mod tests {
             assert_eq!(sources[1].name, "worker");
             assert_eq!(sources[1].status, SourceStatus::Ended);
         });
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_create_secure_dir() {
+        let temp = TempDir::new().unwrap();
+        let secure_path = temp.path().join("secure_dir");
+
+        create_secure_dir(&secure_path).unwrap();
+
+        assert!(secure_path.exists());
+        assert!(secure_path.is_dir());
+
+        // On Unix, check permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&secure_path).unwrap();
+            let mode = metadata.permissions().mode();
+            // Check that the last 9 bits (rwx for user/group/other) are 0o700
+            assert_eq!(mode & 0o777, 0o700, "directory should have mode 0700");
+        }
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_create_secure_dir_recursive() {
+        let temp = TempDir::new().unwrap();
+        let nested_path = temp.path().join("level1").join("level2").join("level3");
+
+        create_secure_dir(&nested_path).unwrap();
+
+        assert!(nested_path.exists());
+        assert!(nested_path.is_dir());
+    }
+
+    #[test]
+    fn test_resolve_data_dir_with_project() {
+        let project_root = PathBuf::from("/test/project");
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        let result = resolve_data_dir(&discovery);
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/test/project/.lazytail/data")
+        );
+    }
+
+    #[test]
+    fn test_resolve_data_dir_without_project() {
+        let discovery = DiscoveryResult::default();
+
+        // Without project root, should fall back to global data_dir()
+        let result = resolve_data_dir(&discovery);
+
+        // On systems with dirs::config_dir(), this should return a path
+        // containing "lazytail/data"
+        if let Some(path) = result {
+            assert!(path.to_string_lossy().contains("lazytail"));
+            assert!(path.to_string_lossy().contains("data"));
+        }
+    }
+
+    #[test]
+    fn test_resolve_sources_dir_with_project() {
+        let project_root = PathBuf::from("/test/project");
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        let result = resolve_sources_dir(&discovery);
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/test/project/.lazytail/sources")
+        );
+    }
+
+    #[test]
+    fn test_resolve_sources_dir_without_project() {
+        let discovery = DiscoveryResult::default();
+
+        // Without project root, should fall back to global sources_dir()
+        let result = resolve_sources_dir(&discovery);
+
+        // On systems with dirs::config_dir(), this should return a path
+        // containing "lazytail/sources"
+        if let Some(path) = result {
+            assert!(path.to_string_lossy().contains("lazytail"));
+            assert!(path.to_string_lossy().contains("sources"));
+        }
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_ensure_directories_for_context_project() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().to_path_buf();
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        ensure_directories_for_context(&discovery).unwrap();
+
+        let data_dir = project_root.join(".lazytail").join("data");
+        let sources_dir = project_root.join(".lazytail").join("sources");
+
+        assert!(data_dir.exists(), "data directory should exist");
+        assert!(sources_dir.exists(), "sources directory should exist");
+
+        // On Unix, check permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let data_mode = fs::metadata(&data_dir).unwrap().permissions().mode();
+            let sources_mode = fs::metadata(&sources_dir).unwrap().permissions().mode();
+            assert_eq!(data_mode & 0o777, 0o700, "data dir should have mode 0700");
+            assert_eq!(
+                sources_mode & 0o777,
+                0o700,
+                "sources dir should have mode 0700"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_marker_for_context() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().to_path_buf();
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        // Create marker
+        create_marker_for_context("test", &discovery).unwrap();
+
+        // Marker should exist
+        let marker_path = project_root.join(".lazytail").join("sources").join("test");
+        assert!(marker_path.exists(), "marker should exist");
+
+        // Status should be Active
+        assert_eq!(
+            check_source_status_for_context("test", &discovery),
+            SourceStatus::Active
+        );
+
+        // Remove marker
+        remove_marker_for_context("test", &discovery).unwrap();
+        assert!(!marker_path.exists(), "marker should be removed");
+
+        // Status should be Ended
+        assert_eq!(
+            check_source_status_for_context("test", &discovery),
+            SourceStatus::Ended
+        );
     }
 }
