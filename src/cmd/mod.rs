@@ -2,6 +2,7 @@
 //!
 //! Provides subcommand definitions for config initialization and management.
 
+pub mod config;
 pub mod init;
 
 use clap::{Args, Subcommand};
