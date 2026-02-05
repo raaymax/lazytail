@@ -114,14 +114,12 @@ fn main() -> Result<()> {
             cmd::Commands::Init(args) => cmd::init::run(args.force)
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
             cmd::Commands::Config { action } => match action {
-                cmd::ConfigAction::Validate => {
-                    // TODO: Plan 05-02
-                    Ok(())
-                }
-                cmd::ConfigAction::Show => {
-                    // TODO: Plan 05-02
-                    Ok(())
-                }
+                cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
+                    std::process::exit(code);
+                }),
+                cmd::ConfigAction::Show => cmd::config::show().map_err(|code| {
+                    std::process::exit(code);
+                }),
             },
         };
     }
