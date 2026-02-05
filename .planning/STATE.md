@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** Fast, keyboard-driven log exploration across multiple sources with live updates
-**Current focus:** Phase 5 in progress - Config Commands
+**Current focus:** Phase 5 complete - Config Commands
 
 ## Current Position
 
 Phase: 5 of 5 (Config Commands)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-05 - Completed 05-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Complete
+Last activity: 2026-02-05 - Completed 05-02-PLAN.md
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 8 min
-- Total execution time: 0.95 hours
+- Total execution time: 1.05 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: [█████████░] 90%
 | 02-config-discovery | 1 | 12 min | 12 min |
 | 03-config-loading | 2 | 18 min | 9 min |
 | 04-project-local-streams | 2 | 15 min | 8 min |
-| 05-config-commands | 1 | 8 min | 8 min |
+| 05-config-commands | 2 | 14 min | 7 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 10 min, 8 min, 7 min, 8 min
+- Last 5 plans: 10 min, 8 min, 7 min, 8 min, 6 min
 - Trend: Consistent ~8 min average
 
 *Updated after each plan completion*
@@ -75,17 +75,20 @@ Recent decisions affecting current work:
 - [05-01]: colored 3.1 used instead of 2.7 (version not available)
 - [05-01]: Cli struct renamed from Args for clarity with subcommand field
 - [05-01]: Subcommand dispatch happens before stale marker cleanup
+- [05-02]: Closest config wins for config commands (load_single_file)
+- [05-02]: validate checks source file existence beyond YAML validity
+- [05-02]: show uses single sources: section (closest-wins semantics)
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-- Pre-existing test failures in app::tests::test_add_to_history* (unrelated to config work)
+None - all planned phases complete.
 
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 05-01-PLAN.md
+Stopped at: Completed 05-02-PLAN.md (all phases complete)
 Resume file: None
