@@ -90,10 +90,11 @@ Plans:
   2. `lazytail config validate` reports config errors without starting the viewer
   3. `lazytail config show` displays effective merged configuration
   4. Init refuses to overwrite existing config without confirmation
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD during planning
+- [ ] 05-01-PLAN.md — CLI subcommand infrastructure and init command
+- [ ] 05-02-PLAN.md — Config validate and show commands
 
 ## Progress
 
@@ -106,4 +107,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
 | 3. Config Loading | 2/2 | Complete | 2026-02-04 |
 | 4. Project-Local Streams | 2/2 | Complete | 2026-02-04 |
-| 5. Config Commands | 0/? | Not started | - |
+| 5. Config Commands | 0/2 | Not started | - |
