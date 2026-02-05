@@ -1,6 +1,7 @@
 mod app;
 mod cache;
 mod capture;
+mod cmd;
 mod config;
 mod dir_watcher;
 mod event;
@@ -69,7 +70,7 @@ IN-APP HELP:
     Press '?' inside the app to see all keyboard shortcuts.
     Press '/' to start filtering, 'f' to toggle follow mode.
 ")]
-struct Args {
+struct Cli {
     /// Log files to view (omit for source discovery mode)
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
@@ -96,12 +97,34 @@ struct Args {
     /// Verbose output (show config discovery paths)
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
+
+    /// Subcommand to run
+    #[command(subcommand)]
+    command: Option<cmd::Commands>,
 }
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
 
-    let args = Args::parse();
+    let cli = Cli::parse();
+
+    // Handle subcommands first (before mode detection)
+    if let Some(command) = cli.command {
+        return match command {
+            cmd::Commands::Init(args) => cmd::init::run(args.force)
+                .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
+            cmd::Commands::Config { action } => match action {
+                cmd::ConfigAction::Validate => {
+                    // TODO: Plan 05-02
+                    Ok(())
+                }
+                cmd::ConfigAction::Show => {
+                    // TODO: Plan 05-02
+                    Ok(())
+                }
+            },
+        };
+    }
 
     // Cleanup stale markers from previous SIGKILL scenarios
     // This runs before any mode to ensure collision checks work correctly
@@ -109,7 +132,7 @@ fn main() -> Result<()> {
 
     // Config discovery - run before mode dispatch
     let (discovery, searched_paths) = config::discovery::discover_verbose();
-    if args.verbose {
+    if cli.verbose {
         for path in &searched_paths {
             eprintln!("[discovery] Searched: {}", path.display());
         }
@@ -149,7 +172,7 @@ fn main() -> Result<()> {
         }
     };
 
-    if args.verbose {
+    if cli.verbose {
         if let Some(name) = &cfg.name {
             eprintln!("[config] Project name: {}", name);
         }
@@ -162,7 +185,7 @@ fn main() -> Result<()> {
 
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
-    if args.mcp {
+    if cli.mcp {
         return mcp::run_mcp_server();
     }
 
@@ -171,7 +194,7 @@ fn main() -> Result<()> {
     let has_piped_input = !stdin_is_tty;
 
     // Mode 1: Capture mode (-n flag with stdin)
-    if let Some(name) = args.name {
+    if let Some(name) = cli.name {
         if stdin_is_tty {
             eprintln!("Error: Capture mode (-n) requires stdin input");
             eprintln!("Usage: command | lazytail -n <NAME>");
@@ -181,13 +204,13 @@ fn main() -> Result<()> {
     }
 
     // Mode 2: Discovery mode (no files, no stdin)
-    if args.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(args.no_watch, cfg, config_errors, &discovery);
+    if cli.files.is_empty() && !has_piped_input {
+        return run_discovery_mode(cli.no_watch, cfg, config_errors, &discovery);
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
-    let watch = !args.no_watch;
+    let watch = !cli.no_watch;
 
     // Build tabs from config sources first
     let mut tabs = Vec::new();
@@ -217,7 +240,7 @@ fn main() -> Result<()> {
         stdin_used = true;
     }
 
-    for file in args.files {
+    for file in cli.files {
         if file.as_os_str() == "-" {
             if stdin_used {
                 // Already read stdin, skip duplicate
