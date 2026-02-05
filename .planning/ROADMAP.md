@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Config Discovery** - Find project root and config files
 - [x] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
 - [x] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
-- [ ] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
+- [x] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
 
 ## Phase Details
 
@@ -93,8 +93,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — CLI subcommand infrastructure and init command
-- [ ] 05-02-PLAN.md — Config validate and show commands
+- [x] 05-01-PLAN.md — CLI subcommand infrastructure and init command
+- [x] 05-02-PLAN.md — Config validate and show commands
 
 ## Progress
 
@@ -107,4 +107,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Config Discovery | 1/1 | Complete | 2026-02-03 |
 | 3. Config Loading | 2/2 | Complete | 2026-02-04 |
 | 4. Project-Local Streams | 2/2 | Complete | 2026-02-04 |
-| 5. Config Commands | 0/2 | Not started | - |
+| 5. Config Commands | 2/2 | Complete | 2026-02-05 |

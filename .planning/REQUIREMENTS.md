@@ -40,9 +40,9 @@
 
 ### Config Commands
 
-- [ ] **CMD-01**: `lazytail init` — generate starter lazytail.yaml with comments
-- [ ] **CMD-02**: `lazytail config validate` — parse config and report errors without running
-- [ ] **CMD-03**: `lazytail config show` — display effective merged config
+- [x] **CMD-01**: `lazytail init` — generate starter lazytail.yaml with comments
+- [x] **CMD-02**: `lazytail config validate` — parse config and report errors without running
+- [x] **CMD-03**: `lazytail config show` — display effective merged config
 
 ## v2 Requirements (Deferred)
 
@@ -80,9 +80,9 @@
 | OPT-05 | - | deferred |
 | PROJ-01 | Phase 4 | complete |
 | PROJ-02 | Phase 4 | complete |
-| CMD-01 | Phase 5 | pending |
-| CMD-02 | Phase 5 | pending |
-| CMD-03 | Phase 5 | pending |
+| CMD-01 | Phase 5 | complete |
+| CMD-02 | Phase 5 | complete |
+| CMD-03 | Phase 5 | complete |
 
 ---
-*Last updated: 2026-02-04*
+*Last updated: 2026-02-05*
