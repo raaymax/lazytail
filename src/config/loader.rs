@@ -9,6 +9,19 @@ use crate::config::discovery::DiscoveryResult;
 use crate::config::error::ConfigError;
 use crate::config::types::{Config, RawConfig, RawSource, Source};
 
+/// Config loaded from a single file (for config commands).
+///
+/// Unlike [`Config`] which has `project_sources`/`global_sources`, this has a single
+/// `sources` list. Used by `config validate` and `config show` where "closest config
+/// wins completely" - we load ONLY the winning config file, not merge both.
+#[derive(Debug, Default)]
+pub struct SingleFileConfig {
+    /// Project name (optional).
+    pub name: Option<String>,
+    /// List of log sources from this config file.
+    pub sources: Vec<Source>,
+}
+
 /// Expand tilde in path to home directory.
 ///
 /// Handles the following cases:
@@ -62,6 +75,19 @@ fn validate_sources(raw: Vec<RawSource>) -> Vec<Source> {
             }
         })
         .collect()
+}
+
+/// Load config from a single file (closest-wins semantics for config commands).
+///
+/// Unlike [`load`] which merges project and global configs for the TUI,
+/// this loads only one config file and returns its contents directly.
+/// Used by `config validate` and `config show` commands.
+pub fn load_single_file(path: &Path) -> Result<SingleFileConfig, ConfigError> {
+    let raw = load_file(path)?;
+    Ok(SingleFileConfig {
+        name: raw.name,
+        sources: validate_sources(raw.sources),
+    })
 }
 
 /// Load config from discovered config files.
