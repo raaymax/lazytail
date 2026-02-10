@@ -4,7 +4,7 @@ use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
-use crate::source::{check_source_status, DiscoveredSource, SourceStatus};
+use crate::source::{check_source_status, DiscoveredSource, SourceLocation, SourceStatus};
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -269,7 +269,10 @@ impl TabState {
             expansion: ExpansionState::default(),
             stream_receiver: None,
             source_status: Some(source.status),
-            config_source_type: None,
+            config_source_type: match source.location {
+                SourceLocation::Project => Some(SourceType::ProjectSource),
+                SourceLocation::Global => None,
+            },
             disabled: false,
         })
     }
