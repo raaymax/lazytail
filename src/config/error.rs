@@ -35,6 +35,7 @@ pub enum ConfigError {
     },
 
     /// Validation error (semantic errors after parsing).
+    #[allow(dead_code)]
     Validation { path: PathBuf, message: String },
 }
 

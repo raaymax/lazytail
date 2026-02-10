@@ -32,6 +32,7 @@ impl DiscoveryResult {
     ///
     /// This is `project_root/.lazytail` - used by Phase 4 for storing
     /// project-specific streams and state.
+    #[cfg(test)]
     pub fn data_dir(&self) -> Option<PathBuf> {
         self.project_root
             .as_ref()
@@ -39,6 +40,7 @@ impl DiscoveryResult {
     }
 
     /// Returns true if any config was found (project or global).
+    #[cfg(test)]
     pub fn has_config(&self) -> bool {
         self.project_config.is_some() || self.global_config.is_some()
     }
