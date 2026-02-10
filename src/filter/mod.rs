@@ -2,6 +2,7 @@ pub mod cancel;
 pub mod engine;
 #[allow(dead_code)]
 pub mod parallel_engine;
+pub mod query;
 pub mod regex_filter;
 pub mod streaming_filter;
 pub mod string_filter;

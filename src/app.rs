@@ -1,3 +1,4 @@
+use crate::filter::query;
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
 use crate::source::{self, SourceStatus};
@@ -19,6 +20,10 @@ pub enum ViewMode {
 /// Source type for categorizing tabs in the tree view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceType {
+    /// Sources from project lazytail.yaml config
+    ProjectSource,
+    /// Sources from global config.yaml
+    GlobalSource,
     /// Discovered sources from -n capture mode
     Global,
     /// Files passed as CLI arguments
@@ -41,15 +46,15 @@ pub enum TreeSelection {
 pub struct SourcePanelState {
     /// Currently selected tree item
     pub selection: Option<TreeSelection>,
-    /// Whether each category is expanded: [Global, Files, Pipes]
-    pub expanded: [bool; 3],
+    /// Whether each category is expanded: [ProjectSource, GlobalSource, Global, Files, Pipes]
+    pub expanded: [bool; 5],
 }
 
 impl Default for SourcePanelState {
     fn default() -> Self {
         Self {
             selection: None,
-            expanded: [true, true, true], // All expanded by default
+            expanded: [true, true, true, true, true], // All expanded by default
         }
     }
 }
@@ -114,6 +119,9 @@ pub struct App {
     /// Regex validation error (None = valid or plain mode, Some = invalid regex)
     pub regex_error: Option<String>,
 
+    /// Query syntax validation error (None = valid or not query syntax, Some = invalid query)
+    pub query_error: Option<String>,
+
     /// Side panel width
     pub side_panel_width: u16,
 
@@ -153,6 +161,7 @@ impl App {
             history_index: None,
             current_filter_mode: FilterMode::default(),
             regex_error: None,
+            query_error: None,
             side_panel_width: 32,
             pending_filter_at: None,
             source_panel: SourcePanelState::default(),
@@ -234,8 +243,10 @@ impl App {
     // === Source Panel Methods ===
 
     /// Get tabs grouped by source type, returning (type, vec of global tab indices)
-    pub fn tabs_by_category(&self) -> [(SourceType, Vec<usize>); 3] {
+    pub fn tabs_by_category(&self) -> [(SourceType, Vec<usize>); 5] {
         let mut result = [
+            (SourceType::ProjectSource, Vec::new()),
+            (SourceType::GlobalSource, Vec::new()),
             (SourceType::Global, Vec::new()),
             (SourceType::File, Vec::new()),
             (SourceType::Pipe, Vec::new()),
@@ -243,9 +254,11 @@ impl App {
 
         for (idx, tab) in self.tabs.iter().enumerate() {
             match tab.source_type() {
-                SourceType::Global => result[0].1.push(idx),
-                SourceType::File => result[1].1.push(idx),
-                SourceType::Pipe => result[2].1.push(idx),
+                SourceType::ProjectSource => result[0].1.push(idx),
+                SourceType::GlobalSource => result[1].1.push(idx),
+                SourceType::Global => result[2].1.push(idx),
+                SourceType::File => result[3].1.push(idx),
+                SourceType::Pipe => result[4].1.push(idx),
             }
         }
 
@@ -654,7 +667,16 @@ impl App {
     /// Validate the current input as a regex (if in regex mode)
     /// Sets regex_error to None if valid, Some(error) if invalid
     pub fn validate_regex(&mut self) {
+        // Also validate query syntax
+        self.validate_query();
+
         if !self.current_filter_mode.is_regex() || self.input_buffer.is_empty() {
+            self.regex_error = None;
+            return;
+        }
+
+        // Skip regex validation if this is query syntax
+        if query::is_query_syntax(&self.input_buffer) {
             self.regex_error = None;
             return;
         }
@@ -665,9 +687,29 @@ impl App {
         }
     }
 
-    /// Check if the current regex input is valid
+    /// Validate the current input as a query (if it looks like query syntax)
+    /// Sets query_error to None if valid or not query syntax, Some(error) if invalid
+    pub fn validate_query(&mut self) {
+        if !query::is_query_syntax(&self.input_buffer) {
+            self.query_error = None;
+            return;
+        }
+
+        match query::parse_query(&self.input_buffer) {
+            Ok(filter_query) => {
+                // Also validate the filter (e.g., regex patterns)
+                match query::QueryFilter::new(filter_query) {
+                    Ok(_) => self.query_error = None,
+                    Err(e) => self.query_error = Some(e),
+                }
+            }
+            Err(e) => self.query_error = Some(e.message),
+        }
+    }
+
+    /// Check if the current filter input is valid (regex or query)
     pub fn is_regex_valid(&self) -> bool {
-        self.regex_error.is_none()
+        self.regex_error.is_none() && self.query_error.is_none()
     }
 
     /// Check if currently entering filter input

@@ -2,43 +2,46 @@
 //!
 //! When run with `-n <name>`, lazytail acts as a tee-like utility:
 //! - Reads from stdin
-//! - Writes to ~/.config/lazytail/data/<name>.log
+//! - Writes to project-local or global data directory based on context
 //! - Echoes to stdout
 //! - Creates a marker file for source discovery
 //! - Cleans up marker on exit (EOF or signal)
 
+use crate::config::DiscoveryResult;
+use crate::signal::setup_shutdown_handlers;
 use crate::source::{
-    check_source_status, create_marker, data_dir, ensure_directories, remove_marker,
-    validate_source_name, SourceStatus,
+    check_source_status_for_context, create_marker_for_context, ensure_directories_for_context,
+    remove_marker_for_context, resolve_data_dir, validate_source_name, SourceStatus,
 };
 use anyhow::{Context, Result};
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
+use std::sync::atomic::Ordering;
 
 /// Run in capture mode: tee stdin to a named log file.
 ///
 /// This function:
 /// 1. Validates the source name
-/// 2. Checks for name collision (active source with same name)
-/// 3. Creates a marker file with the current PID
-/// 4. Sets up signal handlers for cleanup
-/// 5. Opens/creates the log file
-/// 6. Reads stdin line by line, writing to both log file and stdout
-/// 7. Cleans up the marker on EOF or signal
-pub fn run_capture_mode(name: String) -> Result<()> {
+/// 2. Ensures directories exist using discovery context
+/// 3. Checks for name collision (active source with same name)
+/// 4. Creates a marker file with the current PID
+/// 5. Sets up signal handlers for cleanup
+/// 6. Opens/creates the log file
+/// 7. Reads stdin line by line, writing to both log file and stdout
+/// 8. Cleans up the marker on EOF or signal
+///
+/// The discovery context determines where files are stored:
+/// - If inside a project (lazytail.yaml found): `.lazytail/data/`
+/// - Otherwise: `~/.config/lazytail/data/`
+pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()> {
     // 1. Validate name
     validate_source_name(&name)?;
 
-    // 2. Ensure directories exist
-    ensure_directories()?;
+    // 2. Ensure directories exist using context
+    ensure_directories_for_context(discovery)?;
 
     // 3. Check for collision
-    if check_source_status(&name) == SourceStatus::Active {
+    if check_source_status_for_context(&name, discovery) == SourceStatus::Active {
         anyhow::bail!(
             "Source '{}' is already active (another process is writing to it)",
             name
@@ -46,29 +49,14 @@ pub fn run_capture_mode(name: String) -> Result<()> {
     }
 
     // 4. Create marker file with our PID
-    create_marker(&name)?;
+    create_marker_for_context(&name, discovery)?;
 
-    // 5. Setup signal handler for cleanup
-    let running = Arc::new(AtomicBool::new(true));
-    let name_for_signal = name.clone();
-    let running_for_signal = Arc::clone(&running);
-
-    thread::spawn(move || {
-        let mut signals = match Signals::new([SIGINT, SIGTERM]) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-
-        if signals.forever().next().is_some() {
-            running_for_signal.store(false, Ordering::SeqCst);
-            let _ = remove_marker(&name_for_signal);
-            std::process::exit(0);
-        }
-    });
+    // 5. Setup signal handlers (flag-based, supports double Ctrl+C for force quit)
+    let shutdown_flag = setup_shutdown_handlers()?;
 
     // 6. Open/create log file
-    let log_path = data_dir()
-        .context("Could not determine config directory")?
+    let log_path = resolve_data_dir(discovery)
+        .context("Could not determine data directory")?
         .join(format!("{}.log", name));
 
     let mut log_file = OpenOptions::new()
@@ -77,8 +65,18 @@ pub fn run_capture_mode(name: String) -> Result<()> {
         .open(&log_path)
         .with_context(|| format!("Failed to open log file: {}", log_path.display()))?;
 
-    // 7. Print header to stderr
-    eprintln!("Serving \"{}\" -> {}", name, log_path.display());
+    // 7. Print header to stderr showing storage location
+    let location = if discovery.project_root.is_some() {
+        "project"
+    } else {
+        "global"
+    };
+    eprintln!(
+        "Serving \"{}\" -> {} ({})",
+        name,
+        log_path.display(),
+        location
+    );
 
     // 8. Tee loop: read stdin, write to file AND stdout
     let stdin = io::stdin();
@@ -86,7 +84,8 @@ pub fn run_capture_mode(name: String) -> Result<()> {
     let reader = BufReader::new(stdin.lock());
 
     for line in reader.lines() {
-        if !running.load(Ordering::SeqCst) {
+        // Check for shutdown signal
+        if shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
 
@@ -113,8 +112,8 @@ pub fn run_capture_mode(name: String) -> Result<()> {
         }
     }
 
-    // 9. Cleanup on EOF
-    remove_marker(&name)?;
+    // 9. Cleanup on EOF or signal - always reached (no process::exit in signal handler)
+    remove_marker_for_context(&name, discovery)?;
 
     Ok(())
 }

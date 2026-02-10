@@ -1,6 +1,8 @@
 mod app;
 mod cache;
 mod capture;
+mod cmd;
+mod config;
 mod dir_watcher;
 mod event;
 mod filter;
@@ -9,6 +11,7 @@ mod history;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
+mod signal;
 mod source;
 mod tab;
 mod ui;
@@ -16,7 +19,7 @@ mod viewport;
 mod watcher;
 
 use anyhow::{Context, Result};
-use app::{App, FilterState, ViewMode};
+use app::{App, FilterState, SourceType, ViewMode};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -24,7 +27,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::{
-    cancel::CancelToken, engine::FilterEngine, regex_filter::RegexFilter, streaming_filter,
+    cancel::CancelToken, engine::FilterEngine, query, regex_filter::RegexFilter, streaming_filter,
     string_filter::StringFilter, Filter, FilterMode,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -67,7 +70,7 @@ IN-APP HELP:
     Press '?' inside the app to see all keyboard shortcuts.
     Press '/' to start filtering, 'f' to toggle follow mode.
 ")]
-struct Args {
+struct Cli {
     /// Log files to view (omit for source discovery mode)
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
@@ -90,16 +93,96 @@ struct Args {
     #[cfg(feature = "mcp")]
     #[arg(long = "mcp")]
     mcp: bool,
+
+    /// Verbose output (show config discovery paths)
+    #[arg(short = 'v', long = "verbose")]
+    verbose: bool,
+
+    /// Subcommand to run
+    #[command(subcommand)]
+    command: Option<cmd::Commands>,
 }
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
 
-    let args = Args::parse();
+    let cli = Cli::parse();
+
+    // Handle subcommands first (before mode detection)
+    if let Some(command) = cli.command {
+        return match command {
+            cmd::Commands::Init(args) => cmd::init::run(args.force)
+                .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
+            cmd::Commands::Config { action } => match action {
+                cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
+                    anyhow::anyhow!("config validate failed with exit code {}", code)
+                }),
+                cmd::ConfigAction::Show => cmd::config::show()
+                    .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
+            },
+        };
+    }
+
+    // Cleanup stale markers from previous SIGKILL scenarios
+    // This runs before any mode to ensure collision checks work correctly
+    source::cleanup_stale_markers();
+
+    // Config discovery - run before mode dispatch
+    let (discovery, searched_paths) = config::discovery::discover_verbose();
+    if cli.verbose {
+        for path in &searched_paths {
+            eprintln!("[discovery] Searched: {}", path.display());
+        }
+        eprintln!(
+            "[discovery] Project root: {}",
+            discovery
+                .project_root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+        eprintln!(
+            "[discovery] Project config: {}",
+            discovery
+                .project_config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+        eprintln!(
+            "[discovery] Global config: {}",
+            discovery
+                .global_config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "not found".to_string())
+        );
+    }
+
+    // Load config from discovered files
+    let config_result = config::load(&discovery);
+    let (cfg, mut config_errors) = match config_result {
+        Ok(c) => (c, Vec::new()),
+        Err(err) => {
+            let err_msg = err.to_string();
+            (config::Config::default(), vec![err_msg])
+        }
+    };
+
+    if cli.verbose {
+        if let Some(name) = &cfg.name {
+            eprintln!("[config] Project name: {}", name);
+        }
+        eprintln!("[config] Project sources: {}", cfg.project_sources.len());
+        eprintln!("[config] Global sources: {}", cfg.global_sources.len());
+        for err in &config_errors {
+            eprintln!("[config] Error: {}", err);
+        }
+    }
 
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
-    if args.mcp {
+    if cli.mcp {
         return mcp::run_mcp_server();
     }
 
@@ -108,26 +191,44 @@ fn main() -> Result<()> {
     let has_piped_input = !stdin_is_tty;
 
     // Mode 1: Capture mode (-n flag with stdin)
-    if let Some(name) = args.name {
+    if let Some(name) = cli.name {
         if stdin_is_tty {
             eprintln!("Error: Capture mode (-n) requires stdin input");
             eprintln!("Usage: command | lazytail -n <NAME>");
             std::process::exit(1);
         }
-        return capture::run_capture_mode(name);
+        return capture::run_capture_mode(name, &discovery);
     }
 
     // Mode 2: Discovery mode (no files, no stdin)
-    if args.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(args.no_watch);
+    if cli.files.is_empty() && !has_piped_input {
+        return run_discovery_mode(cli.no_watch, cfg, config_errors, &discovery);
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
-    let watch = !args.no_watch;
+    let watch = !cli.no_watch;
 
-    // Build tabs, treating "-" as stdin
+    // Build tabs from config sources first
     let mut tabs = Vec::new();
+
+    // Add project sources
+    for source in &cfg.project_sources {
+        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Add global sources
+    for source in &cfg.global_sources {
+        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Build tabs from CLI args, treating "-" as stdin
     let mut stdin_used = false;
 
     // If stdin has piped data, always include it as the first tab
@@ -136,7 +237,7 @@ fn main() -> Result<()> {
         stdin_used = true;
     }
 
-    for file in args.files {
+    for file in cli.files {
         if file.as_os_str() == "-" {
             if stdin_used {
                 // Already read stdin, skip duplicate
@@ -147,6 +248,11 @@ fn main() -> Result<()> {
         } else {
             tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
         }
+    }
+
+    // Log config errors to stderr (debug source is a future enhancement)
+    for err in &config_errors {
+        eprintln!("[config error] {}", err);
     }
 
     let mut app = App::with_tabs(tabs);
@@ -177,44 +283,75 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run in discovery mode: auto-discover sources from ~/.config/lazytail/data/
-fn run_discovery_mode(no_watch: bool) -> Result<()> {
-    use source::{discover_sources, ensure_directories};
+/// Run in discovery mode: auto-discover sources from project and global data directories
+fn run_discovery_mode(
+    no_watch: bool,
+    cfg: config::Config,
+    mut config_errors: Vec<String>,
+    discovery: &config::DiscoveryResult,
+) -> Result<()> {
+    use source::{discover_sources_for_context, ensure_directories_for_context};
 
-    // Ensure config directories exist
-    ensure_directories()?;
+    // Ensure config directories exist (project or global based on context)
+    ensure_directories_for_context(discovery)?;
 
-    // Discover existing sources
-    let sources = discover_sources()?;
+    // Discover existing sources from both project and global directories
+    let sources = discover_sources_for_context(discovery)?;
 
-    if sources.is_empty() {
-        eprintln!("No log sources found in ~/.config/lazytail/data/");
-        eprintln!();
-        eprintln!("To create sources, use capture mode:");
-        eprintln!("  command | lazytail -n <NAME>");
-        eprintln!();
-        eprintln!("Or specify files directly:");
-        eprintln!("  lazytail <FILE>...");
-        std::process::exit(0);
+    let watch = !no_watch;
+
+    // Build tabs from config sources first
+    let mut tabs = Vec::new();
+
+    // Add project sources
+    for source in &cfg.project_sources {
+        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
     }
 
-    // Create tabs from discovered sources
-    let watch = !no_watch;
-    let tabs: Vec<tab::TabState> = sources
+    // Add global sources
+    for source in &cfg.global_sources {
+        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+            Ok(t) => tabs.push(t),
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+
+    // Add discovered sources
+    let discovery_tabs: Vec<tab::TabState> = sources
         .into_iter()
         .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
         .collect();
+    tabs.extend(discovery_tabs);
+
+    // Log config errors to stderr (debug source is a future enhancement)
+    for err in &config_errors {
+        eprintln!("[config error] {}", err);
+    }
 
     if tabs.is_empty() {
-        eprintln!("Failed to open any log sources");
-        std::process::exit(1);
+        eprintln!("No log sources found.");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  1. Create a lazytail.yaml config file in your project");
+        eprintln!("  2. Use capture mode: command | lazytail -n <NAME>");
+        eprintln!("  3. Specify files directly: lazytail <FILE>...");
+        std::process::exit(0);
     }
 
     let mut app = App::with_tabs(tabs);
 
     // Optionally set up directory watcher for new sources
+    // Watch project data dir if in project, otherwise global
     let dir_watcher = if watch {
-        source::data_dir().and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
+        let watch_dir = if discovery.project_root.is_some() {
+            source::resolve_data_dir(discovery)
+        } else {
+            source::data_dir()
+        };
+        watch_dir.and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
     } else {
         None
     };
@@ -226,8 +363,15 @@ fn run_discovery_mode(no_watch: bool) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Determine watched location for newly discovered sources
+    let watched_location = if discovery.project_root.is_some() {
+        Some(source::SourceLocation::Project)
+    } else {
+        Some(source::SourceLocation::Global)
+    };
+
     // Main loop with directory watcher
-    let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher);
+    let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher, watched_location);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -256,6 +400,12 @@ fn trigger_filter(
     // Cancel any previous filter operation
     if let Some(ref cancel) = tab.filter.cancel_token {
         cancel.cancel();
+    }
+
+    // Check for query syntax (json | ... or logfmt | ...)
+    if query::is_query_syntax(&pattern) {
+        trigger_query_filter(tab, pattern, start_line, end_line);
+        return;
     }
 
     let case_sensitive = mode.is_case_sensitive();
@@ -346,8 +496,78 @@ fn trigger_filter(
     tab.filter.receiver = Some(receiver);
 }
 
+/// Trigger a query-based filter (json | ... or logfmt | ...)
+fn trigger_query_filter(
+    tab: &mut tab::TabState,
+    pattern: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) {
+    // Parse the query
+    let filter_query = match query::parse_query(&pattern) {
+        Ok(q) => q,
+        Err(_) => return, // Invalid query, don't filter
+    };
+
+    // Create QueryFilter
+    let query_filter = match query::QueryFilter::new(filter_query) {
+        Ok(f) => f,
+        Err(_) => return, // Invalid filter (e.g., bad regex)
+    };
+
+    let filter: Arc<dyn Filter> = Arc::new(query_filter);
+
+    // Create new cancel token for this operation
+    let cancel = CancelToken::new();
+    tab.filter.cancel_token = Some(cancel.clone());
+
+    // For incremental filtering
+    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
+        tab.filter.is_incremental = true;
+
+        if let Some(path) = &tab.source_path {
+            match streaming_filter::run_streaming_filter_range(
+                path.clone(),
+                filter,
+                start,
+                end,
+                cancel,
+            ) {
+                Ok(rx) => rx,
+                Err(_) => return,
+            }
+        } else {
+            FilterEngine::run_filter_range(
+                tab.reader.clone(),
+                filter,
+                FILTER_PROGRESS_INTERVAL,
+                start,
+                end,
+                cancel,
+            )
+        }
+    } else {
+        // Full filtering
+        tab.filter.needs_clear = true;
+        tab.filter.state = FilterState::Processing { lines_processed: 0 };
+        tab.filter.is_incremental = false;
+
+        if let Some(path) = &tab.source_path {
+            match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
+                Ok(rx) => rx,
+                Err(_) => return,
+            }
+        } else {
+            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
+        }
+    };
+
+    tab.filter.receiver = Some(receiver);
+}
+
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    run_app_with_discovery(terminal, app, None)
+    run_app_with_discovery(terminal, app, None, None)
 }
 
 /// Run the app with optional directory watcher for source discovery mode
@@ -355,6 +575,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     dir_watcher: Option<dir_watcher::DirectoryWatcher>,
+    watched_location: Option<source::SourceLocation>,
 ) -> Result<()> {
     use event::AppEvent;
 
@@ -394,6 +615,9 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     name,
                                     log_path: path,
                                     status,
+                                    // Use the location of the watched directory
+                                    location: watched_location
+                                        .unwrap_or(source::SourceLocation::Global),
                                 };
                                 if let Ok(tab) = tab::TabState::from_discovered_source(source, true)
                                 {
