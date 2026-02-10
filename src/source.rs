@@ -57,6 +57,7 @@ pub fn sources_dir() -> Option<PathBuf> {
 }
 
 /// Ensure both data and sources directories exist.
+#[cfg(test)]
 pub fn ensure_directories() -> Result<()> {
     if let Some(data) = data_dir() {
         fs::create_dir_all(&data).context("Failed to create data directory")?;
@@ -301,6 +302,7 @@ pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<D
 /// Create a marker file for the given source name.
 ///
 /// Uses atomic creation to prevent races. Writes the current PID.
+#[cfg(test)]
 pub fn create_marker(name: &str) -> Result<()> {
     let sources = sources_dir().context("Could not determine config directory")?;
     fs::create_dir_all(&sources).context("Failed to create sources directory")?;

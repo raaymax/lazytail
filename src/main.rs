@@ -115,11 +115,10 @@ fn main() -> Result<()> {
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
             cmd::Commands::Config { action } => match action {
                 cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
-                    std::process::exit(code);
+                    anyhow::anyhow!("config validate failed with exit code {}", code)
                 }),
-                cmd::ConfigAction::Show => cmd::config::show().map_err(|code| {
-                    std::process::exit(code);
-                }),
+                cmd::ConfigAction::Show => cmd::config::show()
+                    .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
             },
         };
     }

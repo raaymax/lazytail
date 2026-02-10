@@ -61,6 +61,7 @@ pub struct Config {
 
 impl Config {
     /// Returns true if any sources are defined (project or global).
+    #[cfg(test)]
     pub fn has_sources(&self) -> bool {
         !self.project_sources.is_empty() || !self.global_sources.is_empty()
     }
