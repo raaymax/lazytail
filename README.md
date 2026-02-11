@@ -142,6 +142,8 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 - **Line expansion** - Expand long lines for better readability
 - **Memory efficient** - Viewport-based rendering keeps RAM usage low
 - **Vim-style navigation** - Familiar keybindings for efficient navigation
+- **Config system** - Project-scoped `lazytail.yaml` config with source definitions
+- **Query language** - Structured field filtering (`json | level == "error"`)
 
 Press `?` in the app to see all keyboard shortcuts.
 
@@ -176,22 +178,48 @@ app_logs | lazytail error.log <(kubectl logs pod-name)
 ### Command Line Options
 
 ```bash
-lazytail [OPTIONS] [FILES]...
+lazytail [OPTIONS] [FILE]... [COMMAND]
+
+Commands:
+  init              Initialize a new lazytail.yaml config file
+  config validate   Validate the config file
+  config show       Show effective configuration
 
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
       --mcp                Run as MCP server for AI assistants
+  -v, --verbose            Verbose output (show config discovery paths)
   -h, --help               Print help
   -V, --version            Print version
 ```
+
+### Configuration
+
+Create a `lazytail.yaml` in your project root to define log sources:
+
+```yaml
+sources:
+  - name: API
+    path: /var/log/myapp/api.log
+  - name: Worker
+    path: ./logs/worker.log  # Relative to project root
+```
+
+Initialize a config file interactively:
+
+```bash
+lazytail init
+```
+
+Config is discovered by walking parent directories from CWD. Use `lazytail config show` to see the effective configuration, or `lazytail config validate` to check for errors.
 
 ### Source Discovery Mode
 
 Run `lazytail` with no arguments to auto-discover log sources:
 
 ```bash
-lazytail  # Opens all *.log files from ~/.config/lazytail/data/
+lazytail  # Opens sources from lazytail.yaml and ~/.config/lazytail/data/
 ```
 
 ### Capture Mode

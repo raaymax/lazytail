@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.4.0 - In Progress)
+## Current Status (v0.4.0)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -38,7 +38,7 @@ This is a local planning document for upcoming features and improvements.
 - Streaming filter with SIMD search (memmem) for better performance
 - Grep-style search for case-sensitive patterns
 
-**v0.4.0 Features (In Progress):**
+**v0.4.0 Features:**
 - Source discovery mode (`lazytail` with no args)
 - Source capture mode (`cmd | lazytail -n "Name"`)
 - Active/ended status indicators for discovered sources
@@ -46,7 +46,12 @@ This is a local planning document for upcoming features and improvements.
 - Close tab keybinding (`x` / `Ctrl+W`)
 - MCP server support (`lazytail --mcp`)
 - MCP tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
+- MCP plain text output format (default) to reduce JSON escaping overhead
 - Streaming filter optimization for MCP (grep-like performance on 5GB+ files)
+- Config system with `lazytail.yaml` discovery (walk parent directories)
+- `lazytail init` and `lazytail config {validate,show}` subcommands
+- Project-scoped and global source definitions in config
+- Query language basics: `json | field == "value"` syntax in filter input
 
 ---
 
@@ -809,8 +814,10 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 ### Features
 
-#### Project-Scoped Instances (lazytail.yaml) 🔴 HIGH PRIORITY
+#### Project-Scoped Instances (lazytail.yaml) ✅
 **Goal:** Per-project log sources and configuration, auto-discovered by ancestry
+
+**Status:** Core config system implemented (v0.4.0)
 
 **Discovery Order:**
 1. Check current dir and ancestors for `lazytail.yaml`
@@ -838,17 +845,6 @@ sources:
     path: ./logs/app.log  # Relative to project root
   - name: Nginx
     path: /var/log/nginx/access.log
-
-# Filter presets (for UI and MCP)
-filters:
-  errors: "level == 'error'"
-  slow-queries: "duration > 1000"
-  auth: "service =~ 'auth|login'"
-
-# MCP settings
-mcp:
-  enabled: true
-  # expose_global: false  # Don't show ~/.config/lazytail sources
 ```
 
 **Benefits:**
@@ -859,24 +855,24 @@ mcp:
 - Different projects can have different log setups
 
 **Tasks:**
-- [ ] Config file discovery (walk ancestors for `lazytail.yaml`)
-- [ ] Parse YAML config with serde
-- [ ] Create `.lazytail/` directory structure
-- [ ] Support `path:` sources (watch existing file)
-- [ ] Relative path resolution from project root
+- [x] Config file discovery (walk ancestors for `lazytail.yaml`)
+- [x] Parse YAML config with serde
+- [x] Create `.lazytail/` directory structure
+- [x] Support `path:` sources (watch existing file)
+- [x] Relative path resolution from project root
 - [ ] Filter presets in config
 - [ ] MCP: detect project root and scope sources
-- [ ] Fallback to global `~/.config/lazytail/` when no project found
+- [x] Fallback to global `~/.config/lazytail/` when no project found
 
 ---
 
-- [ ] Configuration file (`~/.config/lazytail/config.toml`)
-  - System-wide log source definitions (name, path, pattern)
+- [x] Configuration file (`lazytail.yaml` with project + global scope)
+  - System-wide and project-scoped log source definitions (name, path)
   - Pre-configured sources appear automatically in discovery mode
-  - Custom source groups/categories
-  - Default filter patterns per source
-  - UI preferences (colors, panel width, default modes)
-  - MCP server settings (enabled tools, access control)
+  - [ ] Custom source groups/categories
+  - [ ] Default filter patterns per source
+  - [ ] UI preferences (colors, panel width, default modes)
+  - [ ] MCP server settings (enabled tools, access control)
 - [ ] JSON log parsing and formatted view
   - Detect JSON lines automatically
   - Pretty-print JSON in dedicated view mode
@@ -939,11 +935,11 @@ mcp:
 - Stats panel (line counts)
 - Persistent filter history to disk
 
-### v0.4.0 (Current - In Progress)
-**Focus: Source Discovery, Capture & MCP Server**
+### v0.4.0 ✅ (Released)
+**Focus: Source Discovery, Capture, MCP Server & Config System**
 
 Source Discovery & Capture:
-- Auto-discover sources from `~/.config/lazytail/data/`
+- Auto-discover sources from `~/.config/lazytail/data/` and `lazytail.yaml`
 - Source capture mode: `cmd | lazytail -n "Name"`
 - Active/ended status indicators
 - Dynamic tab creation for new sources
@@ -952,9 +948,18 @@ Source Discovery & Capture:
 MCP Server Support:
 - MCP (Model Context Protocol) server via `--mcp` flag
 - Tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
+- Plain text output format (default) to reduce JSON escaping for AI consumption
 - MCP enabled by default in all builds
 - Streaming filter for grep-like performance on large files
 - Tested on 5GB+ log files
+
+Config System:
+- `lazytail.yaml` discovery (walk parent directories from CWD)
+- Project-scoped (`.lazytail/`) and global (`~/.config/lazytail/`) data directories
+- Source definitions with name + path in config
+- `lazytail init` to create config interactively
+- `lazytail config validate` and `lazytail config show` subcommands
+- Query language basics: `json | field == "value"` filter syntax
 
 ---
 
@@ -968,6 +973,12 @@ MCP Server Support:
 | `get_tail` | Read last N lines | ✅ Complete |
 | `search` | Find pattern matches | ✅ Complete (basic) |
 | `get_context` | Get lines around a match | ✅ Complete |
+
+**Common Parameters (all tools except `list_sources`):**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `output` | text/json | text | Response format (text reduces escaping for AI) |
+| `raw` | bool | false | Keep ANSI escape codes (default strips them) |
 
 **Current `search` Parameters:**
 | Parameter | Type | Status |
@@ -1001,22 +1012,22 @@ MCP Server Support:
 - ✅ SIMD-accelerated search (memchr/memmem)
 - ✅ `lines_searched` tracking in FilterProgress::Complete
 - ✅ Single-pass content extraction for matched lines
+- ✅ Plain text output format (eliminates JSON escaping explosion for AI consumption)
 
 ### v0.5.0 (Next) 🔴 HIGH PRIORITY
-**Focus: Project-Scoped Instances & Query Language Core**
+**Focus: Query Language & MCP Enhancements**
 
-Project-Scoped Instances:
-- `lazytail.yaml` discovery (walk ancestors)
-- `.lazytail/` directory for project data
-- Path-based source definitions
-- MCP auto-detects project root and scopes sources
-- Fallback to global `~/.config/lazytail/`
-
-Query Language Core (MCP-first):
-- FilterQuery AST with serde derives
-- JSON query interface for MCP tools
-- Basic filters: `==`, `!=`, `=~`, `!~`
+Query Language Expansion:
+- FilterQuery AST with serde derives (JSON interface for MCP)
 - Exclusion patterns (critical for noisy logs)
+- Time range filtering
+- `logfmt` parser support
+
+MCP Enhancements:
+- MCP scoped to project root (detect `lazytail.yaml`)
+- Filter presets from config available in MCP
+- `exclude` parameter for search tool
+- `query` parameter for structured field filtering via MCP
 
 ### v0.6.0 (Future)
 **Focus: Sidecar Index & Combined Sources**

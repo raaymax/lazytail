@@ -36,19 +36,45 @@ cargo run --release -- test.log
 
 ```
 src/
-├── main.rs              # Entry point, CLI, and main event loop
-├── app.rs               # Application state management
-├── reader/
-│   ├── mod.rs          # LogReader trait
-│   └── file_reader.rs  # Lazy file reader with line indexing
+├── main.rs                # Entry point, CLI (clap), and main event loop
+├── app.rs                 # Application state management
+├── tab.rs                 # Per-tab state (reader, watcher, filter, viewport)
+├── viewport.rs            # Vim-style viewport scrolling
+├── event.rs               # Event type definitions
+├── watcher.rs             # File watching with inotify
+├── dir_watcher.rs         # Directory watcher for source discovery
+├── capture.rs             # Capture mode (tee-like stdin to file)
+├── source.rs              # Source discovery and status tracking
+├── signal.rs              # Signal handling (SIGINT/SIGTERM)
+├── history.rs             # Filter history persistence
+├── cache/                 # Line and ANSI caching
+├── cmd/                   # CLI subcommands (init, config)
+├── config/                # Config system (lazytail.yaml discovery + loading)
 ├── filter/
-│   ├── mod.rs          # Filter trait
-│   ├── engine.rs       # Background filtering engine
-│   ├── regex_filter.rs # Regex filter implementation
-│   └── string_filter.rs# String matching filter
-├── ui/
-│   └── mod.rs          # ratatui rendering logic
-└── watcher.rs          # File watching with inotify
+│   ├── mod.rs             # Filter trait
+│   ├── engine.rs          # Background filtering engine
+│   ├── streaming_filter.rs# Streaming mmap-based filter (grep-like)
+│   ├── regex_filter.rs    # Regex filter implementation
+│   ├── string_filter.rs   # String matching filter
+│   ├── query.rs           # Query language (json | field == value)
+│   ├── cancel.rs          # Cancellation tokens
+│   └── parallel_engine.rs # Parallel filtering
+├── handlers/              # Input, filter progress, file event handlers
+├── mcp/                   # MCP server for AI assistant integration
+│   ├── tools.rs           # Tool implementations (5 tools)
+│   ├── types.rs           # Request/response types
+│   ├── format.rs          # Plain text output formatters
+│   └── ansi.rs            # ANSI escape code stripping
+├── reader/
+│   ├── mod.rs             # LogReader trait
+│   ├── file_reader.rs     # Lazy file reader with line indexing
+│   ├── stream_reader.rs   # Stdin/stream reader
+│   ├── mmap_reader.rs     # Memory-mapped reader
+│   ├── huge_file_reader.rs# Large file support
+│   ├── sparse_index.rs    # Sparse line index
+│   └── tail_buffer.rs     # Tail buffer for recent lines
+└── ui/
+    └── mod.rs             # ratatui rendering (log view, panels, help overlay)
 ```
 
 For detailed architecture documentation, see `CLAUDE.md`.
@@ -68,10 +94,20 @@ The viewer is designed to handle large log files efficiently:
 - **crossterm** - Cross-platform terminal manipulation
 - **notify** - File system watching
 - **regex** - Regular expression support
-- **serde_json** - JSON parsing
+- **serde** / **serde_json** - Serialization and JSON parsing
+- **serde-saphyr** - YAML config parsing
 - **clap** - CLI argument parsing
-- **anyhow** - Error handling
+- **anyhow** / **thiserror** - Error handling
 - **ansi-to-tui** - ANSI escape code parsing and color rendering
+- **memmap2** - Memory-mapped file access
+- **memchr** - SIMD-accelerated byte searching
+- **lru** - LRU cache for line content
+- **rayon** - Parallel processing
+- **signal-hook** - Unix signal handling
+- **dirs** - Platform-specific directories
+- **rmcp** - MCP server framework (optional, feature-gated)
+- **schemars** - JSON Schema generation for MCP (optional)
+- **tokio** - Async runtime for MCP server (optional)
 
 ### Development Tools
 
