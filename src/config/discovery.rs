@@ -72,8 +72,8 @@ pub fn discover_verbose() -> (DiscoveryResult, Vec<PathBuf>) {
     let mut searched_paths = Vec::new();
 
     // Check global config first
-    if let Some(config_dir) = dirs::config_dir() {
-        let global_config_path = config_dir.join("lazytail").join(GLOBAL_CONFIG_NAME);
+    if let Some(lazytail_dir) = crate::source::lazytail_dir() {
+        let global_config_path = lazytail_dir.join(GLOBAL_CONFIG_NAME);
         if global_config_path.try_exists().unwrap_or(false) && global_config_path.is_file() {
             result.global_config = Some(global_config_path);
         }

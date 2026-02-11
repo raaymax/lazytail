@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 /// Get the history file path
 fn history_file_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("lazytail").join("history.json"))
+    crate::source::lazytail_dir().map(|p| p.join("history.json"))
 }
 
 /// Load filter history from disk
