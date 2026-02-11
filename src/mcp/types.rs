@@ -27,11 +27,11 @@ fn default_context() -> usize {
     5
 }
 
-/// Request to fetch lines from a log file.
+/// Request to fetch lines from a lazytail source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetLinesRequest {
-    /// Path to the log file
-    pub file: PathBuf,
+    /// Source name (from list_sources)
+    pub source: String,
     /// Starting line number (0-indexed)
     #[serde(default)]
     pub start: usize,
@@ -79,11 +79,11 @@ pub enum SearchMode {
     Regex,
 }
 
-/// Request to search for patterns in a log file.
+/// Request to search for patterns in a lazytail source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchRequest {
-    /// Path to the log file
-    pub file: PathBuf,
+    /// Source name (from list_sources)
+    pub source: String,
     /// Search pattern
     pub pattern: String,
     /// Search mode: "plain" or "regex" (default: plain)
@@ -136,11 +136,11 @@ pub struct SearchMatch {
     pub after: Vec<String>,
 }
 
-/// Request to fetch the last N lines from a log file.
+/// Request to fetch the last N lines from a lazytail source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetTailRequest {
-    /// Path to the log file
-    pub file: PathBuf,
+    /// Source name (from list_sources)
+    pub source: String,
     /// Number of lines to fetch from the end (default 100, max 1000)
     #[serde(default = "default_count")]
     pub count: usize,
@@ -152,11 +152,11 @@ pub struct GetTailRequest {
     pub output: OutputFormat,
 }
 
-/// Request to get context around a specific line.
+/// Request to get context around a specific line in a lazytail source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetContextRequest {
-    /// Path to the log file
-    pub file: PathBuf,
+    /// Source name (from list_sources)
+    pub source: String,
     /// The target line number (0-indexed)
     pub line_number: usize,
     /// Number of lines before the target (default 5, max 50)

@@ -105,29 +105,29 @@ impl Default for LazyTailMcp {
     }
 }
 
-#[tool(tool_box)]
+/// Internal implementations that operate on file paths directly.
+/// These are called by the thin `#[tool]` wrappers after source name resolution,
+/// and are also used directly by tests (which work with temp files, not real sources).
 impl LazyTailMcp {
-    /// Fetch lines from a log file starting from a specific position.
-    #[tool(
-        description = "Fetch lines from a log file. Returns up to 1000 lines starting from a given position. Use this to read specific sections of a log file. For recent lines, prefer get_tail instead."
-    )]
-    fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
-        let count = req.count.min(1000);
+    pub(crate) fn get_lines_impl(
+        path: &Path,
+        start: usize,
+        count: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
+        let count = count.min(1000);
 
-        let mut reader = match FileReader::new(&req.file) {
+        let mut reader = match FileReader::new(path) {
             Ok(r) => r,
             Err(e) => {
-                return error_response(format!(
-                    "Failed to open file '{}': {}",
-                    req.file.display(),
-                    e
-                ))
+                return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
         let total = reader.total_lines();
         let mut lines = Vec::new();
-        for i in req.start..(req.start + count).min(total) {
+        for i in start..(start + count).min(total) {
             if let Ok(Some(content)) = reader.get_line(i) {
                 lines.push(LineInfo {
                     line_number: i,
@@ -139,31 +139,28 @@ impl LazyTailMcp {
         let mut response = GetLinesResponse {
             lines,
             total_lines: total,
-            has_more: req.start + count < total,
+            has_more: start + count < total,
         };
 
-        if !req.raw {
+        if !raw {
             strip_lines_response(&mut response);
         }
 
-        format_lines(&response, req.output)
+        format_lines(&response, output)
     }
 
-    /// Fetch the last N lines from a log file.
-    #[tool(
-        description = "Fetch the last N lines from a log file. Useful for checking recent activity. Returns up to 1000 lines from the end of the file."
-    )]
-    fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
-        let count = req.count.min(1000);
+    pub(crate) fn get_tail_impl(
+        path: &Path,
+        count: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
+        let count = count.min(1000);
 
-        let mut reader = match FileReader::new(&req.file) {
+        let mut reader = match FileReader::new(path) {
             Ok(r) => r,
             Err(e) => {
-                return error_response(format!(
-                    "Failed to open file '{}': {}",
-                    req.file.display(),
-                    e
-                ))
+                return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
@@ -186,25 +183,31 @@ impl LazyTailMcp {
             has_more: start > 0,
         };
 
-        if !req.raw {
+        if !raw {
             strip_lines_response(&mut response);
         }
 
-        format_lines(&response, req.output)
+        format_lines(&response, output)
     }
 
-    /// Search for patterns in a log file using plain text or regex.
-    #[tool(
-        description = "Search for patterns in a log file. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000)."
-    )]
-    fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
-        let max_results = req.max_results.min(1000);
-        let context_lines = req.context_lines.min(50);
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn search_impl(
+        path: &Path,
+        pattern: &str,
+        mode: SearchMode,
+        case_sensitive: bool,
+        max_results: usize,
+        context_lines: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
+        let max_results = max_results.min(1000);
+        let context_lines = context_lines.min(50);
 
         // Use streaming filter for fast search (same as UI)
-        let filter: Arc<dyn Filter> = match req.mode {
-            SearchMode::Plain => Arc::new(StringFilter::new(&req.pattern, req.case_sensitive)),
-            SearchMode::Regex => match RegexFilter::new(&req.pattern, req.case_sensitive) {
+        let filter: Arc<dyn Filter> = match mode {
+            SearchMode::Plain => Arc::new(StringFilter::new(pattern, case_sensitive)),
+            SearchMode::Regex => match RegexFilter::new(pattern, case_sensitive) {
                 Ok(f) => Arc::new(f),
                 Err(e) => return error_response(format!("Invalid regex pattern: {}", e)),
             },
@@ -214,17 +217,13 @@ impl LazyTailMcp {
         // The filter runs on a dedicated thread; we block here waiting for results.
         // See module doc for why this is acceptable in the current MCP design.
         let rx = match streaming_filter::run_streaming_filter(
-            req.file.clone(),
+            path.to_path_buf(),
             filter,
             CancelToken::new(),
         ) {
             Ok(rx) => rx,
             Err(e) => {
-                return error_response(format!(
-                    "Failed to search file '{}': {}",
-                    req.file.display(),
-                    e
-                ))
+                return error_response(format!("Failed to search file '{}': {}", path.display(), e))
             }
         };
 
@@ -263,7 +262,7 @@ impl LazyTailMcp {
         let matches = if matching_indices.is_empty() {
             Vec::new()
         } else {
-            match Self::get_lines_content(&req.file, &matching_indices, context_lines) {
+            match Self::get_lines_content(path, &matching_indices, context_lines) {
                 Ok(m) => m,
                 Err(e) => return error_response(format!("Failed to read line content: {}", e)),
             }
@@ -276,11 +275,11 @@ impl LazyTailMcp {
             lines_searched,
         };
 
-        if !req.raw {
+        if !raw {
             strip_search_response(&mut response);
         }
 
-        format_search(&response, req.output)
+        format_search(&response, output)
     }
 
     /// Fetch line content and context for search matches using a single-pass mmap scan.
@@ -386,38 +385,37 @@ impl LazyTailMcp {
         Ok(matches)
     }
 
-    /// Get context lines around a specific line number in a log file.
-    #[tool(
-        description = "Get context lines around a specific line number in a log file. Useful for exploring what happened before and after a specific log entry. Returns the target line plus configurable lines before (default 5) and after (default 5)."
-    )]
-    fn get_context(&self, #[tool(aggr)] req: GetContextRequest) -> String {
-        let before_count = req.before.min(50);
-        let after_count = req.after.min(50);
+    pub(crate) fn get_context_impl(
+        path: &Path,
+        line_number: usize,
+        before: usize,
+        after: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
+        let before_count = before.min(50);
+        let after_count = after.min(50);
 
-        let mut reader = match FileReader::new(&req.file) {
+        let mut reader = match FileReader::new(path) {
             Ok(r) => r,
             Err(e) => {
-                return error_response(format!(
-                    "Failed to open file '{}': {}",
-                    req.file.display(),
-                    e
-                ))
+                return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
         let total = reader.total_lines();
 
-        if req.line_number >= total {
+        if line_number >= total {
             return error_response(format!(
                 "Line {} does not exist (file has {} lines)",
-                req.line_number, total
+                line_number, total
             ));
         }
 
         // Get before lines
-        let start_before = req.line_number.saturating_sub(before_count);
+        let start_before = line_number.saturating_sub(before_count);
         let mut before_lines = Vec::new();
-        for i in start_before..req.line_number {
+        for i in start_before..line_number {
             if let Ok(Some(content)) = reader.get_line(i) {
                 before_lines.push(LineInfo {
                     line_number: i,
@@ -427,19 +425,19 @@ impl LazyTailMcp {
         }
 
         // Get target line
-        let target_content = match reader.get_line(req.line_number) {
+        let target_content = match reader.get_line(line_number) {
             Ok(Some(c)) => c,
             _ => return error_response("Failed to read target line"),
         };
         let target_line = LineInfo {
-            line_number: req.line_number,
+            line_number,
             content: target_content,
         };
 
         // Get after lines
-        let end_after = (req.line_number + 1 + after_count).min(total);
+        let end_after = (line_number + 1 + after_count).min(total);
         let mut after_lines = Vec::new();
-        for i in (req.line_number + 1)..end_after {
+        for i in (line_number + 1)..end_after {
             if let Ok(Some(content)) = reader.get_line(i) {
                 after_lines.push(LineInfo {
                     line_number: i,
@@ -455,11 +453,78 @@ impl LazyTailMcp {
             total_lines: total,
         };
 
-        if !req.raw {
+        if !raw {
             strip_context_response(&mut response);
         }
 
-        format_context(&response, req.output)
+        format_context(&response, output)
+    }
+}
+
+#[tool(tool_box)]
+impl LazyTailMcp {
+    /// Fetch lines from a lazytail source starting from a specific position.
+    #[tool(
+        description = "Fetch lines from a lazytail-captured log source. Pass a source name from list_sources. Returns up to 1000 lines starting from a given position. For recent lines, prefer get_tail instead."
+    )]
+    fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
+        let path = match source::resolve_source(&req.source) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::get_lines_impl(&path, req.start, req.count, req.raw, req.output)
+    }
+
+    /// Fetch the last N lines from a lazytail source.
+    #[tool(
+        description = "Fetch the last N lines from a lazytail-captured log source. Useful for checking recent activity. Pass a source name from list_sources. Returns up to 1000 lines from the end of the file."
+    )]
+    fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
+        let path = match source::resolve_source(&req.source) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::get_tail_impl(&path, req.count, req.raw, req.output)
+    }
+
+    /// Search for patterns in a lazytail source using plain text or regex.
+    #[tool(
+        description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000)."
+    )]
+    fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
+        let path = match source::resolve_source(&req.source) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::search_impl(
+            &path,
+            &req.pattern,
+            req.mode,
+            req.case_sensitive,
+            req.max_results,
+            req.context_lines,
+            req.raw,
+            req.output,
+        )
+    }
+
+    /// Get context lines around a specific line number in a lazytail source.
+    #[tool(
+        description = "Get context lines around a specific line number in a lazytail-captured log source. Useful for exploring what happened before and after a specific log entry. Pass a source name from list_sources. Returns the target line plus configurable lines before (default 5) and after (default 5)."
+    )]
+    fn get_context(&self, #[tool(aggr)] req: GetContextRequest) -> String {
+        let path = match source::resolve_source(&req.source) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::get_context_impl(
+            &path,
+            req.line_number,
+            req.before,
+            req.after,
+            req.raw,
+            req.output,
+        )
     }
 
     /// List available log sources from the LazyTail data directory.
@@ -529,9 +594,10 @@ impl ServerHandler for LazyTailMcp {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "LazyTail MCP server for log file analysis. \
-                 Start with list_sources to discover available logs and their paths. \
+                 Start with list_sources to discover available logs and their names. \
                  Use search to find patterns (supports regex), get_tail for recent activity, \
                  get_lines to read specific sections, and get_context to explore around a line number. \
+                 All tools accept a source name (from list_sources), not a file path. \
                  Log sources are captured via 'cmd | lazytail -n NAME' and stored in ~/.config/lazytail/data/."
                     .into(),
             ),
@@ -564,22 +630,12 @@ plain line with no escapes\n\
         f
     }
 
-    fn mcp() -> LazyTailMcp {
-        LazyTailMcp::new()
-    }
-
     // -- get_lines tests --
 
     #[test]
     fn get_lines_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "[INFO] Server started");
         assert_eq!(resp.lines[1].content, "[ERROR] Connection failed");
@@ -590,13 +646,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b[1;32m"));
         assert!(resp.lines[1].content.contains("\x1b[1;31m"));
@@ -607,12 +657,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_tail(GetTailRequest {
-            file: f.path().into(),
-            count: 2,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines.len(), 2);
         assert_eq!(resp.lines[0].content, "plain line with no escapes");
@@ -622,12 +667,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_tail(GetTailRequest {
-            file: f.path().into(),
-            count: 5,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_tail_impl(f.path(), 5, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b["));
     }
@@ -637,16 +677,16 @@ plain line with no escapes\n\
     #[test]
     fn search_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = mcp().search(SearchRequest {
-            file: f.path().into(),
-            pattern: "ERROR".into(),
-            mode: SearchMode::Plain,
-            case_sensitive: false,
-            max_results: 100,
-            context_lines: 1,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "ERROR",
+            SearchMode::Plain,
+            false,
+            100,
+            1,
+            false,
+            OutputFormat::Json,
+        );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.total_matches, 1);
         let m = &resp.matches[0];
@@ -661,16 +701,16 @@ plain line with no escapes\n\
     #[test]
     fn search_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = mcp().search(SearchRequest {
-            file: f.path().into(),
-            pattern: "ERROR".into(),
-            mode: SearchMode::Plain,
-            case_sensitive: false,
-            max_results: 100,
-            context_lines: 0,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "ERROR",
+            SearchMode::Plain,
+            false,
+            100,
+            0,
+            true,
+            OutputFormat::Json,
+        );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.matches[0].content.contains("\x1b[1;31m"));
     }
@@ -680,14 +720,7 @@ plain line with no escapes\n\
     #[test]
     fn get_context_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_context(GetContextRequest {
-            file: f.path().into(),
-            line_number: 2,
-            before: 1,
-            after: 1,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_context_impl(f.path(), 2, 1, 1, false, OutputFormat::Json);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.target_line.content, "[DEBUG] Processing request");
         assert_eq!(resp.before_lines[0].content, "[ERROR] Connection failed");
@@ -697,14 +730,7 @@ plain line with no escapes\n\
     #[test]
     fn get_context_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_context(GetContextRequest {
-            file: f.path().into(),
-            line_number: 0,
-            before: 0,
-            after: 0,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_context_impl(f.path(), 0, 0, 0, true, OutputFormat::Json);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.target_line.content.contains("\x1b[1;32m"));
     }
@@ -726,13 +752,7 @@ plain line with no escapes\n\
         writeln!(f, "{line2_ansi}").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines[0].content, line0);
@@ -773,24 +793,12 @@ plain line with no escapes\n\
         f.flush().unwrap();
 
         // Raw mode should preserve ESC bytes
-        let raw_result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let raw_result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let raw_resp: GetLinesResponse = serde_json::from_str(&raw_result).unwrap();
         assert!(raw_resp.lines[0].content.contains('\x1b'));
 
         // Stripped mode (default)
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         // Line 0: ANSI stripped, nested JSON intact
@@ -826,13 +834,7 @@ plain line with no escapes\n\
         writeln!(f, "{}", ansi_wrap("33", line)).unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: true,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         // Raw should keep ANSI and JSON intact
         assert!(resp.lines[0].content.contains("\x1b[33m"));
@@ -851,16 +853,16 @@ plain line with no escapes\n\
         writeln!(f, "{}", ansi_wrap("32", &line_done)).unwrap();
         f.flush().unwrap();
 
-        let result = mcp().search(SearchRequest {
-            file: f.path().into(),
-            pattern: "error".into(),
-            mode: SearchMode::Plain,
-            case_sensitive: false,
-            max_results: 100,
-            context_lines: 1,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            1,
+            false,
+            OutputFormat::Json,
+        );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.total_matches, 1);
         assert_eq!(resp.matches[0].content, line_err);
@@ -876,13 +878,7 @@ plain line with no escapes\n\
         writeln!(f, "just plain text").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Json,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "no ansi here");
         assert_eq!(resp.lines[1].content, "just plain text");
@@ -898,13 +894,7 @@ plain line with no escapes\n\
         writeln!(f, "plain log line").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
@@ -923,12 +913,7 @@ plain line with no escapes\n\
         writeln!(f, "line 2").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_tail(GetTailRequest {
-            file: f.path().into(),
-            count: 2,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
         assert!(result.contains("1|line 1\n"));
@@ -945,16 +930,16 @@ plain line with no escapes\n\
         writeln!(f, "after line").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().search(SearchRequest {
-            file: f.path().into(),
-            pattern: "error".into(),
-            mode: SearchMode::Plain,
-            case_sensitive: false,
-            max_results: 100,
-            context_lines: 1,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            1,
+            false,
+            OutputFormat::Text,
+        );
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_matches: 1\n"));
         assert!(result.contains("--- truncated: false\n"));
@@ -977,14 +962,7 @@ plain line with no escapes\n\
         writeln!(f, "line 4").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().get_context(GetContextRequest {
-            file: f.path().into(),
-            line_number: 2,
-            before: 2,
-            after: 2,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 5\n"));
         assert!(result.contains("  0|line 0\n"));
@@ -997,13 +975,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_text_format_strips_ansi() {
         let f = write_ansi_tempfile();
-        let result = mcp().get_lines(GetLinesRequest {
-            file: f.path().into(),
-            start: 0,
-            count: 100,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         // ANSI should be stripped
         assert!(result.contains("0|[INFO] Server started\n"));
@@ -1019,16 +991,16 @@ plain line with no escapes\n\
         writeln!(f, "error two").unwrap();
         f.flush().unwrap();
 
-        let result = mcp().search(SearchRequest {
-            file: f.path().into(),
-            pattern: "error".into(),
-            mode: SearchMode::Plain,
-            case_sensitive: false,
-            max_results: 100,
-            context_lines: 0,
-            raw: false,
-            output: OutputFormat::Text,
-        });
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            0,
+            false,
+            OutputFormat::Text,
+        );
         assert!(result.contains("--- total_matches: 2\n"));
         // Two match blocks separated by blank line
         let match_count = result.matches("=== match").count();
@@ -1044,12 +1016,13 @@ plain line with no escapes\n\
         f.flush().unwrap();
 
         // Simulate what MCP does: deserialize without output field
-        let json = format!(
-            r#"{{"file": "{}","start": 0,"count": 10}}"#,
-            f.path().display()
-        );
-        let req: GetLinesRequest = serde_json::from_str(&json).unwrap();
-        let result = mcp().get_lines(req);
+        let json = r#"{"source": "myapp", "start": 0, "count": 10}"#;
+        let req: GetLinesRequest = serde_json::from_str(json).unwrap();
+        // Verify the source field deserializes correctly
+        assert_eq!(req.source, "myapp");
+        // Use _impl to verify default output format is text
+        let result =
+            LazyTailMcp::get_lines_impl(f.path(), req.start, req.count, req.raw, req.output);
         // Default should be text format (starts with ---)
         assert!(result.starts_with("--- "));
     }

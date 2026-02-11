@@ -471,6 +471,22 @@ pub fn cleanup_stale_markers() {
     }
 }
 
+/// Resolve a source name to its log file path in a specific data directory.
+pub fn resolve_source_in(name: &str, data_dir: &Path) -> Result<PathBuf> {
+    validate_source_name(name)?;
+    let path = data_dir.join(format!("{name}.log"));
+    if !path.exists() {
+        anyhow::bail!("Source '{name}' not found. Use list_sources to see available sources.");
+    }
+    Ok(path)
+}
+
+/// Resolve a source name to its log file path in the default data directory.
+pub fn resolve_source(name: &str) -> Result<PathBuf> {
+    let data = data_dir().context("Could not determine data directory")?;
+    resolve_source_in(name, &data)
+}
+
 /// Validate a source name for use in capture mode.
 pub fn validate_source_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -532,6 +548,33 @@ mod tests {
     fn test_is_pid_running_nonexistent() {
         // Very high PID should not exist
         assert!(!is_pid_running(u32::MAX));
+    }
+
+    #[test]
+    fn test_resolve_source_in_found() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("myapp.log"), "data").unwrap();
+        let result = resolve_source_in("myapp", temp.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), temp.path().join("myapp.log"));
+    }
+
+    #[test]
+    fn test_resolve_source_in_not_found() {
+        let temp = TempDir::new().unwrap();
+        let result = resolve_source_in("missing", temp.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "error was: {err}");
+        assert!(err.contains("list_sources"), "error was: {err}");
+    }
+
+    #[test]
+    fn test_resolve_source_in_rejects_invalid_name() {
+        let temp = TempDir::new().unwrap();
+        assert!(resolve_source_in("", temp.path()).is_err());
+        assert!(resolve_source_in("../etc/passwd", temp.path()).is_err());
+        assert!(resolve_source_in(".hidden", temp.path()).is_err());
     }
 
     #[test]
