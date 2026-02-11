@@ -15,6 +15,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
         InputMode::ZPending => handle_z_pending_mode(key),
         InputMode::SourcePanel => handle_source_panel_mode(key),
+        InputMode::ConfirmClose => handle_confirm_close_mode(key),
         InputMode::Normal => handle_normal_mode(key),
     }
 }
@@ -108,11 +109,28 @@ fn handle_source_panel_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Down | KeyCode::Char('j') => vec![AppEvent::SourcePanelDown],
         KeyCode::Char(' ') => vec![AppEvent::ToggleCategoryExpand],
         KeyCode::Enter => vec![AppEvent::SelectSource],
+        KeyCode::Char('x') => vec![AppEvent::CloseSelectedTab],
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CloseSelectedTab]
+        }
         KeyCode::Char('q') => vec![AppEvent::Quit],
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::Quit]
         }
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        _ => vec![],
+    }
+}
+
+/// Handle keyboard input in close confirmation mode
+fn handle_confirm_close_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => vec![AppEvent::ConfirmCloseTab],
+        KeyCode::Char('n') | KeyCode::Esc => vec![AppEvent::CancelCloseTab],
+        KeyCode::Char('q') => vec![AppEvent::Quit],
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::Quit]
+        }
         _ => vec![],
     }
 }

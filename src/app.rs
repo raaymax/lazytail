@@ -82,6 +82,8 @@ pub enum InputMode {
     ZPending,
     /// Source panel is focused for tree navigation
     SourcePanel,
+    /// Waiting for user to confirm tab close
+    ConfirmClose,
 }
 
 /// Main application state
@@ -130,6 +132,12 @@ pub struct App {
 
     /// Source panel tree state
     pub source_panel: SourcePanelState,
+
+    /// Tab index pending close confirmation (None = no pending close)
+    pub pending_close_tab: Option<usize>,
+
+    /// Input mode to restore when cancelling close confirmation
+    confirm_return_mode: InputMode,
 }
 
 impl App {
@@ -165,6 +173,8 @@ impl App {
             side_panel_width: 32,
             pending_filter_at: None,
             source_panel: SourcePanelState::default(),
+            pending_close_tab: None,
+            confirm_return_mode: InputMode::Normal,
         }
     }
 
@@ -233,11 +243,6 @@ impl App {
                 self.active_tab -= 1;
             }
         }
-    }
-
-    /// Close the currently active tab
-    pub fn close_active_tab(&mut self) {
-        self.close_tab(self.active_tab);
     }
 
     // === Source Panel Methods ===
@@ -344,6 +349,52 @@ impl App {
             if let Some(tab_idx) = self.find_tab_index(cat, idx) {
                 self.active_tab = tab_idx;
                 self.input_mode = InputMode::Normal;
+            }
+        }
+    }
+
+    // === Close Confirmation Methods ===
+
+    /// Request closing a tab with confirmation dialog
+    fn request_close_tab(&mut self, tab_index: usize) {
+        if tab_index < self.tabs.len() {
+            self.pending_close_tab = Some(tab_index);
+            self.confirm_return_mode = self.input_mode;
+            self.input_mode = InputMode::ConfirmClose;
+        }
+    }
+
+    /// Confirm and execute the pending tab close
+    fn confirm_pending_close(&mut self) {
+        if let Some(tab_index) = self.pending_close_tab.take() {
+            let return_mode = self.confirm_return_mode;
+            self.input_mode = return_mode;
+
+            if tab_index < self.tabs.len() {
+                self.close_tab(tab_index);
+            }
+
+            // Fix source panel selection if returning to source panel
+            if return_mode == InputMode::SourcePanel {
+                self.fix_source_panel_selection();
+            }
+        }
+    }
+
+    /// Cancel the pending tab close and return to previous mode
+    fn cancel_pending_close(&mut self) {
+        self.pending_close_tab = None;
+        self.input_mode = self.confirm_return_mode;
+    }
+
+    /// Fix source panel selection after a tab is closed
+    fn fix_source_panel_selection(&mut self) {
+        if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection {
+            let cat_count = self.tabs.iter().filter(|t| t.source_type() == cat).count();
+            if cat_count == 0 {
+                self.source_panel.selection = None;
+            } else if idx >= cat_count {
+                self.source_panel.selection = Some(TreeSelection::Item(cat, cat_count - 1));
             }
         }
     }
@@ -776,7 +827,19 @@ impl App {
 
             // Tab navigation events
             AppEvent::SelectTab(index) => self.select_tab(index),
-            AppEvent::CloseCurrentTab => self.close_active_tab(),
+            AppEvent::CloseCurrentTab => {
+                let idx = self.active_tab;
+                self.request_close_tab(idx);
+            }
+            AppEvent::CloseSelectedTab => {
+                if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection.clone() {
+                    if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                        self.request_close_tab(tab_idx);
+                    }
+                }
+            }
+            AppEvent::ConfirmCloseTab => self.confirm_pending_close(),
+            AppEvent::CancelCloseTab => self.cancel_pending_close(),
 
             // Source panel events
             AppEvent::FocusSourcePanel => self.focus_source_panel(),
