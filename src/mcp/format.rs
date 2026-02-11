@@ -13,7 +13,7 @@ use super::types::{GetContextResponse, GetLinesResponse, SearchResponse};
 
 /// Format a GetLinesResponse (used by get_lines and get_tail) as plain text.
 pub fn format_lines_text(resp: &GetLinesResponse) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(resp.lines.len() * 80 + 64);
     writeln!(out, "--- total_lines: {}", resp.total_lines).unwrap();
     writeln!(out, "--- has_more: {}", resp.has_more).unwrap();
     out.push('\n');
@@ -27,7 +27,7 @@ pub fn format_lines_text(resp: &GetLinesResponse) -> String {
 
 /// Format a SearchResponse as plain text.
 pub fn format_search_text(resp: &SearchResponse) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(resp.matches.len() * 160 + 128);
     writeln!(out, "--- total_matches: {}", resp.total_matches).unwrap();
     writeln!(out, "--- truncated: {}", resp.truncated).unwrap();
     writeln!(out, "--- lines_searched: {}", resp.lines_searched).unwrap();
@@ -56,7 +56,8 @@ pub fn format_search_text(resp: &SearchResponse) -> String {
 
 /// Format a GetContextResponse as plain text.
 pub fn format_context_text(resp: &GetContextResponse) -> String {
-    let mut out = String::new();
+    let lines_count = resp.before_lines.len() + 1 + resp.after_lines.len();
+    let mut out = String::with_capacity(lines_count * 80 + 64);
     writeln!(out, "--- total_lines: {}", resp.total_lines).unwrap();
     out.push('\n');
 

@@ -25,6 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Create a JSON error response string.
+/// Errors are always returned as JSON regardless of the requested output format.
 fn error_response(message: impl std::fmt::Display) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
         .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
@@ -891,8 +892,9 @@ plain line with no escapes\n\
 
     #[test]
     fn get_lines_text_format() {
+        let json_line = r#"{"level":"info","msg":"started"}"#;
         let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, r#"{{"level":"info","msg":"started"}}"#).unwrap();
+        writeln!(f, "{json_line}").unwrap();
         writeln!(f, "plain log line").unwrap();
         f.flush().unwrap();
 
@@ -907,7 +909,7 @@ plain line with no escapes\n\
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
         // JSON content should appear verbatim without escaping
-        assert!(result.contains(r#"0|{"level":"info","msg":"started"}"#));
+        assert!(result.contains(&format!("0|{json_line}\n")));
         assert!(result.contains("1|plain log line\n"));
         // No backslash escaping
         assert!(!result.contains("\\\""));
@@ -936,9 +938,10 @@ plain line with no escapes\n\
 
     #[test]
     fn search_text_format() {
+        let json_line = r#"{"level":"error","msg":"timeout"}"#;
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "before line").unwrap();
-        writeln!(f, r#"{{"level":"error","msg":"timeout"}}"#).unwrap();
+        writeln!(f, "{json_line}").unwrap();
         writeln!(f, "after line").unwrap();
         f.flush().unwrap();
 
@@ -957,7 +960,7 @@ plain line with no escapes\n\
         assert!(result.contains("--- truncated: false\n"));
         assert!(result.contains("=== match\n"));
         // Match line has > prefix
-        assert!(result.contains(r#"> 1|{"level":"error","msg":"timeout"}"#));
+        assert!(result.contains(&format!("> 1|{json_line}\n")));
         // Context lines have space prefix
         assert!(result.contains("  0|before line\n"));
         assert!(result.contains("  2|after line\n"));
@@ -965,10 +968,11 @@ plain line with no escapes\n\
 
     #[test]
     fn get_context_text_format() {
+        let json_line = r#"{"target":"line"}"#;
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "line 0").unwrap();
         writeln!(f, "line 1").unwrap();
-        writeln!(f, r#"{{"target":"line"}}"#).unwrap();
+        writeln!(f, "{json_line}").unwrap();
         writeln!(f, "line 3").unwrap();
         writeln!(f, "line 4").unwrap();
         f.flush().unwrap();
@@ -985,9 +989,52 @@ plain line with no escapes\n\
         assert!(result.contains("--- total_lines: 5\n"));
         assert!(result.contains("  0|line 0\n"));
         assert!(result.contains("  1|line 1\n"));
-        assert!(result.contains(r#"> 2|{"target":"line"}"#));
+        assert!(result.contains(&format!("> 2|{json_line}\n")));
         assert!(result.contains("  3|line 3\n"));
         assert!(result.contains("  4|line 4\n"));
+    }
+
+    #[test]
+    fn get_lines_text_format_strips_ansi() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.starts_with("--- "));
+        // ANSI should be stripped
+        assert!(result.contains("0|[INFO] Server started\n"));
+        assert!(result.contains("1|[ERROR] Connection failed\n"));
+        assert!(!result.contains("\x1b["));
+    }
+
+    #[test]
+    fn search_text_format_multiple_matches() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "error one").unwrap();
+        writeln!(f, "ok line").unwrap();
+        writeln!(f, "error two").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().search(SearchRequest {
+            file: f.path().into(),
+            pattern: "error".into(),
+            mode: SearchMode::Plain,
+            case_sensitive: false,
+            max_results: 100,
+            context_lines: 0,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.contains("--- total_matches: 2\n"));
+        // Two match blocks separated by blank line
+        let match_count = result.matches("=== match").count();
+        assert_eq!(match_count, 2);
+        assert!(result.contains("> 0|error one\n"));
+        assert!(result.contains("> 2|error two\n"));
     }
 
     #[test]

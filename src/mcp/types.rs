@@ -95,7 +95,7 @@ pub struct SearchRequest {
     /// Maximum number of results to return (default 100, max 1000)
     #[serde(default = "default_max_results")]
     pub max_results: usize,
-    /// Number of context lines before and after each match (default 0)
+    /// Number of context lines before and after each match (default 0, max 50)
     #[serde(default)]
     pub context_lines: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
