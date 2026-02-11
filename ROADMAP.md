@@ -43,7 +43,7 @@ This is a local planning document for upcoming features and improvements.
 - Source capture mode (`cmd | lazytail -n "Name"`)
 - Active/ended status indicators for discovered sources
 - Directory watcher for dynamic tab creation
-- Close tab keybinding (`x` / `Ctrl+W`)
+- Close tab with confirmation dialog (`x` / `Ctrl+W`)
 - MCP server support (`lazytail --mcp`)
 - MCP tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
 - MCP plain text output format (default) to reduce JSON escaping overhead
@@ -192,8 +192,8 @@ lazytail api.log      # Explicit file → single tab (backward compatible)
   - [x] Monitor `data/` directory for new files
   - [x] Add new tabs dynamically when sources appear
 - [x] Tab management
-  - [x] Close tab keybinding (`x` or `Ctrl+W`)
-  - [ ] Optionally delete source file on close
+  - [x] Close tab keybinding (`x` or `Ctrl+W`) with confirmation dialog
+  - [x] Delete ended source files on close (after confirmation)
 - [x] Add tests for discovery behavior
 
 **Behavior:**
@@ -943,7 +943,7 @@ Source Discovery & Capture:
 - Source capture mode: `cmd | lazytail -n "Name"`
 - Active/ended status indicators
 - Dynamic tab creation for new sources
-- Close tab keybinding (`x` / `Ctrl+W`)
+- Close tab with confirmation dialog (`x` / `Ctrl+W`)
 
 MCP Server Support:
 - MCP (Model Context Protocol) server via `--mcp` flag

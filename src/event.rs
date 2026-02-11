@@ -64,6 +64,12 @@ pub enum AppEvent {
     // Tab navigation events
     SelectTab(usize),
     CloseCurrentTab,
+    /// Close the currently selected tab in source panel
+    CloseSelectedTab,
+    /// User confirmed the pending close action
+    ConfirmCloseTab,
+    /// User cancelled the pending close action
+    CancelCloseTab,
 
     // Source panel events
     FocusSourcePanel,

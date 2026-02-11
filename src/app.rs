@@ -82,6 +82,8 @@ pub enum InputMode {
     ZPending,
     /// Source panel is focused for tree navigation
     SourcePanel,
+    /// Waiting for user to confirm tab close
+    ConfirmClose,
 }
 
 /// Main application state
@@ -130,6 +132,12 @@ pub struct App {
 
     /// Source panel tree state
     pub source_panel: SourcePanelState,
+
+    /// Tab pending close confirmation: (index, name) for identity verification
+    pub pending_close_tab: Option<(usize, String)>,
+
+    /// Input mode to restore when cancelling close confirmation
+    confirm_return_mode: InputMode,
 }
 
 impl App {
@@ -165,6 +173,8 @@ impl App {
             side_panel_width: 32,
             pending_filter_at: None,
             source_panel: SourcePanelState::default(),
+            pending_close_tab: None,
+            confirm_return_mode: InputMode::Normal,
         }
     }
 
@@ -233,11 +243,6 @@ impl App {
                 self.active_tab -= 1;
             }
         }
-    }
-
-    /// Close the currently active tab
-    pub fn close_active_tab(&mut self) {
-        self.close_tab(self.active_tab);
     }
 
     // === Source Panel Methods ===
@@ -344,6 +349,54 @@ impl App {
             if let Some(tab_idx) = self.find_tab_index(cat, idx) {
                 self.active_tab = tab_idx;
                 self.input_mode = InputMode::Normal;
+            }
+        }
+    }
+
+    // === Close Confirmation Methods ===
+
+    /// Request closing a tab with confirmation dialog
+    fn request_close_tab(&mut self, tab_index: usize) {
+        if tab_index < self.tabs.len() {
+            let tab_name = self.tabs[tab_index].name.clone();
+            self.pending_close_tab = Some((tab_index, tab_name));
+            self.confirm_return_mode = self.input_mode;
+            self.input_mode = InputMode::ConfirmClose;
+        }
+    }
+
+    /// Confirm and execute the pending tab close
+    fn confirm_pending_close(&mut self) {
+        if let Some((tab_index, expected_name)) = self.pending_close_tab.take() {
+            let return_mode = self.confirm_return_mode;
+            self.input_mode = return_mode;
+
+            // Verify the tab at this index still matches (guards against tab reordering)
+            if tab_index < self.tabs.len() && self.tabs[tab_index].name == expected_name {
+                self.close_tab(tab_index);
+            }
+
+            // Fix source panel selection if returning to source panel
+            if return_mode == InputMode::SourcePanel {
+                self.fix_source_panel_selection();
+            }
+        }
+    }
+
+    /// Cancel the pending tab close and return to previous mode
+    fn cancel_pending_close(&mut self) {
+        self.pending_close_tab = None;
+        self.input_mode = self.confirm_return_mode;
+    }
+
+    /// Fix source panel selection after a tab is closed
+    fn fix_source_panel_selection(&mut self) {
+        if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection {
+            let cat_count = self.tabs.iter().filter(|t| t.source_type() == cat).count();
+            if cat_count == 0 {
+                self.source_panel.selection = None;
+            } else if idx >= cat_count {
+                self.source_panel.selection = Some(TreeSelection::Item(cat, cat_count - 1));
             }
         }
     }
@@ -776,7 +829,19 @@ impl App {
 
             // Tab navigation events
             AppEvent::SelectTab(index) => self.select_tab(index),
-            AppEvent::CloseCurrentTab => self.close_active_tab(),
+            AppEvent::CloseCurrentTab => {
+                let idx = self.active_tab;
+                self.request_close_tab(idx);
+            }
+            AppEvent::CloseSelectedTab => {
+                if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection.clone() {
+                    if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                        self.request_close_tab(tab_idx);
+                    }
+                }
+            }
+            AppEvent::ConfirmCloseTab => self.confirm_pending_close(),
+            AppEvent::CancelCloseTab => self.cancel_pending_close(),
 
             // Source panel events
             AppEvent::FocusSourcePanel => self.focus_source_panel(),
@@ -973,6 +1038,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::AppEvent;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1769,5 +1835,93 @@ mod tests {
         // Collapse all
         app.apply_event(AppEvent::CollapseAll);
         assert!(app.active_tab().expansion.expanded_lines.is_empty());
+    }
+
+    #[test]
+    fn test_close_tab_request_sets_mode_and_stores_index() {
+        let file1 = create_temp_log_file(&["line1"]);
+        let file2 = create_temp_log_file(&["line2"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(app.input_mode, InputMode::Normal);
+        app.apply_event(AppEvent::CloseCurrentTab);
+
+        assert_eq!(app.input_mode, InputMode::ConfirmClose);
+        assert!(app.pending_close_tab.is_some());
+        let (idx, name) = app.pending_close_tab.as_ref().unwrap();
+        assert_eq!(*idx, 0);
+        assert_eq!(*name, app.tabs[0].name);
+    }
+
+    #[test]
+    fn test_confirm_close_tab_closes_and_restores_mode() {
+        let file1 = create_temp_log_file(&["line1"]);
+        let file2 = create_temp_log_file(&["line2"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        app.apply_event(AppEvent::CloseCurrentTab);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.input_mode, InputMode::ConfirmClose);
+
+        app.apply_event(AppEvent::ConfirmCloseTab);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert!(app.pending_close_tab.is_none());
+    }
+
+    #[test]
+    fn test_cancel_close_tab_restores_mode_without_closing() {
+        let file1 = create_temp_log_file(&["line1"]);
+        let file2 = create_temp_log_file(&["line2"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        app.apply_event(AppEvent::CloseCurrentTab);
+        assert_eq!(app.input_mode, InputMode::ConfirmClose);
+
+        app.apply_event(AppEvent::CancelCloseTab);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert!(app.pending_close_tab.is_none());
+    }
+
+    #[test]
+    fn test_confirm_close_verifies_tab_identity() {
+        let file1 = create_temp_log_file(&["line1"]);
+        let file2 = create_temp_log_file(&["line2"]);
+        let file3 = create_temp_log_file(&["line3"]);
+        let mut app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        // Request close on tab 1
+        app.active_tab = 1;
+        let original_name = app.tabs[1].name.clone();
+        app.apply_event(AppEvent::CloseCurrentTab);
+        assert_eq!(app.pending_close_tab.as_ref().unwrap().1, original_name);
+
+        // Simulate the tab at index 1 being replaced (name mismatch)
+        app.tabs[1].name = "different_name".to_string();
+
+        // Confirm should NOT close because name doesn't match
+        app.apply_event(AppEvent::ConfirmCloseTab);
+        assert_eq!(app.tabs.len(), 3);
     }
 }

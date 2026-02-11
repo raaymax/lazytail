@@ -95,6 +95,11 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
         render_help_overlay(f, f.area());
     }
 
+    // Render close confirmation dialog on top of everything if active
+    if app.input_mode == InputMode::ConfirmClose {
+        render_confirm_close_dialog(f, f.area(), app);
+    }
+
     Ok(())
 }
 
@@ -175,7 +180,9 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
                 // Truncate name to fit in panel width (accounting for indent)
                 let max_len = (area.width as usize).saturating_sub(8); // "  N> " + indicators
                 let name = if tab.name.len() > max_len {
-                    format!("{}...", &tab.name[..max_len.saturating_sub(3)])
+                    let truncate_at = max_len.saturating_sub(3);
+                    let boundary = tab.name.floor_char_boundary(truncate_at);
+                    format!("{}...", &tab.name[..boundary])
                 } else {
                     tab.name.clone()
                 };
@@ -749,6 +756,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  j/k, ↑/↓      Navigate tree"),
         Line::from("  Space         Expand/collapse category"),
         Line::from("  Enter         Select source"),
+        Line::from("  x             Close selected source"),
         Line::from("  Esc           Return to log view"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -809,4 +817,87 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     // Clear the area first to remove background content
     f.render_widget(Clear, popup_area);
     f.render_widget(help_paragraph, popup_area);
+}
+
+fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
+    let tab_index = match &app.pending_close_tab {
+        Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].name == *name => *idx,
+        _ => return,
+    };
+
+    let tab = &app.tabs[tab_index];
+    let tab_name = &tab.name;
+    let is_last = app.tabs.len() <= 1;
+    let will_delete = tab.source_status == Some(SourceStatus::Ended) && tab.source_path.is_some();
+
+    // Truncate name to fit in popup
+    let max_name_len = 30;
+    let display_name = if tab_name.len() > max_name_len {
+        let truncate_at = max_name_len.saturating_sub(3);
+        let boundary = tab_name.floor_char_boundary(truncate_at);
+        format!("{}...", &tab_name[..boundary])
+    } else {
+        tab_name.clone()
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Close "),
+            Span::styled(
+                &display_name,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("?"),
+        ]),
+    ];
+
+    // Add context note
+    if will_delete {
+        lines.push(Line::from(vec![Span::styled(
+            "  Source file will be deleted",
+            Style::default().fg(Color::Red),
+        )]));
+    } else if is_last {
+        lines.push(Line::from(vec![Span::styled(
+            "  This will quit the application",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    } else {
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("y/Enter", Style::default().fg(Color::Green)),
+        Span::raw(" confirm  "),
+        Span::styled("n/Esc", Style::default().fg(Color::Red)),
+        Span::raw(" cancel"),
+    ]));
+
+    let popup_width = 44.min(area.width.saturating_sub(4));
+    let popup_height = 6;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: area.x + popup_x,
+        y: area.y + popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Close Source ")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
 }
