@@ -384,31 +384,31 @@ struct Aggregation {
 4. **Text parser** → UI gets query language later
 
 **Tasks:**
-- [ ] Phase 1: Core AST & JSON Interface (MCP)
-  - [ ] Define `FilterQuery` and related structs with `#[derive(Deserialize)]`
-  - [ ] Implement executor for basic filters (`==`, `!=`, `=~`, `!~`)
-  - [ ] JSON parser support (serde_json field extraction)
-  - [ ] Wire up to MCP `search` tool as `query` parameter
-  - [ ] Tests with JSON input
-- [ ] Phase 2: Exclusion & Time Filtering
-  - [ ] Implement exclude patterns (critical for noisy logs!)
+- [x] Phase 1: Core AST & JSON Interface (MCP)
+  - [x] Define `FilterQuery` and related structs with `#[derive(Deserialize)]`
+  - [x] Implement executor for basic filters (`==`, `!=`, `=~`, `!~`)
+  - [x] JSON parser support (serde_json field extraction)
+  - [x] Wire up to MCP `search` tool as `query` parameter
+  - [x] Tests with JSON input
+- [x] Phase 2: Exclusion & Time Filtering
+  - [x] Implement exclude patterns (critical for noisy logs!)
   - [ ] Timestamp field detection (common field names)
   - [ ] Time range filtering (after/before)
-  - [ ] Tests for exclusion and time filtering
+  - [x] Tests for exclusion filtering
 - [ ] Phase 3: Aggregation
   - [ ] Implement `count by (field)`
   - [ ] Implement `top N` / limit
   - [ ] Return aggregation results as structured JSON
   - [ ] New MCP tool or extend search response
-- [ ] Phase 4: Text Parser (UI)
-  - [ ] Lexer for text query syntax
-  - [ ] Recursive descent parser → AST
-  - [ ] Error messages with position info
-  - [ ] UI integration (filter input mode)
-- [ ] Phase 5: Advanced Parsers
-  - [ ] `logfmt` parser (key=value)
+- [x] Phase 4: Text Parser (UI)
+  - [x] Lexer for text query syntax
+  - [x] Recursive descent parser → AST
+  - [x] Error messages with position info
+  - [x] UI integration (filter input mode)
+- [x] Phase 5: Advanced Parsers
+  - [x] `logfmt` parser (key=value)
   - [ ] `pattern` parser (extract fields via template)
-  - [ ] Nested field access (`user.id`, `request.headers.host`)
+  - [x] Nested field access (`user.id`, `request.headers.host`)
 - [ ] Phase 6: Polish
   - [ ] Syntax highlighting in filter input
   - [ ] Query history with mode
@@ -971,7 +971,7 @@ Config System:
 | `list_sources` | Discover available log sources | ✅ Complete |
 | `get_lines` | Read lines from position | ✅ Complete |
 | `get_tail` | Read last N lines | ✅ Complete |
-| `search` | Find pattern matches | ✅ Complete (basic) |
+| `search` | Find pattern matches + structured queries | ✅ Complete |
 | `get_context` | Get lines around a match | ✅ Complete |
 
 **Common Parameters (all tools except `list_sources`):**
@@ -983,21 +983,18 @@ Config System:
 **Current `search` Parameters:**
 | Parameter | Type | Status |
 |-----------|------|--------|
-| `file` | PathBuf | ✅ Done |
-| `pattern` | String | ✅ Done |
+| `source` | String | ✅ Done |
+| `pattern` | String | ✅ Done (optional when using `query`) |
 | `mode` | plain/regex | ✅ Done |
 | `case_sensitive` | bool | ✅ Done |
 | `max_results` | usize | ✅ Done |
 | `context_lines` | usize | ✅ Done |
-| `exclude` | Vec<String> | ❌ Missing |
+| `query` | FilterQuery | ✅ Done (JSON/logfmt field filtering with exclusions) |
 | `time_range` | TimeRange | ❌ Missing |
-| `query` | FilterQuery | ❌ Missing |
 
-**Planned `search` Enhancements (v0.5.0):**
+**Planned `search` Enhancements (v0.5.0+):**
 | Feature | Purpose | Priority |
 |---------|---------|----------|
-| `exclude` param | Filter out noise (e.g., kscreen spam) | 🔴 High |
-| `query` param | Full FilterQuery JSON for field filtering | 🔴 High |
 | `time_range` param | Filter by timestamp range | 🟡 Medium |
 
 **Planned New Tools (v0.5.0+):**
@@ -1015,19 +1012,21 @@ Config System:
 - ✅ Plain text output format (eliminates JSON escaping explosion for AI consumption)
 
 ### v0.5.0 (Next) 🔴 HIGH PRIORITY
-**Focus: Query Language & MCP Enhancements**
+**Focus: Time Filtering, Aggregation & MCP Enhancements**
 
-Query Language Expansion:
-- FilterQuery AST with serde derives (JSON interface for MCP)
-- Exclusion patterns (critical for noisy logs)
-- Time range filtering
-- `logfmt` parser support
+Already Completed (landed post-v0.4.0):
+- ✅ FilterQuery AST with serde derives (JSON interface for MCP)
+- ✅ `query` parameter wired into MCP `search` tool
+- ✅ Exclusion patterns (`exclude` field in query)
+- ✅ `logfmt` parser support
+- ✅ Nested field access (`user.id`)
+- ✅ Text query parser for UI (`json | level == "error"`)
+- ✅ All comparison operators (eq, ne, regex, not_regex, contains, gt, lt, gte, lte)
 
-MCP Enhancements:
+Remaining for v0.5.0:
+- Time range filtering (timestamp field detection, after/before)
 - MCP scoped to project root (detect `lazytail.yaml`)
 - Filter presets from config available in MCP
-- `exclude` parameter for search tool
-- `query` parameter for structured field filtering via MCP
 
 ### v0.6.0 (Future)
 **Focus: Sidecar Index & Combined Sources**

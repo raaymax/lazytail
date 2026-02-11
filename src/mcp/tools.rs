@@ -12,6 +12,7 @@
 use super::ansi::strip_ansi;
 use super::format;
 use super::types::*;
+use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
 use crate::reader::{file_reader::FileReader, LogReader};
@@ -282,6 +283,88 @@ impl LazyTailMcp {
         format_search(&response, output)
     }
 
+    pub(crate) fn query_impl(
+        path: &Path,
+        query: crate::filter::query::FilterQuery,
+        max_results: usize,
+        context_lines: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
+        let max_results = max_results.min(1000);
+        let context_lines = context_lines.min(50);
+
+        let query_filter = match QueryFilter::new(query) {
+            Ok(f) => f,
+            Err(e) => return error_response(format!("Invalid query: {}", e)),
+        };
+
+        let filter: Arc<dyn Filter> = Arc::new(query_filter);
+
+        let rx = match streaming_filter::run_streaming_filter(
+            path.to_path_buf(),
+            filter,
+            CancelToken::new(),
+        ) {
+            Ok(rx) => rx,
+            Err(e) => {
+                return error_response(format!("Failed to search file '{}': {}", path.display(), e))
+            }
+        };
+
+        let mut matching_indices = Vec::new();
+        let mut lines_searched = 0;
+
+        for progress in rx {
+            match progress {
+                FilterProgress::PartialResults {
+                    matches,
+                    lines_processed,
+                } => {
+                    matching_indices.extend(matches);
+                    lines_searched = lines_processed;
+                }
+                FilterProgress::Complete {
+                    matches,
+                    lines_processed,
+                } => {
+                    matching_indices.extend(matches);
+                    lines_searched = lines_processed;
+                }
+                FilterProgress::Processing(n) => {
+                    lines_searched = n;
+                }
+                FilterProgress::Error(e) => return error_response(format!("Query error: {}", e)),
+            }
+        }
+
+        let total_matches = matching_indices.len();
+        let truncated = total_matches > max_results;
+        matching_indices.truncate(max_results);
+
+        let matches = if matching_indices.is_empty() {
+            Vec::new()
+        } else {
+            match Self::get_lines_content(path, &matching_indices, context_lines) {
+                Ok(m) => m,
+                Err(e) => return error_response(format!("Failed to read line content: {}", e)),
+            }
+        };
+
+        let mut response = SearchResponse {
+            matches,
+            total_matches,
+            truncated,
+            lines_searched,
+        };
+
+        if !raw {
+            strip_search_response(&mut response);
+        }
+
+        format_search(&response, output)
+    }
+
     /// Fetch line content and context for search matches using a single-pass mmap scan.
     ///
     /// This is a specialized batch operation that differs from `FileReader`:
@@ -487,25 +570,36 @@ impl LazyTailMcp {
         Self::get_tail_impl(&path, req.count, req.raw, req.output)
     }
 
-    /// Search for patterns in a lazytail source using plain text or regex.
+    /// Search for patterns in a lazytail source using plain text, regex, or structured query.
     #[tool(
-        description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000)."
+        description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000). Also supports structured queries via the `query` parameter for field-based filtering on JSON/logfmt logs (LogQL-style). When `query` is provided, pattern/mode/case_sensitive are ignored. Query example: {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. Operators: eq, ne, regex, not_regex, contains, gt, lt, gte, lte. Parsers: json, logfmt. Supports nested fields via dot notation (e.g. \"user.id\") and exclusion patterns."
     )]
     fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
         let path = match source::resolve_source(&req.source) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        Self::search_impl(
-            &path,
-            &req.pattern,
-            req.mode,
-            req.case_sensitive,
-            req.max_results,
-            req.context_lines,
-            req.raw,
-            req.output,
-        )
+        if let Some(query) = req.query {
+            Self::query_impl(
+                &path,
+                query,
+                req.max_results,
+                req.context_lines,
+                req.raw,
+                req.output,
+            )
+        } else {
+            Self::search_impl(
+                &path,
+                &req.pattern,
+                req.mode,
+                req.case_sensitive,
+                req.max_results,
+                req.context_lines,
+                req.raw,
+                req.output,
+            )
+        }
     }
 
     /// Get context lines around a specific line number in a lazytail source.
@@ -598,7 +692,10 @@ impl ServerHandler for LazyTailMcp {
                  Use search to find patterns (supports regex), get_tail for recent activity, \
                  get_lines to read specific sections, and get_context to explore around a line number. \
                  All tools accept a source name (from list_sources), not a file path. \
-                 Log sources are captured via 'cmd | lazytail -n NAME' and stored in ~/.config/lazytail/data/."
+                 Log sources are captured via 'cmd | lazytail -n NAME' and stored in ~/.config/lazytail/data/. \
+                 The search tool also supports structured queries via the `query` parameter for \
+                 field-based filtering on JSON/logfmt logs (LogQL-style). Example query: \
+                 {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}."
                     .into(),
             ),
             ..Default::default()
@@ -1025,5 +1122,254 @@ plain line with no escapes\n\
             LazyTailMcp::get_lines_impl(f.path(), req.start, req.count, req.raw, req.output);
         // Default should be text format (starts with ---)
         assert!(result.starts_with("--- "));
+    }
+
+    // -- query tests --
+
+    use crate::filter::query::FilterQuery;
+
+    fn write_json_log_tempfile() -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(
+            f,
+            r#"{{"level":"info","msg":"server started","service":"api-gateway"}}"#
+        )
+        .unwrap();
+        writeln!(f, r#"{{"level":"error","msg":"connection timeout","service":"api-users","user":{{"id":"123","name":"Alice"}}}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"level":"info","msg":"request processed","service":"web-frontend","status":200}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"level":"error","msg":"database error","service":"api-orders","status":500}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"level":"debug","msg":"ignore this","service":"test-service"}}"#
+        )
+        .unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn write_logfmt_tempfile() -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "level=info msg=\"server started\" service=api-gateway").unwrap();
+        writeln!(
+            f,
+            "level=error msg=\"connection timeout\" service=api-users"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "level=info msg=\"request processed\" service=web-frontend status=200"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "level=error msg=\"database error\" service=api-orders status=500"
+        )
+        .unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn query_json_eq_filter() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "level", "op": "eq", "value": "error"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 2);
+        assert!(resp.matches[0].content.contains("connection timeout"));
+        assert!(resp.matches[1].content.contains("database error"));
+    }
+
+    #[test]
+    fn query_logfmt_filter() {
+        let f = write_logfmt_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "logfmt",
+            "filters": [{"field": "level", "op": "eq", "value": "error"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 2);
+        assert!(resp.matches[0].content.contains("connection timeout"));
+        assert!(resp.matches[1].content.contains("database error"));
+    }
+
+    #[test]
+    fn query_exclusion_patterns() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "level", "op": "eq", "value": "error"}],
+            "exclude": [{"field": "msg", "pattern": "database"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 1);
+        assert!(resp.matches[0].content.contains("connection timeout"));
+    }
+
+    #[test]
+    fn query_nested_field_access() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "user.id", "op": "eq", "value": "123"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 1);
+        assert!(resp.matches[0].content.contains("Alice"));
+    }
+
+    #[test]
+    fn query_regex_operator() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "service", "op": "regex", "value": "^api-.*"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 3);
+    }
+
+    #[test]
+    fn query_takes_precedence_over_pattern() {
+        let f = write_json_log_tempfile();
+
+        // Deserialize a request with both pattern and query
+        let req: SearchRequest = serde_json::from_str(
+            r#"{
+            "source": "test",
+            "pattern": "this_should_be_ignored",
+            "query": {
+                "parser": "json",
+                "filters": [{"field": "level", "op": "eq", "value": "error"}]
+            }
+        }"#,
+        )
+        .unwrap();
+
+        assert!(req.query.is_some());
+
+        // Use query_impl directly (since search() needs source resolution)
+        let result = LazyTailMcp::query_impl(
+            f.path(),
+            req.query.unwrap(),
+            req.max_results,
+            req.context_lines,
+            req.raw,
+            OutputFormat::Json,
+        );
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 2);
+    }
+
+    #[test]
+    fn query_invalid_regex_returns_error() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "msg", "op": "regex", "value": "[invalid"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        assert!(result.contains("error"));
+        assert!(result.contains("Invalid"));
+    }
+
+    #[test]
+    fn query_with_context_lines() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "msg", "op": "eq", "value": "database error"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 1, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 1);
+        assert_eq!(resp.matches[0].line_number, 3);
+        assert!(!resp.matches[0].before.is_empty());
+    }
+
+    #[test]
+    fn query_numeric_comparison() {
+        let f = write_json_log_tempfile();
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "json",
+            "filters": [{"field": "status", "op": "gte", "value": "400"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.total_matches, 1);
+        assert!(resp.matches[0].content.contains("\"status\":500"));
+    }
+
+    #[test]
+    fn query_pattern_not_required() {
+        // Verify pattern defaults to empty when only query is provided
+        let req: SearchRequest = serde_json::from_str(
+            r#"{
+            "source": "test",
+            "query": {
+                "parser": "json",
+                "filters": [{"field": "level", "op": "eq", "value": "info"}]
+            }
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(req.pattern, "");
+        assert!(req.query.is_some());
     }
 }
