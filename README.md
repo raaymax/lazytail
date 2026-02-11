@@ -104,16 +104,19 @@ Verify with `/mcp` command inside Gemini CLI.
 | Tool | Description |
 |------|-------------|
 | `list_sources` | Discover available logs from `~/.config/lazytail/data/` |
-| `search` | Find patterns (plain text or regex) with optional context lines |
+| `search` | Find patterns (plain text, regex, or structured query) with optional context lines |
 | `get_tail` | Get the last N lines from a log file |
 | `get_lines` | Read lines from a specific position |
 | `get_context` | Get lines surrounding a specific line number |
+
+The `search` tool supports structured queries for field-based filtering on JSON and logfmt logs via the `query` parameter. Operators: `eq`, `ne`, `regex`, `not_regex`, `contains`, `gt`, `lt`, `gte`, `lte`. Supports nested fields (`user.id`) and exclusion patterns.
 
 ### What You Can Ask Your AI
 
 Once configured, ask your AI assistant:
 
 - *"What errors are in the API logs?"*
+- *"Find all requests with status >= 500"*
 - *"Search for 'connection refused' in all logs"*
 - *"Show me the last 100 lines of the worker log"*
 - *"What happened around line 1234?"*

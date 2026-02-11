@@ -1,5 +1,6 @@
 //! Request and response types for MCP tools.
 
+use crate::filter::query::FilterQuery;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -84,7 +85,8 @@ pub enum SearchMode {
 pub struct SearchRequest {
     /// Source name (from list_sources)
     pub source: String,
-    /// Search pattern
+    /// Search pattern (plain text or regex). Not required when using `query`.
+    #[serde(default)]
     pub pattern: String,
     /// Search mode: "plain" or "regex" (default: plain)
     #[serde(default)]
@@ -104,6 +106,11 @@ pub struct SearchRequest {
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
+    /// Structured query for field-based filtering (LogQL-style).
+    /// When provided, pattern/mode/case_sensitive are ignored.
+    /// Example: {"parser": "json", "filters": [{"field": "level", "op": "eq", "value": "error"}]}
+    #[serde(default)]
+    pub query: Option<FilterQuery>,
 }
 
 /// Response containing search results.

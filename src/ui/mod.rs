@@ -758,6 +758,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  ↑/↓           Browse filter history"),
         Line::from("  Enter         Apply filter"),
         Line::from("  Esc           Clear filter"),
+        Line::from("  json | ...    Query mode (field filtering)"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Tabs",
