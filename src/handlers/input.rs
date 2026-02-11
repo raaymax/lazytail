@@ -116,6 +116,7 @@ fn handle_source_panel_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::Quit]
         }
+        KeyCode::Char('y') => vec![AppEvent::CopySourcePath],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
         _ => vec![],
     }

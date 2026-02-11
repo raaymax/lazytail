@@ -78,6 +78,7 @@ pub enum AppEvent {
     SourcePanelDown,
     ToggleCategoryExpand,
     SelectSource,
+    CopySourcePath,
 
     // Mode toggles
     ToggleFollowMode,

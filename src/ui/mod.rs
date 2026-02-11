@@ -441,11 +441,19 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
 }
 
 fn build_title(tab: &TabState) -> String {
+    let path_suffix = tab
+        .source_path
+        .as_ref()
+        .map(|p| format!(" — {}", p.display()))
+        .unwrap_or_default();
+
     match (&tab.mode, &tab.filter.pattern) {
-        (ViewMode::Normal, None) => tab.name.clone(),
-        (ViewMode::Filtered, Some(pattern)) => format!("{} (Filter: \"{}\")", tab.name, pattern),
-        (ViewMode::Filtered, None) => format!("{} (Filtered)", tab.name),
-        (ViewMode::Normal, Some(_)) => tab.name.clone(),
+        (ViewMode::Normal, None) => format!("{}{}", tab.name, path_suffix),
+        (ViewMode::Filtered, Some(pattern)) => {
+            format!("{}{} (Filter: \"{}\")", tab.name, path_suffix, pattern)
+        }
+        (ViewMode::Filtered, None) => format!("{}{} (Filtered)", tab.name, path_suffix),
+        (ViewMode::Normal, Some(_)) => format!("{}{}", tab.name, path_suffix),
     }
 }
 
@@ -476,10 +484,27 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         if tab.follow_mode { " | FOLLOW" } else { "" }
     );
 
-    let help_text = if app.tab_count() > 1 {
-        " Tab/Shift+Tab - Switch | 1-9 - Select | ? - Help"
+    let show_status_msg = app
+        .status_message
+        .as_ref()
+        .is_some_and(|(_, t)| t.elapsed().as_secs() < 3);
+
+    let bottom_line = if show_status_msg {
+        let msg = &app.status_message.as_ref().unwrap().0;
+        Line::from(vec![Span::styled(
+            format!(" {}", msg),
+            Style::default().fg(Color::Green),
+        )])
     } else {
-        " q - Quit | j/k - Navigate | g/G - Start/End | / - Filter | ? - Help"
+        let help_text = if app.tab_count() > 1 {
+            " Tab/Shift+Tab - Switch | 1-9 - Select | ? - Help"
+        } else {
+            " q - Quit | j/k - Navigate | g/G - Start/End | / - Filter | ? - Help"
+        };
+        Line::from(vec![Span::styled(
+            help_text,
+            Style::default().fg(Color::DarkGray),
+        )])
     };
 
     let status_lines = vec![
@@ -487,10 +512,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             status_text,
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from(vec![Span::styled(
-            help_text,
-            Style::default().fg(Color::DarkGray),
-        )]),
+        bottom_line,
     ];
 
     let paragraph =
@@ -757,6 +779,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  Space         Expand/collapse category"),
         Line::from("  Enter         Select source"),
         Line::from("  x             Close selected source"),
+        Line::from("  y             Copy source path"),
         Line::from("  Esc           Return to log view"),
         Line::from(""),
         Line::from(vec![Span::styled(

@@ -138,6 +138,9 @@ pub struct App {
 
     /// Input mode to restore when cancelling close confirmation
     confirm_return_mode: InputMode,
+
+    /// Temporary status message shown in the status bar
+    pub status_message: Option<(String, Instant)>,
 }
 
 impl App {
@@ -175,6 +178,7 @@ impl App {
             source_panel: SourcePanelState::default(),
             pending_close_tab: None,
             confirm_return_mode: InputMode::Normal,
+            status_message: None,
         }
     }
 
@@ -349,6 +353,25 @@ impl App {
             if let Some(tab_idx) = self.find_tab_index(cat, idx) {
                 self.active_tab = tab_idx;
                 self.input_mode = InputMode::Normal;
+            }
+        }
+    }
+
+    /// Copy the selected source's file path to clipboard via OSC 52
+    fn copy_source_path(&mut self) {
+        let tab_idx = if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection {
+            self.find_tab_index(cat, idx)
+        } else {
+            None
+        };
+
+        if let Some(tab_idx) = tab_idx {
+            if let Some(path) = &self.tabs[tab_idx].source_path {
+                let path_str = path.display().to_string();
+                let encoded = base64_encode(path_str.as_bytes());
+                // OSC 52: set clipboard contents
+                print!("\x1b]52;c;{}\x07", encoded);
+                self.status_message = Some((format!("Copied: {}", path_str), Instant::now()));
             }
         }
     }
@@ -852,6 +875,7 @@ impl App {
             AppEvent::SourcePanelDown => self.source_panel_navigate(1),
             AppEvent::ToggleCategoryExpand => self.toggle_category_expand(),
             AppEvent::SelectSource => self.select_source_from_panel(),
+            AppEvent::CopySourcePath => self.copy_source_path(),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
@@ -1033,6 +1057,31 @@ impl App {
             AppEvent::StreamData { .. } | AppEvent::StreamComplete => {}
         }
     }
+}
+
+/// Minimal base64 encoder for OSC 52 clipboard
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(ALPHABET[(n >> 18 & 0x3F) as usize] as char);
+        result.push(ALPHABET[(n >> 12 & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(ALPHABET[(n >> 6 & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(ALPHABET[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }
 
 #[cfg(test)]
