@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/raaymax/lazytail/compare/v0.4.0...v0.5.0) (2026-02-11)
+
+
+### Features
+
+* add config system with discovery, loading, and CLI commands ([#11](https://github.com/raaymax/lazytail/issues/11)) ([6afaf66](https://github.com/raaymax/lazytail/commit/6afaf66ac701eb45f18f016c695c9eb023139f98))
+* **mcp:** accept source names instead of file paths in tool API ([cd064b6](https://github.com/raaymax/lazytail/commit/cd064b640af874a92335a883a31f98a1f912a01d))
+* **mcp:** accept source names instead of file paths in tool API ([2ace327](https://github.com/raaymax/lazytail/commit/2ace3270e7da649ff8dce9fad30015b3d2852c28))
+* **mcp:** accept source names instead of file paths in tool API ([#18](https://github.com/raaymax/lazytail/issues/18)) ([cd064b6](https://github.com/raaymax/lazytail/commit/cd064b640af874a92335a883a31f98a1f912a01d))
+* **mcp:** add plain text output format to reduce JSON escaping ([#13](https://github.com/raaymax/lazytail/issues/13)) ([2792865](https://github.com/raaymax/lazytail/commit/2792865a9b3379685c58c6061cf74b61f016c7ff))
+* **mcp:** wire query language into search tool ([#19](https://github.com/raaymax/lazytail/issues/19)) ([727bb22](https://github.com/raaymax/lazytail/commit/727bb223bb0bc7c888832e38303ee17bbe44dd41))
+* **ui:** add close confirmation dialog for tabs ([#15](https://github.com/raaymax/lazytail/issues/15)) ([d8f3dfd](https://github.com/raaymax/lazytail/commit/d8f3dfdde7551af269da93795f61e44290e4cc87))
+* **ui:** display file path in header and add y to copy source path ([#17](https://github.com/raaymax/lazytail/issues/17)) ([c2c4995](https://github.com/raaymax/lazytail/commit/c2c4995d22d7f33bd3758e0a50211d60c0b0db94))
+
+
+### Bug Fixes
+
+* **config:** use ~/.config/ for storage on all platforms ([#16](https://github.com/raaymax/lazytail/issues/16)) ([bf8bbb1](https://github.com/raaymax/lazytail/commit/bf8bbb127f7f185e25bd92c90ad39ef110557dd3))
+
 ## [0.4.0](https://github.com/raaymax/lazytail/compare/v0.3.0...v0.4.0) (2026-01-31)
 
 
