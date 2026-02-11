@@ -180,7 +180,9 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
                 // Truncate name to fit in panel width (accounting for indent)
                 let max_len = (area.width as usize).saturating_sub(8); // "  N> " + indicators
                 let name = if tab.name.len() > max_len {
-                    format!("{}...", &tab.name[..max_len.saturating_sub(3)])
+                    let truncate_at = max_len.saturating_sub(3);
+                    let boundary = tab.name.floor_char_boundary(truncate_at);
+                    format!("{}...", &tab.name[..boundary])
                 } else {
                     tab.name.clone()
                 };
@@ -818,8 +820,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 }
 
 fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
-    let tab_index = match app.pending_close_tab {
-        Some(idx) if idx < app.tabs.len() => idx,
+    let tab_index = match &app.pending_close_tab {
+        Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].name == *name => *idx,
         _ => return,
     };
 
@@ -831,7 +833,9 @@ fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
     // Truncate name to fit in popup
     let max_name_len = 30;
     let display_name = if tab_name.len() > max_name_len {
-        format!("{}...", &tab_name[..max_name_len.saturating_sub(3)])
+        let truncate_at = max_name_len.saturating_sub(3);
+        let boundary = tab_name.floor_char_boundary(truncate_at);
+        format!("{}...", &tab_name[..boundary])
     } else {
         tab_name.clone()
     };
