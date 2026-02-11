@@ -46,14 +46,23 @@ pub struct DiscoveredSource {
     pub location: SourceLocation,
 }
 
+/// Get the lazytail config directory: ~/.config/lazytail/
+///
+/// Always uses `~/.config/` regardless of platform for consistency.
+/// On macOS, `dirs::config_dir()` returns `~/Library/Application Support/`,
+/// but `~/.config/` is more convenient for CLI tools.
+pub fn lazytail_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|p| p.join(".config").join("lazytail"))
+}
+
 /// Get the data directory path: ~/.config/lazytail/data/
 pub fn data_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("lazytail").join("data"))
+    lazytail_dir().map(|p| p.join("data"))
 }
 
 /// Get the sources directory path: ~/.config/lazytail/sources/
 pub fn sources_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("lazytail").join("sources"))
+    lazytail_dir().map(|p| p.join("sources"))
 }
 
 /// Ensure both data and sources directories exist.
@@ -487,34 +496,29 @@ pub fn validate_source_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    // Mutex to serialize tests that modify the HOME env var
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
     fn with_temp_config<F>(f: F)
     where
         F: FnOnce(&Path),
     {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let old_home = env::var("HOME").ok();
-        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
 
-        // Set both HOME and XDG_CONFIG_HOME so dirs::config_dir() uses temp dir
-        // On Linux, XDG_CONFIG_HOME takes precedence
+        // Set HOME so dirs::home_dir() uses temp dir
         env::set_var("HOME", temp.path());
-        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
 
         f(temp.path());
 
-        // Restore HOME
         if let Some(home) = old_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
-        }
-        // Restore XDG_CONFIG_HOME
-        if let Some(xdg) = old_xdg {
-            env::set_var("XDG_CONFIG_HOME", xdg);
-        } else {
-            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 
@@ -680,7 +684,7 @@ mod tests {
         // Without project root, should fall back to global data_dir()
         let result = resolve_data_dir(&discovery);
 
-        // On systems with dirs::config_dir(), this should return a path
+        // On systems with dirs::home_dir(), this should return a path
         // containing "lazytail/data"
         if let Some(path) = result {
             assert!(path.to_string_lossy().contains("lazytail"));
@@ -712,7 +716,7 @@ mod tests {
         // Without project root, should fall back to global sources_dir()
         let result = resolve_sources_dir(&discovery);
 
-        // On systems with dirs::config_dir(), this should return a path
+        // On systems with dirs::home_dir(), this should return a path
         // containing "lazytail/sources"
         if let Some(path) = result {
             assert!(path.to_string_lossy().contains("lazytail"));
@@ -792,14 +796,13 @@ mod tests {
     #[test]
     #[ignore] // Slow test - requires temp dir setup
     fn test_discover_sources_for_context_project_before_global() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let project_root = temp.path().join("project");
         fs::create_dir_all(&project_root).unwrap();
 
         let old_home = env::var("HOME").ok();
-        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
         env::set_var("HOME", temp.path());
-        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
 
         // Create project data directory
         let project_data = project_root.join(".lazytail").join("data");
@@ -832,31 +835,23 @@ mod tests {
         assert_eq!(sources[1].name, "glob-source");
         assert_eq!(sources[1].location, SourceLocation::Global);
 
-        // Restore HOME
         if let Some(home) = old_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
-        }
-        // Restore XDG_CONFIG_HOME
-        if let Some(xdg) = old_xdg {
-            env::set_var("XDG_CONFIG_HOME", xdg);
-        } else {
-            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 
     #[test]
     #[ignore] // Slow test - requires temp dir setup
     fn test_discover_sources_for_context_project_shadows_global() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let project_root = temp.path().join("project");
         fs::create_dir_all(&project_root).unwrap();
 
         let old_home = env::var("HOME").ok();
-        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
         env::set_var("HOME", temp.path());
-        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
 
         // Create project data directory
         let project_data = project_root.join(".lazytail").join("data");
@@ -883,31 +878,23 @@ mod tests {
         assert_eq!(sources[0].name, "shared");
         assert_eq!(sources[0].location, SourceLocation::Project);
 
-        // Restore HOME
         if let Some(home) = old_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
-        }
-        // Restore XDG_CONFIG_HOME
-        if let Some(xdg) = old_xdg {
-            env::set_var("XDG_CONFIG_HOME", xdg);
-        } else {
-            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 
     #[test]
     #[ignore] // Slow test - requires temp dir setup
     fn test_discover_sources_for_context_empty_project_dir() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let project_root = temp.path().join("project");
         fs::create_dir_all(&project_root).unwrap();
 
         let old_home = env::var("HOME").ok();
-        let old_xdg = env::var("XDG_CONFIG_HOME").ok();
         env::set_var("HOME", temp.path());
-        env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
 
         // Create empty project data directory
         let project_data = project_root.join(".lazytail").join("data");
@@ -931,17 +918,10 @@ mod tests {
         assert_eq!(sources[0].name, "global");
         assert_eq!(sources[0].location, SourceLocation::Global);
 
-        // Restore HOME
         if let Some(home) = old_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
-        }
-        // Restore XDG_CONFIG_HOME
-        if let Some(xdg) = old_xdg {
-            env::set_var("XDG_CONFIG_HOME", xdg);
-        } else {
-            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 }
