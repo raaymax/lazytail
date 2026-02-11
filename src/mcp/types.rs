@@ -4,6 +4,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Output format for tool responses.
+#[derive(Debug, Default, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    /// Plain text format optimized for AI consumption (less escaping overhead)
+    #[default]
+    Text,
+    /// JSON format for programmatic consumption
+    Json,
+}
+
 fn default_count() -> usize {
     100
 }
@@ -27,10 +38,17 @@ pub struct GetLinesRequest {
     /// Number of lines to fetch (default 100, max 1000)
     #[serde(default = "default_count")]
     pub count: usize,
+    /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
+    #[serde(default)]
+    pub raw: bool,
+    /// Output format: "text" (default, plain text) or "json"
+    #[serde(default)]
+    pub output: OutputFormat,
 }
 
 /// Response containing lines from a log file.
 #[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct GetLinesResponse {
     /// The requested lines
     pub lines: Vec<LineInfo>,
@@ -42,6 +60,7 @@ pub struct GetLinesResponse {
 
 /// Information about a single line.
 #[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct LineInfo {
     /// Line number (0-indexed)
     pub line_number: usize,
@@ -79,10 +98,17 @@ pub struct SearchRequest {
     /// Number of context lines before and after each match (default 0)
     #[serde(default)]
     pub context_lines: usize,
+    /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
+    #[serde(default)]
+    pub raw: bool,
+    /// Output format: "text" (default, plain text) or "json"
+    #[serde(default)]
+    pub output: OutputFormat,
 }
 
 /// Response containing search results.
 #[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct SearchResponse {
     /// Matching lines with optional context
     pub matches: Vec<SearchMatch>,
@@ -96,16 +122,17 @@ pub struct SearchResponse {
 
 /// A single search match with optional context.
 #[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct SearchMatch {
     /// Line number of the match (0-indexed)
     pub line_number: usize,
     /// The matching line content
     pub content: String,
     /// Context lines before the match (if requested)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub before: Vec<String>,
     /// Context lines after the match (if requested)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
 }
 
@@ -117,6 +144,12 @@ pub struct GetTailRequest {
     /// Number of lines to fetch from the end (default 100, max 1000)
     #[serde(default = "default_count")]
     pub count: usize,
+    /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
+    #[serde(default)]
+    pub raw: bool,
+    /// Output format: "text" (default, plain text) or "json"
+    #[serde(default)]
+    pub output: OutputFormat,
 }
 
 /// Request to get context around a specific line.
@@ -132,10 +165,17 @@ pub struct GetContextRequest {
     /// Number of lines after the target (default 5, max 50)
     #[serde(default = "default_context")]
     pub after: usize,
+    /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
+    #[serde(default)]
+    pub raw: bool,
+    /// Output format: "text" (default, plain text) or "json"
+    #[serde(default)]
+    pub output: OutputFormat,
 }
 
 /// Response containing context around a line.
 #[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct GetContextResponse {
     /// Lines before the target
     pub before_lines: Vec<LineInfo>,

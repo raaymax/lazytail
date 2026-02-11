@@ -3,6 +3,8 @@
 //! Provides log file analysis tools accessible via the MCP protocol.
 //! Run with `lazytail --mcp` to start the server.
 
+mod ansi;
+mod format;
 mod tools;
 mod types;
 

@@ -9,6 +9,8 @@
 //! If concurrent request handling is needed in the future, consider wrapping heavy
 //! operations in `tokio::task::spawn_blocking`.
 
+use super::ansi::strip_ansi;
+use super::format;
 use super::types::*;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
@@ -26,6 +28,64 @@ use std::sync::Arc;
 fn error_response(message: impl std::fmt::Display) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
         .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
+}
+
+/// Strip ANSI escape codes from all line content in a GetLinesResponse.
+fn strip_lines_response(resp: &mut GetLinesResponse) {
+    for line in &mut resp.lines {
+        line.content = strip_ansi(&line.content);
+    }
+}
+
+/// Strip ANSI escape codes from all content in a SearchResponse.
+fn strip_search_response(resp: &mut SearchResponse) {
+    for m in &mut resp.matches {
+        m.content = strip_ansi(&m.content);
+        for line in &mut m.before {
+            *line = strip_ansi(line);
+        }
+        for line in &mut m.after {
+            *line = strip_ansi(line);
+        }
+    }
+}
+
+/// Strip ANSI escape codes from all content in a GetContextResponse.
+fn strip_context_response(resp: &mut GetContextResponse) {
+    for line in &mut resp.before_lines {
+        line.content = strip_ansi(&line.content);
+    }
+    resp.target_line.content = strip_ansi(&resp.target_line.content);
+    for line in &mut resp.after_lines {
+        line.content = strip_ansi(&line.content);
+    }
+}
+
+/// Format a GetLinesResponse according to the requested output format.
+fn format_lines(resp: &GetLinesResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format::format_lines_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
+}
+
+/// Format a SearchResponse according to the requested output format.
+fn format_search(resp: &SearchResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format::format_search_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
+}
+
+/// Format a GetContextResponse according to the requested output format.
+fn format_context(resp: &GetContextResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format::format_context_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
 }
 
 /// LazyTail MCP server providing log file analysis tools.
@@ -75,14 +135,17 @@ impl LazyTailMcp {
             }
         }
 
-        let response = GetLinesResponse {
+        let mut response = GetLinesResponse {
             lines,
             total_lines: total,
             has_more: req.start + count < total,
         };
 
-        serde_json::to_string_pretty(&response)
-            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+        if !req.raw {
+            strip_lines_response(&mut response);
+        }
+
+        format_lines(&response, req.output)
     }
 
     /// Fetch the last N lines from a log file.
@@ -116,14 +179,17 @@ impl LazyTailMcp {
             }
         }
 
-        let response = GetLinesResponse {
+        let mut response = GetLinesResponse {
             lines,
             total_lines: total,
             has_more: start > 0,
         };
 
-        serde_json::to_string_pretty(&response)
-            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+        if !req.raw {
+            strip_lines_response(&mut response);
+        }
+
+        format_lines(&response, req.output)
     }
 
     /// Search for patterns in a log file using plain text or regex.
@@ -202,15 +268,18 @@ impl LazyTailMcp {
             }
         };
 
-        let response = SearchResponse {
+        let mut response = SearchResponse {
             matches,
             total_matches,
             truncated,
             lines_searched,
         };
 
-        serde_json::to_string_pretty(&response)
-            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+        if !req.raw {
+            strip_search_response(&mut response);
+        }
+
+        format_search(&response, req.output)
     }
 
     /// Fetch line content and context for search matches using a single-pass mmap scan.
@@ -378,15 +447,18 @@ impl LazyTailMcp {
             }
         }
 
-        let response = GetContextResponse {
+        let mut response = GetContextResponse {
             before_lines,
             target_line,
             after_lines,
             total_lines: total,
         };
 
-        serde_json::to_string_pretty(&response)
-            .unwrap_or_else(|e| format!("Error serializing response: {}", e))
+        if !req.raw {
+            strip_context_response(&mut response);
+        }
+
+        format_context(&response, req.output)
     }
 
     /// List available log sources from the LazyTail data directory.
@@ -468,4 +540,470 @@ impl ServerHandler for LazyTailMcp {
 
     // Derive list_tools and call_tool from the tool_box
     tool_box!(@derive);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    /// Lines with ANSI escape codes for testing.
+    const ANSI_LINES: &str = "\
+\x1b[1;32m[INFO]\x1b[0m Server started\n\
+\x1b[1;31m[ERROR]\x1b[0m Connection failed\n\
+\x1b[36m[DEBUG]\x1b[0m Processing request\n\
+plain line with no escapes\n\
+\x1b]8;;https://example.com\x07hyperlink\x1b]8;;\x07 text\n";
+
+    fn write_ansi_tempfile() -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(ANSI_LINES.as_bytes()).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn mcp() -> LazyTailMcp {
+        LazyTailMcp::new()
+    }
+
+    // -- get_lines tests --
+
+    #[test]
+    fn get_lines_strips_ansi_by_default() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines[0].content, "[INFO] Server started");
+        assert_eq!(resp.lines[1].content, "[ERROR] Connection failed");
+        assert_eq!(resp.lines[3].content, "plain line with no escapes");
+        assert_eq!(resp.lines[4].content, "hyperlink text");
+    }
+
+    #[test]
+    fn get_lines_preserves_ansi_when_raw() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.lines[0].content.contains("\x1b[1;32m"));
+        assert!(resp.lines[1].content.contains("\x1b[1;31m"));
+    }
+
+    // -- get_tail tests --
+
+    #[test]
+    fn get_tail_strips_ansi_by_default() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_tail(GetTailRequest {
+            file: f.path().into(),
+            count: 2,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines.len(), 2);
+        assert_eq!(resp.lines[0].content, "plain line with no escapes");
+        assert_eq!(resp.lines[1].content, "hyperlink text");
+    }
+
+    #[test]
+    fn get_tail_preserves_ansi_when_raw() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_tail(GetTailRequest {
+            file: f.path().into(),
+            count: 5,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.lines[0].content.contains("\x1b["));
+    }
+
+    // -- search tests --
+
+    #[test]
+    fn search_strips_ansi_by_default() {
+        let f = write_ansi_tempfile();
+        let result = mcp().search(SearchRequest {
+            file: f.path().into(),
+            pattern: "ERROR".into(),
+            mode: SearchMode::Plain,
+            case_sensitive: false,
+            max_results: 100,
+            context_lines: 1,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.total_matches, 1);
+        let m = &resp.matches[0];
+        assert_eq!(m.content, "[ERROR] Connection failed");
+        // Context lines should also be stripped
+        assert!(!m.before.is_empty());
+        assert!(!m.before[0].contains("\x1b["));
+        assert!(!m.after.is_empty());
+        assert!(!m.after[0].contains("\x1b["));
+    }
+
+    #[test]
+    fn search_preserves_ansi_when_raw() {
+        let f = write_ansi_tempfile();
+        let result = mcp().search(SearchRequest {
+            file: f.path().into(),
+            pattern: "ERROR".into(),
+            mode: SearchMode::Plain,
+            case_sensitive: false,
+            max_results: 100,
+            context_lines: 0,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.matches[0].content.contains("\x1b[1;31m"));
+    }
+
+    // -- get_context tests --
+
+    #[test]
+    fn get_context_strips_ansi_by_default() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_context(GetContextRequest {
+            file: f.path().into(),
+            line_number: 2,
+            before: 1,
+            after: 1,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.target_line.content, "[DEBUG] Processing request");
+        assert_eq!(resp.before_lines[0].content, "[ERROR] Connection failed");
+        assert_eq!(resp.after_lines[0].content, "plain line with no escapes");
+    }
+
+    #[test]
+    fn get_context_preserves_ansi_when_raw() {
+        let f = write_ansi_tempfile();
+        let result = mcp().get_context(GetContextRequest {
+            file: f.path().into(),
+            line_number: 0,
+            before: 0,
+            after: 0,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.target_line.content.contains("\x1b[1;32m"));
+    }
+
+    // -- plain text passthrough --
+
+    #[test]
+    fn json_content_in_lines_survives_stripping() {
+        let line0 =
+            serde_json::json!({"level":"info","msg":"started","nested":{"port":8080}}).to_string();
+        let line1_json = r#"{"data": "{}", "list": [1,2,3]}"#;
+        // ANSI injected around a value inside raw JSON
+        let line2_raw = r#"{"outer": {"inner": "value", "num": 42}}"#;
+        let line2_ansi = line2_raw.replacen("\"value\"", "\x1b[36m\"value\"\x1b[0m", 1);
+
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", ansi_wrap("32", &line0)).unwrap();
+        writeln!(f, "{}", ansi_wrap("1;33", line1_json)).unwrap();
+        writeln!(f, "{line2_ansi}").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.lines[0].content, line0);
+        assert_eq!(resp.lines[1].content, line1_json);
+        assert_eq!(resp.lines[2].content, line2_raw);
+
+        // Verify the outer JSON response itself is valid by re-serializing
+        let reserialized = serde_json::to_string(&resp).unwrap();
+        let _: GetLinesResponse = serde_json::from_str(&reserialized).unwrap();
+    }
+
+    /// Build a JSON log line by serializing from inside out, then wrap with ANSI.
+    /// This avoids unreadable multi-level escape sequences in test source.
+    fn ansi_wrap(code: &str, content: &str) -> String {
+        format!("\x1b[{code}m{content}\x1b[0m")
+    }
+
+    #[test]
+    fn json_with_escaped_nested_json_strings() {
+        // Build nested JSON strings programmatically (inside-out) to avoid escape hell
+        let inner_json = serde_json::json!({"nested": "text"}).to_string();
+        let line0 = serde_json::json!({"data": inner_json}).to_string();
+
+        let err_json = serde_json::json!({"err": "timeout"}).to_string();
+        // ANSI codes interleaved inside the serialized JSON value
+        let line1_raw = serde_json::json!({"msg": err_json}).to_string();
+        // Inject ANSI around the inner JSON value within the serialized string
+        let line1 = line1_raw.replacen(&err_json, &ansi_wrap("31", &err_json), 1);
+
+        let deep_json = serde_json::json!({"deep": "val"}).to_string();
+        let mid_json = serde_json::json!({"inner": deep_json}).to_string();
+        let line2 = serde_json::json!({"payload": mid_json}).to_string();
+
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", ansi_wrap("32", &line0)).unwrap();
+        writeln!(f, "{line1}").unwrap();
+        writeln!(f, "{}", ansi_wrap("33", &line2)).unwrap();
+        f.flush().unwrap();
+
+        // Raw mode should preserve ESC bytes
+        let raw_result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let raw_resp: GetLinesResponse = serde_json::from_str(&raw_result).unwrap();
+        assert!(raw_resp.lines[0].content.contains('\x1b'));
+
+        // Stripped mode (default)
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        // Line 0: ANSI stripped, nested JSON intact
+        assert_eq!(resp.lines[0].content, line0);
+        let parsed: serde_json::Value = serde_json::from_str(&resp.lines[0].content).unwrap();
+        assert_eq!(parsed["data"].as_str().unwrap(), inner_json);
+
+        // Line 1: ANSI inside value stripped, JSON structure preserved
+        let expected_line1 = serde_json::json!({"msg": err_json}).to_string();
+        assert_eq!(resp.lines[1].content, expected_line1);
+        let parsed: serde_json::Value = serde_json::from_str(&resp.lines[1].content).unwrap();
+        assert_eq!(parsed["msg"].as_str().unwrap(), err_json);
+
+        // Line 2: triple-nested JSON round-trips cleanly
+        assert_eq!(resp.lines[2].content, line2);
+        let parsed: serde_json::Value = serde_json::from_str(&resp.lines[2].content).unwrap();
+        let inner: serde_json::Value =
+            serde_json::from_str(parsed["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(inner["inner"].as_str().unwrap(), deep_json);
+
+        // MCP response round-trip
+        let round_trip = serde_json::to_string(&resp).unwrap();
+        let resp2: GetLinesResponse = serde_json::from_str(&round_trip).unwrap();
+        for i in 0..3 {
+            assert_eq!(resp.lines[i].content, resp2.lines[i].content);
+        }
+    }
+
+    #[test]
+    fn json_content_preserved_when_raw() {
+        let line = r#"{"data": "{}", "key": "val"}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", ansi_wrap("33", line)).unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: true,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        // Raw should keep ANSI and JSON intact
+        assert!(resp.lines[0].content.contains("\x1b[33m"));
+        assert!(resp.lines[0].content.contains(r#""data": "{}""#));
+    }
+
+    #[test]
+    fn search_with_json_content_strips_correctly() {
+        let line_ok = serde_json::json!({"level":"info","msg":"ok"}).to_string();
+        let line_err = serde_json::json!({"level":"error","msg":"fail","ctx":{}}).to_string();
+        let line_done = serde_json::json!({"level":"info","msg":"done"}).to_string();
+
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", ansi_wrap("32", &line_ok)).unwrap();
+        writeln!(f, "{}", ansi_wrap("31", &line_err)).unwrap();
+        writeln!(f, "{}", ansi_wrap("32", &line_done)).unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().search(SearchRequest {
+            file: f.path().into(),
+            pattern: "error".into(),
+            mode: SearchMode::Plain,
+            case_sensitive: false,
+            max_results: 100,
+            context_lines: 1,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.total_matches, 1);
+        assert_eq!(resp.matches[0].content, line_err);
+        // Context lines should also have clean JSON
+        assert_eq!(resp.matches[0].before[0], line_ok);
+        assert_eq!(resp.matches[0].after[0], line_done);
+    }
+
+    #[test]
+    fn plain_text_unmodified_by_stripping() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "no ansi here").unwrap();
+        writeln!(f, "just plain text").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Json,
+        });
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines[0].content, "no ansi here");
+        assert_eq!(resp.lines[1].content, "just plain text");
+    }
+
+    // -- text output format tests --
+
+    #[test]
+    fn get_lines_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, r#"{{"level":"info","msg":"started"}}"#).unwrap();
+        writeln!(f, "plain log line").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_lines(GetLinesRequest {
+            file: f.path().into(),
+            start: 0,
+            count: 100,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.starts_with("--- "));
+        assert!(result.contains("--- total_lines: 2\n"));
+        assert!(result.contains("--- has_more: false\n"));
+        // JSON content should appear verbatim without escaping
+        assert!(result.contains(r#"0|{"level":"info","msg":"started"}"#));
+        assert!(result.contains("1|plain log line\n"));
+        // No backslash escaping
+        assert!(!result.contains("\\\""));
+    }
+
+    #[test]
+    fn get_tail_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "line 0").unwrap();
+        writeln!(f, "line 1").unwrap();
+        writeln!(f, "line 2").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_tail(GetTailRequest {
+            file: f.path().into(),
+            count: 2,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.starts_with("--- "));
+        assert!(result.contains("--- has_more: true\n"));
+        assert!(result.contains("1|line 1\n"));
+        assert!(result.contains("2|line 2\n"));
+        assert!(!result.contains("0|line 0"));
+    }
+
+    #[test]
+    fn search_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "before line").unwrap();
+        writeln!(f, r#"{{"level":"error","msg":"timeout"}}"#).unwrap();
+        writeln!(f, "after line").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().search(SearchRequest {
+            file: f.path().into(),
+            pattern: "error".into(),
+            mode: SearchMode::Plain,
+            case_sensitive: false,
+            max_results: 100,
+            context_lines: 1,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.starts_with("--- "));
+        assert!(result.contains("--- total_matches: 1\n"));
+        assert!(result.contains("--- truncated: false\n"));
+        assert!(result.contains("=== match\n"));
+        // Match line has > prefix
+        assert!(result.contains(r#"> 1|{"level":"error","msg":"timeout"}"#));
+        // Context lines have space prefix
+        assert!(result.contains("  0|before line\n"));
+        assert!(result.contains("  2|after line\n"));
+    }
+
+    #[test]
+    fn get_context_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "line 0").unwrap();
+        writeln!(f, "line 1").unwrap();
+        writeln!(f, r#"{{"target":"line"}}"#).unwrap();
+        writeln!(f, "line 3").unwrap();
+        writeln!(f, "line 4").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp().get_context(GetContextRequest {
+            file: f.path().into(),
+            line_number: 2,
+            before: 2,
+            after: 2,
+            raw: false,
+            output: OutputFormat::Text,
+        });
+        assert!(result.starts_with("--- "));
+        assert!(result.contains("--- total_lines: 5\n"));
+        assert!(result.contains("  0|line 0\n"));
+        assert!(result.contains("  1|line 1\n"));
+        assert!(result.contains(r#"> 2|{"target":"line"}"#));
+        assert!(result.contains("  3|line 3\n"));
+        assert!(result.contains("  4|line 4\n"));
+    }
+
+    #[test]
+    fn default_output_is_text() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "test line").unwrap();
+        f.flush().unwrap();
+
+        // Simulate what MCP does: deserialize without output field
+        let json = format!(
+            r#"{{"file": "{}","start": 0,"count": 10}}"#,
+            f.path().display()
+        );
+        let req: GetLinesRequest = serde_json::from_str(&json).unwrap();
+        let result = mcp().get_lines(req);
+        // Default should be text format (starts with ---)
+        assert!(result.starts_with("--- "));
+    }
 }
