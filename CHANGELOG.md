@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/raaymax/lazytail/compare/v0.5.1...v0.5.2) (2026-02-13)
+
+
+### Bug Fixes
+
+* **mcp:** resolve sources from project-local data directory ([#22](https://github.com/raaymax/lazytail/issues/22)) ([7e48e61](https://github.com/raaymax/lazytail/commit/7e48e61894fc3414076419e77af4cd36d3330c15))
+
 ## [0.5.1](https://github.com/raaymax/lazytail/compare/v0.5.0...v0.5.1) (2026-02-13)
 
 
