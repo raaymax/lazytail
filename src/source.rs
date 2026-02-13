@@ -246,19 +246,6 @@ fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatus {
     }
 }
 
-/// Discover all log sources from the data directory.
-///
-/// Scans ~/.config/lazytail/data/ for .log files and checks
-/// their status against the sources/ markers.
-pub fn discover_sources() -> Result<Vec<DiscoveredSource>> {
-    let Some(data) = data_dir() else {
-        return Ok(Vec::new());
-    };
-
-    let sources_path = sources_dir();
-    scan_data_directory(&data, sources_path.as_deref(), SourceLocation::Global)
-}
-
 /// Discover log sources from both project and global data directories.
 ///
 /// Scans both the project-local `.lazytail/data/` (if in a project) and the
@@ -474,8 +461,24 @@ pub fn resolve_source_in(name: &str, data_dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Resolve a source name to its log file path in the default data directory.
-pub fn resolve_source(name: &str) -> Result<PathBuf> {
+/// Resolve a source name to its log file path using discovery context.
+///
+/// Checks the project-local `.lazytail/data/` first (if in a project),
+/// then falls back to the global `~/.config/lazytail/data/`.
+pub fn resolve_source_for_context(name: &str, discovery: &DiscoveryResult) -> Result<PathBuf> {
+    validate_source_name(name)?;
+
+    // Try project data directory first
+    if discovery.project_root.is_some() {
+        if let Some(project_data) = resolve_data_dir(discovery) {
+            let path = project_data.join(format!("{name}.log"));
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+    }
+
+    // Fall back to global data directory
     let data = data_dir().context("Could not determine data directory")?;
     resolve_source_in(name, &data)
 }
@@ -646,8 +649,13 @@ mod tests {
             // Create a marker for api
             create_marker("api").unwrap();
 
-            // Discover sources
-            let sources = discover_sources().unwrap();
+            // Discover sources (global-only context, no project root)
+            let discovery = crate::config::DiscoveryResult {
+                project_root: None,
+                project_config: None,
+                global_config: None,
+            };
+            let sources = discover_sources_for_context(&discovery).unwrap();
 
             assert_eq!(sources.len(), 2);
 

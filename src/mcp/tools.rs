@@ -12,6 +12,7 @@
 use super::ansi::strip_ansi;
 use super::format;
 use super::types::*;
+use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
@@ -92,11 +93,16 @@ fn format_context(resp: &GetContextResponse, output: OutputFormat) -> String {
 
 /// LazyTail MCP server providing log file analysis tools.
 #[derive(Clone)]
-pub struct LazyTailMcp;
+pub struct LazyTailMcp {
+    /// Config discovery result for project-aware source resolution.
+    discovery: DiscoveryResult,
+}
 
 impl LazyTailMcp {
     pub fn new() -> Self {
-        Self
+        Self {
+            discovery: config::discover(),
+        }
     }
 }
 
@@ -551,7 +557,7 @@ impl LazyTailMcp {
         description = "Fetch lines from a lazytail-captured log source. Pass a source name from list_sources. Returns up to 1000 lines starting from a given position. For recent lines, prefer get_tail instead."
     )]
     fn get_lines(&self, #[tool(aggr)] req: GetLinesRequest) -> String {
-        let path = match source::resolve_source(&req.source) {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
@@ -563,7 +569,7 @@ impl LazyTailMcp {
         description = "Fetch the last N lines from a lazytail-captured log source. Useful for checking recent activity. Pass a source name from list_sources. Returns up to 1000 lines from the end of the file."
     )]
     fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
-        let path = match source::resolve_source(&req.source) {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
@@ -575,7 +581,7 @@ impl LazyTailMcp {
         description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000). Also supports structured queries via the `query` parameter for field-based filtering on JSON/logfmt logs (LogQL-style). When `query` is provided, pattern/mode/case_sensitive are ignored. Query example: {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. Operators: eq, ne, regex, not_regex, contains, gt, lt, gte, lte. Parsers: json, logfmt. Supports nested fields via dot notation (e.g. \"user.id\") and exclusion patterns."
     )]
     fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
-        let path = match source::resolve_source(&req.source) {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
@@ -607,7 +613,7 @@ impl LazyTailMcp {
         description = "Get context lines around a specific line number in a lazytail-captured log source. Useful for exploring what happened before and after a specific log entry. Pass a source name from list_sources. Returns the target line plus configurable lines before (default 5) and after (default 5)."
     )]
     fn get_context(&self, #[tool(aggr)] req: GetContextRequest) -> String {
-        let path = match source::resolve_source(&req.source) {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
@@ -621,18 +627,15 @@ impl LazyTailMcp {
         )
     }
 
-    /// List available log sources from the LazyTail data directory.
+    /// List available log sources from project and global data directories.
     #[tool(
-        description = "List available log sources from ~/.config/lazytail/data/. Shows captured sources with their status (active if being written to, ended otherwise), file paths, and sizes. Use this first to discover what logs are available before searching."
+        description = "List available log sources. Shows captured sources with their status (active if being written to, ended otherwise), file paths, sizes, and location (project or global). Scans both project-local .lazytail/data/ (if in a project with lazytail.yaml) and global ~/.config/lazytail/data/. Use this first to discover what logs are available before searching."
     )]
     fn list_sources(&self, #[tool(aggr)] _req: ListSourcesRequest) -> String {
-        let data_dir = match source::data_dir() {
-            Some(dir) => dir,
-            None => return error_response("Could not determine data directory"),
-        };
+        let data_dir = source::data_dir().unwrap_or_default();
 
-        // Get discovered sources
-        let discovered = match source::discover_sources() {
+        // Get discovered sources from both project and global directories
+        let discovered = match source::discover_sources_for_context(&self.discovery) {
             Ok(sources) => sources,
             Err(e) => return error_response(format!("Failed to discover sources: {}", e)),
         };
@@ -646,6 +649,11 @@ impl LazyTailMcp {
                 source::SourceStatus::Ended => SourceStatus::Ended,
             };
 
+            let location = match ds.location {
+                source::SourceLocation::Project => SourceLocation::Project,
+                source::SourceLocation::Global => SourceLocation::Global,
+            };
+
             // Get file size
             let size_bytes = std::fs::metadata(&ds.log_path)
                 .map(|m| m.len())
@@ -656,6 +664,7 @@ impl LazyTailMcp {
                 path: ds.log_path,
                 status,
                 size_bytes,
+                location,
             });
         }
 
@@ -692,7 +701,9 @@ impl ServerHandler for LazyTailMcp {
                  Use search to find patterns (supports regex), get_tail for recent activity, \
                  get_lines to read specific sections, and get_context to explore around a line number. \
                  All tools accept a source name (from list_sources), not a file path. \
-                 Log sources are captured via 'cmd | lazytail -n NAME' and stored in ~/.config/lazytail/data/. \
+                 Log sources are captured via 'cmd | lazytail -n NAME'. \
+                 Sources are discovered from both project-local (.lazytail/data/ next to lazytail.yaml) \
+                 and global (~/.config/lazytail/data/) directories. Project sources shadow global ones with the same name. \
                  The search tool also supports structured queries via the `query` parameter for \
                  field-based filtering on JSON/logfmt logs (LogQL-style). Example query: \
                  {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}."

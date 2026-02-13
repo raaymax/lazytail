@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -82,7 +80,7 @@ jobs:
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+        tag_name: ${{ github.event.inputs.tag }}
         files: ./${{ matrix.asset_name }}.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

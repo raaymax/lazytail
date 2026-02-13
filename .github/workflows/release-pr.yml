@@ -18,3 +18,22 @@ jobs:
         with:
           release-type: rust
           package-name: lazytail
+
+      - name: Update release notes from PR description
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          PR_NUMBER: ${{ steps.release.outputs.pr }}
+        run: |
+          PR_BODY=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')
+          if [ -n "$PR_BODY" ]; then
+            gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --notes "$PR_BODY"
+          fi
+
+      - name: Trigger release build
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" -f tag="$TAG_NAME"

@@ -135,6 +135,7 @@ Two-panel layout:
 - [x] Add tests for multi-tab behavior
 
 **Future Side Panel Enhancements:**
+- [ ] Show total line count per source in side panel (live-updating as file grows)
 - [ ] Tree structure with collapsible groups
 - [ ] Drag-and-drop reordering
 - [ ] Bookmarks section (per UI instance / project scope)
@@ -395,11 +396,14 @@ struct Aggregation {
   - [ ] Timestamp field detection (common field names)
   - [ ] Time range filtering (after/before)
   - [x] Tests for exclusion filtering
-- [ ] Phase 3: Aggregation
-  - [ ] Implement `count by (field)`
+- [ ] Phase 3: Aggregation 🔴 HIGH PRIORITY
+  - [ ] Implement `count by (field)` — e.g. `json | level == "error" | count by (service)` → "which service has the most errors?"
   - [ ] Implement `top N` / limit
-  - [ ] Return aggregation results as structured JSON
-  - [ ] New MCP tool or extend search response
+  - [ ] Multiple group_by fields — e.g. `count by (service, level)`
+  - [ ] Return aggregation results as structured JSON (field → count map)
+  - [ ] Wire into MCP: either extend `search` response or add dedicated `aggregate` tool
+  - [ ] Wire into text query parser (already has AST slots for aggregation)
+  - Real-world motivation: currently requires multiple manual queries to answer "which service has the most errors?" or "what's the error distribution by field?" — a single `count by` would replace N manual queries
 - [x] Phase 4: Text Parser (UI)
   - [x] Lexer for text query syntax
   - [x] Recursive descent parser → AST
@@ -764,6 +768,25 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 ### 🟢 LOW PRIORITY
 
+#### Mouse Controls
+**Goal:** Expand mouse support beyond scroll — make the UI fully mouse-interactive
+
+**Tasks:**
+- [ ] Click to select a log line
+- [ ] Click source in side panel to switch tabs
+- [ ] Click severity levels in stats panel to filter (when severity stats land)
+- [ ] Click-and-drag to select text for copying
+- [ ] Right-click context menu (expand, copy, filter by selection)
+- [ ] Resize side panel by dragging the divider
+- [ ] Double-click to expand/collapse a log line
+
+**Benefits:**
+- Lower barrier to entry for non-vim users
+- Faster interaction for common actions (tab switching, line selection)
+- Expected by users coming from GUI log viewers
+
+---
+
 #### Search Highlighting
 **Goal:** Highlight filter matches in displayed text
 
@@ -873,6 +896,22 @@ sources:
   - [ ] Default filter patterns per source
   - [ ] UI preferences (colors, panel width, default modes)
   - [ ] MCP server settings (enabled tools, access control)
+- [ ] `lazytail clear` CLI subcommand
+  - Clear all captured log files from the project data directory (`.lazytail/data/` or `~/.config/lazytail/data/`)
+  - `lazytail clear` — clear all ended sources
+  - `lazytail clear <name>` — clear a specific source by name
+  - `lazytail clear --all` — clear all sources including active ones (with confirmation)
+  - Respect project scoping (clear project logs when `lazytail.yaml` is present, global otherwise)
+  - Confirmation prompt before destructive action (skip with `--yes` / `-y`)
+- [ ] `lazytail sources` / `lazytail list` CLI subcommand
+  - List all available sources (discovered + config-defined) from the terminal without opening the TUI
+  - Show name, path, active/ended status, total lines
+  - Useful for scripting, piping into other tools, quick inspection
+- [ ] Register sources from CLI and MCP (without piping data)
+  - CLI: `lazytail add <name> --path /var/log/app.log` — register an existing log file as a named source
+  - MCP: `add_source` tool — let AI agents register sources programmatically (e.g. discover a log path and add it)
+  - Currently the only ways to add sources are: pipe via `lazytail -n`, define in `lazytail.yaml`, or place files in data dir
+  - This would allow dynamic source management without editing config or restarting captures
 - [ ] JSON log parsing and formatted view
   - Detect JSON lines automatically
   - Pretty-print JSON in dedicated view mode
@@ -911,64 +950,12 @@ sources:
 
 ---
 
-## Release Planning
-
-### v0.2.0 ✅ (Released)
-**Focus: Multi-Tab Support**
-- Multiple files as CLI arguments: `lazytail a.log b.log c.log`
-- Side panel UI with source list (tree-structure ready)
-- Navigation (`Tab`, `Shift+Tab`, `1-9`)
-- Per-tab state (filter, scroll, follow mode)
-- File watching for all open files
-- Stdin support: `cmd | lazytail`
-
-### v0.3.0 ✅ (Released)
-**Focus: Advanced Filter Modes**
-- Tab to switch between Plain/Regex filter modes
-- Visual mode indicator (different frame colors)
-- Case sensitivity toggle (Alt+C)
-- History stores mode per entry
-- Mode switches automatically when navigating history
-- Invalid regex visual feedback (red frame)
-- Expandable log entries (Space to toggle, c to collapse all)
-- Default follow mode on file open
-- Stats panel (line counts)
-- Persistent filter history to disk
-
-### v0.4.0 ✅ (Released)
-**Focus: Source Discovery, Capture, MCP Server & Config System**
-
-Source Discovery & Capture:
-- Auto-discover sources from `~/.config/lazytail/data/` and `lazytail.yaml`
-- Source capture mode: `cmd | lazytail -n "Name"`
-- Active/ended status indicators
-- Dynamic tab creation for new sources
-- Close tab with confirmation dialog (`x` / `Ctrl+W`)
-
-MCP Server Support:
-- MCP (Model Context Protocol) server via `--mcp` flag
-- Tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
-- Plain text output format (default) to reduce JSON escaping for AI consumption
-- MCP enabled by default in all builds
-- Streaming filter for grep-like performance on large files
-- Tested on 5GB+ log files
-
-Config System:
-- `lazytail.yaml` discovery (walk parent directories from CWD)
-- Project-scoped (`.lazytail/`) and global (`~/.config/lazytail/`) data directories
-- Source definitions with name + path in config
-- `lazytail init` to create config interactively
-- `lazytail config validate` and `lazytail config show` subcommands
-- Query language basics: `json | field == "value"` filter syntax
-
----
-
-#### MCP Tools Roadmap
+## MCP Tools Roadmap
 
 **Current Tools (v0.4.0):**
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `list_sources` | Discover available log sources | ✅ Complete |
+| `list_sources` | Discover available log sources | ✅ Complete (missing: total lines) |
 | `get_lines` | Read lines from position | ✅ Complete |
 | `get_tail` | Read last N lines | ✅ Complete |
 | `search` | Find pattern matches + structured queries | ✅ Complete |
@@ -992,17 +979,37 @@ Config System:
 | `query` | FilterQuery | ✅ Done (JSON/logfmt field filtering with exclusions) |
 | `time_range` | TimeRange | ❌ Missing |
 
-**Planned `search` Enhancements (v0.5.0+):**
+**Planned `search` Enhancements:**
 | Feature | Purpose | Priority |
 |---------|---------|----------|
 | `time_range` param | Filter by timestamp range | 🟡 Medium |
+| Search pagination / cursor | When results exceed `max_results` (capped at 1000), there's no cursor or offset to fetch the next page. Currently the only workaround is adding more filters to narrow results. A cursor/offset mechanism would allow iterating through large result sets. | 🟡 Medium |
 
-**Planned New Tools (v0.5.0+):**
+**Planned `list_sources` Enhancements:**
+| Feature | Purpose | Priority |
+|---------|---------|----------|
+| Include total line count per source | Callers shouldn't need a separate call to know source size. Useful for calculating offsets, gauging search scope, etc. | 🔴 High |
+
+**Planned `get_tail` Enhancements:**
+| Feature | Purpose | Priority |
+|---------|---------|----------|
+| `since_line` parameter | Return only lines after a given line number. Enables efficient incremental polling of active sources without re-fetching or deduplicating. Currently monitoring a live source means blind-polling `get_tail` and manually tracking what you've already seen. | 🔴 High |
+
+**Planned `get_lines` Enhancements:**
+| Feature | Purpose | Priority |
+|---------|---------|----------|
+| Negative indexing / "from end" shorthand | Reading last N lines without knowing total_lines first (`get_tail` covers most cases, but minor friction when you need a specific offset from end) | 🟢 Low |
+
+**Planned New Tools:**
 | Tool | Purpose | Priority |
 |------|---------|----------|
-| `summarize` | Log overview: line count, time range, top patterns, top services | 🟡 Medium |
-| `search_sources` | Search multiple sources at once, grouped results | 🟡 Medium |
-| `aggregate` | Count by field, top N results | 🟡 Medium |
+| `aggregate` | Count by field, top N results. Answers "which service has the most errors?", "what's the error distribution?" in a single call instead of N manual queries. Should integrate with the query language AST (Phase 3 aggregation) so both text queries and MCP JSON work. | 🔴 High |
+| `search_sources` | Search multiple sources at once, grouped results by source name. Essential for cross-service correlation (e.g., "find this request ID across all services"). Doesn't require timestamps or merging — just run the same query across all sources. | 🔴 High |
+| `fields` | Sample N lines from a source and return discovered field names, types, and example values. Makes structured queries far more usable — currently consumers must `get_tail` a few lines and visually parse JSON to discover field names before constructing a query. Critical for LLM consumers that can't eyeball the data. | 🔴 High |
+| `stats` | Per-source metadata: total lines, file size, first/last timestamp (once time parsing lands), line growth rate for active sources (e.g., "~500 lines/sec"), time since last line. Lightweight — reads metadata only, no content scanning. Helps decide whether to tail or search, and whether a source is healthy. Distinct from `summarize` which analyzes content. | 🟡 Medium |
+| `summarize` | Log overview: time range, top patterns, top services, error rate. Content-analysis based summary. | 🟡 Medium |
+| `add_source` | Register an existing log file as a named source. Lets AI agents dynamically add sources without editing config or piping data. CLI equivalent: `lazytail add <name> --path <path>`. | 🟡 Medium |
+| `export` | Dump filtered results to a file or return in bulk. Supports query filters, time range, and output format. Useful for "save me all errors from the last hour" workflows. TUI has export in backlog but MCP needs its own path since results are capped at 1000. | 🟢 Low |
 
 **Internal Improvements Done:**
 - ✅ Streaming filter with mmap (grep-like performance)
@@ -1011,8 +1018,9 @@ Config System:
 - ✅ Single-pass content extraction for matched lines
 - ✅ Plain text output format (eliminates JSON escaping explosion for AI consumption)
 
-### v0.5.0 (Next) 🔴 HIGH PRIORITY
-**Focus: Time Filtering, Aggregation & MCP Enhancements**
+### Upcoming Focus Areas
+
+#### Time Filtering & Aggregation 🔴 HIGH PRIORITY
 
 Already Completed (landed post-v0.4.0):
 - ✅ FilterQuery AST with serde derives (JSON interface for MCP)
@@ -1023,13 +1031,12 @@ Already Completed (landed post-v0.4.0):
 - ✅ Text query parser for UI (`json | level == "error"`)
 - ✅ All comparison operators (eq, ne, regex, not_regex, contains, gt, lt, gte, lte)
 
-Remaining for v0.5.0:
+Remaining:
 - Time range filtering (timestamp field detection, after/before)
-- MCP scoped to project root (detect `lazytail.yaml`)
+- Aggregation (`count by (field)`, `top N`)
 - Filter presets from config available in MCP
 
-### v0.6.0 (Future)
-**Focus: Sidecar Index & Combined Sources**
+#### Sidecar Index & Combined Sources
 
 Sidecar Index (`.log.idx`):
 - Binary index file alongside each captured log
@@ -1047,33 +1054,17 @@ Combined Source View:
 - Source-colored lines or `[SOURCE]` prefix
 - Filter by source: `source:API`
 
-### v0.7.0 (Future)
-**Focus: Query Language - Time & Aggregation**
-- Timestamp field detection and parsing
-- Time range filtering (after/before)
-- `count by (field)` aggregation
-- `top N` limiting
-- Multi-source search tool
+#### MCP Project Scoping 🟡 MEDIUM PRIORITY
 
-### v0.8.0 (Future)
-**Focus: Query Language - Text Parser (UI)**
-- Text query syntax: `json | level == "error"`
-- Recursive descent parser
-- UI integration with syntax highlighting
-- Query history with mode persistence
+**Goal:** MCP server automatically scopes to the project when `lazytail.yaml` is present
 
-### v0.9.0 (Future)
-**Focus: Log Intelligence**
-- `logfmt` and `pattern` parsers
-- Nested field access (`user.id`)
-- Severity detection and filtering
-- JSON formatting in expanded view
-
-### v1.0.0 (Future)
-**Focus: Feature Complete & Stable**
-- All core features stable and documented
-- Performance optimizations
-- Comprehensive test coverage
+**Design Questions:**
+- MCP server should detect `lazytail.yaml` by walking parent directories from CWD (same as TUI)
+- When project-scoped: `list_sources` returns project sources + config-defined sources
+- When global: `list_sources` returns `~/.config/lazytail/data/` sources (current behavior)
+- Sources from `lazytail.yaml` `sources:` definitions should appear alongside captured sources
+- Filter presets defined in config should be available via a `list_presets` or similar mechanism
+- Consider: should MCP expose both project and global sources, or only project when scoped?
 
 ---
 
