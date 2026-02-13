@@ -153,8 +153,15 @@ pub fn is_pid_running(pid: u32) -> bool {
             return false;
         }
         // SAFETY: kill with signal 0 doesn't actually send a signal,
-        // it just checks if the process exists and we have permission
-        unsafe { libc::kill(pid_i32, 0) == 0 }
+        // it just checks if the process exists and we have permission.
+        // Returns 0 if process exists and we can signal it.
+        // Returns -1 with EPERM if process exists but we lack permission
+        // (common on macOS due to sandboxing/hardened runtime).
+        // Returns -1 with ESRCH if process doesn't exist.
+        unsafe {
+            libc::kill(pid_i32, 0) == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
     }
 }
 
