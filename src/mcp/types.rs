@@ -218,6 +218,8 @@ pub struct SourceInfo {
     pub status: SourceStatus,
     /// File size in bytes
     pub size_bytes: u64,
+    /// Where the source was found (project-local or global)
+    pub location: SourceLocation,
 }
 
 /// Status of a log source.
@@ -228,4 +230,14 @@ pub enum SourceStatus {
     Active,
     /// Source capture has ended (file still available)
     Ended,
+}
+
+/// Location where a source was discovered.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceLocation {
+    /// Source is in project-local .lazytail/data/
+    Project,
+    /// Source is in global ~/.config/lazytail/data/
+    Global,
 }
