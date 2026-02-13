@@ -36,45 +36,61 @@ cargo run --release -- test.log
 
 ```
 src/
-├── main.rs                # Entry point, CLI (clap), and main event loop
-├── app.rs                 # Application state management
-├── tab.rs                 # Per-tab state (reader, watcher, filter, viewport)
-├── viewport.rs            # Vim-style viewport scrolling
-├── event.rs               # Event type definitions
-├── watcher.rs             # File watching with inotify
-├── dir_watcher.rs         # Directory watcher for source discovery
-├── capture.rs             # Capture mode (tee-like stdin to file)
-├── source.rs              # Source discovery and status tracking
-├── signal.rs              # Signal handling (SIGINT/SIGTERM)
-├── history.rs             # Filter history persistence
-├── cache/                 # Line and ANSI caching
-├── cmd/                   # CLI subcommands (init, config)
-├── config/                # Config system (lazytail.yaml discovery + loading)
+├── main.rs                 # Entry point, CLI (clap), and main event loop
+├── app.rs                  # Application state management
+├── tab.rs                  # Per-tab state (reader, watcher, filter, viewport)
+├── viewport.rs             # Vim-style viewport scrolling
+├── event.rs                # Event type definitions
+├── watcher.rs              # File watching with inotify
+├── dir_watcher.rs          # Directory watcher for source discovery
+├── capture.rs              # Capture mode (tee-like stdin to file)
+├── source.rs               # Source discovery and status tracking
+├── signal.rs               # Signal handling (SIGINT/SIGTERM)
+├── history.rs              # Filter history persistence
+├── cache/
+│   ├── mod.rs              # Cache module
+│   ├── line_cache.rs       # LRU cache for line content
+│   └── ansi_cache.rs       # ANSI-parsed line cache
+├── cmd/
+│   ├── mod.rs              # CLI subcommand definitions
+│   ├── init.rs             # `lazytail init` command
+│   └── config.rs           # `lazytail config` commands
+├── config/
+│   ├── mod.rs              # Config module
+│   ├── discovery.rs        # Walk parent dirs for lazytail.yaml
+│   ├── loader.rs           # YAML config loading
+│   ├── types.rs            # Config structs
+│   └── error.rs            # Config error types
 ├── filter/
-│   ├── mod.rs             # Filter trait
-│   ├── engine.rs          # Background filtering engine
-│   ├── streaming_filter.rs# Streaming mmap-based filter (grep-like)
-│   ├── regex_filter.rs    # Regex filter implementation
-│   ├── string_filter.rs   # String matching filter
-│   ├── query.rs           # Query language (json | field == value)
-│   ├── cancel.rs          # Cancellation tokens
-│   └── parallel_engine.rs # Parallel filtering
-├── handlers/              # Input, filter progress, file event handlers
-├── mcp/                   # MCP server for AI assistant integration
-│   ├── tools.rs           # Tool implementations (5 tools)
-│   ├── types.rs           # Request/response types
-│   ├── format.rs          # Plain text output formatters
-│   └── ansi.rs            # ANSI escape code stripping
+│   ├── mod.rs              # Filter trait
+│   ├── engine.rs           # Background filtering engine
+│   ├── streaming_filter.rs # Streaming mmap-based filter (grep-like)
+│   ├── regex_filter.rs     # Regex filter implementation
+│   ├── string_filter.rs    # String matching filter
+│   ├── query.rs            # Query language (json | field == value)
+│   ├── cancel.rs           # Cancellation tokens
+│   └── parallel_engine.rs  # Parallel filtering
+├── handlers/
+│   ├── mod.rs              # Handler module
+│   ├── input.rs            # Keyboard input handling
+│   ├── filter.rs           # Filter progress handling
+│   └── file_events.rs      # File change event handling
+├── mcp/
+│   ├── mod.rs              # MCP server module
+│   ├── tools.rs            # Tool implementations (5 tools)
+│   ├── types.rs            # Request/response types
+│   ├── format.rs           # Plain text output formatters
+│   └── ansi.rs             # ANSI escape code stripping
 ├── reader/
-│   ├── mod.rs             # LogReader trait
-│   ├── file_reader.rs     # Lazy file reader with line indexing
-│   ├── stream_reader.rs   # Stdin/stream reader
-│   ├── mmap_reader.rs     # Memory-mapped reader
-│   ├── huge_file_reader.rs# Large file support
-│   ├── sparse_index.rs    # Sparse line index
-│   └── tail_buffer.rs     # Tail buffer for recent lines
+│   ├── mod.rs              # LogReader trait
+│   ├── file_reader.rs      # Lazy file reader with line indexing
+│   ├── stream_reader.rs    # Stdin/stream reader
+│   ├── mmap_reader.rs      # Memory-mapped reader
+│   ├── huge_file_reader.rs # Large file support
+│   ├── sparse_index.rs     # Sparse line index
+│   └── tail_buffer.rs      # Tail buffer for recent lines
 └── ui/
-    └── mod.rs             # ratatui rendering (log view, panels, help overlay)
+    └── mod.rs              # ratatui rendering (log view, panels, help overlay)
 ```
 
 For detailed architecture documentation, see `CLAUDE.md`.
