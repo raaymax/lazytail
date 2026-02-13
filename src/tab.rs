@@ -4,7 +4,9 @@ use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
-use crate::source::{check_source_status, DiscoveredSource, SourceLocation, SourceStatus};
+use crate::source::{
+    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
+};
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -355,9 +357,21 @@ impl TabState {
     ///
     /// Checks if the source process is still running and updates the status.
     /// Only affects tabs created from discovered sources (source_status is Some).
+    /// Derives the sources directory from the log file path (sibling of data dir).
     pub fn refresh_source_status(&mut self) {
         if self.source_status.is_some() {
-            self.source_status = Some(check_source_status(&self.name));
+            // Derive the sources dir from the log file's data dir:
+            // source_path is like .lazytail/data/foo.log → sources dir is .lazytail/sources/
+            let status = self
+                .source_path
+                .as_ref()
+                .and_then(|p| p.parent()) // .lazytail/data/
+                .and_then(|data_dir| data_dir.parent()) // .lazytail/
+                .map(|base| base.join("sources"))
+                .filter(|sources_dir| sources_dir.exists())
+                .map(|sources_dir| check_source_status_in_dir(&self.name, &sources_dir))
+                .unwrap_or_else(|| check_source_status(&self.name));
+            self.source_status = Some(status);
         }
     }
 

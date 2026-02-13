@@ -610,7 +610,13 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                             // Extract name from path
                             if let Some(stem) = path.file_stem() {
                                 let name = stem.to_string_lossy().to_string();
-                                let status = source::check_source_status(&name);
+                                let status = path
+                                    .parent()
+                                    .and_then(|d| d.parent())
+                                    .map(|base| base.join("sources"))
+                                    .filter(|s| s.exists())
+                                    .map(|s| source::check_source_status_in_dir(&name, &s))
+                                    .unwrap_or_else(|| source::check_source_status(&name));
                                 let source = source::DiscoveredSource {
                                     name,
                                     log_path: path,
