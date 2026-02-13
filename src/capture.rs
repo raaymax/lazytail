@@ -10,8 +10,8 @@
 use crate::config::DiscoveryResult;
 use crate::signal::setup_shutdown_handlers;
 use crate::source::{
-    check_source_status_for_context, create_marker_for_context, ensure_directories_for_context,
-    remove_marker_for_context, resolve_data_dir, validate_source_name, SourceStatus,
+    create_marker_for_context, ensure_directories_for_context, remove_marker_for_context,
+    resolve_data_dir, validate_source_name,
 };
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;
@@ -40,15 +40,7 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
     // 2. Ensure directories exist using context
     ensure_directories_for_context(discovery)?;
 
-    // 3. Check for collision
-    if check_source_status_for_context(&name, discovery) == SourceStatus::Active {
-        anyhow::bail!(
-            "Source '{}' is already active (another process is writing to it)",
-            name
-        );
-    }
-
-    // 4. Create marker file with our PID
+    // 3. Create marker file with our PID (cleans stale markers, rejects active sources)
     create_marker_for_context(&name, discovery)?;
 
     // 5. Setup signal handlers (flag-based, supports double Ctrl+C for force quit)

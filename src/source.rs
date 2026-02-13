@@ -331,29 +331,10 @@ pub fn create_marker(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Check the status of a source by name using discovery context.
-///
-/// Returns `Active` if the marker exists and the PID is running,
-/// otherwise returns `Ended`.
-pub fn check_source_status_for_context(name: &str, discovery: &DiscoveryResult) -> SourceStatus {
-    let Some(sources) = resolve_sources_dir(discovery) else {
-        return SourceStatus::Ended;
-    };
-
-    let marker_path = sources.join(name);
-    if !marker_path.exists() {
-        return SourceStatus::Ended;
-    }
-
-    match read_marker_pid(&marker_path) {
-        Some(pid) if is_pid_running(pid) => SourceStatus::Active,
-        _ => SourceStatus::Ended,
-    }
-}
-
 /// Create a marker file for the given source name using discovery context.
 ///
-/// Uses atomic creation to prevent races. Writes the current PID.
+/// Cleans up stale markers from killed processes before creating. Uses atomic
+/// creation to prevent races between concurrent capture processes.
 pub fn create_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Result<()> {
     let sources =
         resolve_sources_dir(discovery).context("Could not determine sources directory")?;
@@ -361,7 +342,19 @@ pub fn create_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Res
 
     let marker_path = sources.join(name);
 
-    // Use create_new for atomic creation (fails if exists)
+    // Clean up stale marker from a killed process (SIGKILL, OOM, etc.)
+    if marker_path.exists() {
+        match read_marker_pid(&marker_path) {
+            Some(pid) if is_pid_running(pid) => {
+                anyhow::bail!("Source '{}' is already active (PID {})", name, pid);
+            }
+            _ => {
+                fs::remove_file(&marker_path).context("Failed to remove stale marker")?;
+            }
+        }
+    }
+
+    // Use create_new for atomic creation (fails if another process raced us)
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -819,21 +812,36 @@ mod tests {
         let marker_path = project_root.join(".lazytail").join("sources").join("test");
         assert!(marker_path.exists(), "marker should exist");
 
-        // Status should be Active
-        assert_eq!(
-            check_source_status_for_context("test", &discovery),
-            SourceStatus::Active
-        );
-
         // Remove marker
         remove_marker_for_context("test", &discovery).unwrap();
         assert!(!marker_path.exists(), "marker should be removed");
+    }
 
-        // Status should be Ended
-        assert_eq!(
-            check_source_status_for_context("test", &discovery),
-            SourceStatus::Ended
-        );
+    #[test]
+    #[ignore] // Slow test - requires temp dir setup
+    fn test_stale_marker_cleaned_on_create() {
+        let temp = TempDir::new().unwrap();
+        let project_root = temp.path().to_path_buf();
+        let discovery = DiscoveryResult {
+            project_root: Some(project_root.clone()),
+            project_config: Some(project_root.join("lazytail.yaml")),
+            global_config: None,
+        };
+
+        // Simulate a stale marker from a killed process (PID that doesn't exist)
+        let sources = project_root.join(".lazytail").join("sources");
+        fs::create_dir_all(&sources).unwrap();
+        fs::write(sources.join("test"), "999999999\n").unwrap();
+
+        // Creating a new marker should succeed by cleaning the stale one
+        create_marker_for_context("test", &discovery).unwrap();
+
+        // Marker should contain our PID now
+        let contents = fs::read_to_string(sources.join("test")).unwrap();
+        assert_eq!(contents.trim(), std::process::id().to_string());
+
+        // Cleanup
+        remove_marker_for_context("test", &discovery).unwrap();
     }
 
     #[test]
