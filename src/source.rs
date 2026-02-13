@@ -241,7 +241,7 @@ fn scan_data_directory(
 }
 
 /// Check the status of a source by name in a specific sources directory.
-fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatus {
+pub fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatus {
     let marker_path = sources_dir.join(name);
     if !marker_path.exists() {
         return SourceStatus::Ended;
