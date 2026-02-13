@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/raaymax/lazytail/compare/v0.5.0...v0.5.1) (2026-02-13)
+
+
+### Bug Fixes
+
+* **capture:** clean up stale markers from killed processes ([#20](https://github.com/raaymax/lazytail/issues/20)) ([09235f1](https://github.com/raaymax/lazytail/commit/09235f180f3ab49e88524184eeabe9957d70aa03))
+
 ## [0.5.0](https://github.com/raaymax/lazytail/compare/v0.4.0...v0.5.0) (2026-02-11)
 
 
