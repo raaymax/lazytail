@@ -17,15 +17,18 @@ jobs:
         id: release
         with:
           release-type: rust
-          package-name: lazytail
 
       - name: Update release notes from PR description
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
-          PR_NUMBER: ${{ steps.release.outputs.pr }}
         run: |
+          PR_NUMBER=$(gh pr list --state merged --label "autorelease: tagged" --limit 1 --json number --jq '.[0].number' --repo "$GITHUB_REPOSITORY")
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Could not find release PR, skipping"
+            exit 0
+          fi
           PR_BODY=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')
           if [ -n "$PR_BODY" ]; then
             gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --notes "$PR_BODY"
