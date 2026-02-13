@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "lazytail"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
