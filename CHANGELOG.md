@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3](https://github.com/raaymax/lazytail/compare/v0.5.2...v0.5.3) (2026-02-13)
+
+
+### Bug Fixes
+
+* **ci:** resolve empty PR number in release notes step ([8b66287](https://github.com/raaymax/lazytail/commit/8b662870cc3e925bf8131666a2e612e273afd42d))
+* **source:** handle EPERM in macOS PID liveness check ([#25](https://github.com/raaymax/lazytail/issues/25)) ([cf87b07](https://github.com/raaymax/lazytail/commit/cf87b0787652cfde04c29ed201a2c1196fe92e9a))
+
 ## [0.5.2](https://github.com/raaymax/lazytail/compare/v0.5.1...v0.5.2) (2026-02-13)
 
 
