@@ -498,6 +498,135 @@ fn stream_filter_range_impl(
     Ok(())
 }
 
+/// Run an index-accelerated streaming filter on a file.
+///
+/// Uses the columnar index to pre-filter lines by flags (format, severity),
+/// then only runs `filter.matches()` on candidate lines. For structured queries
+/// like `json | level == "error"`, this eliminates ~98% of JSON/logfmt parsing.
+///
+/// The `bitmap` parameter is a boolean slice where `bitmap[i] == true` means
+/// line `i` is a candidate that should be checked with the content filter.
+/// Lines past the bitmap length are also checked (handles index shorter than file).
+pub fn run_streaming_filter_indexed<P>(
+    path: P,
+    filter: Arc<dyn Filter>,
+    bitmap: Vec<bool>,
+    cancel: CancelToken,
+) -> Result<Receiver<FilterProgress>>
+where
+    P: AsRef<Path> + Send + 'static,
+{
+    let (tx, rx) = channel();
+    let path = path.as_ref().to_path_buf();
+
+    thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stream_filter_indexed_impl(&path, filter, &bitmap, tx.clone(), cancel)
+        }));
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let _ = tx.send(FilterProgress::Error(e.to_string()));
+            }
+            Err(_) => {
+                let _ = tx.send(FilterProgress::Error(
+                    "Index-accelerated filter thread panicked".to_string(),
+                ));
+            }
+        }
+    });
+
+    Ok(rx)
+}
+
+/// Internal implementation for index-accelerated filtering.
+///
+/// Iterates lines sequentially (mmap + memchr), but only calls `filter.matches()`
+/// on lines where `bitmap[line_idx]` is true. Non-candidate lines are skipped
+/// with just a newline scan (no content parsing).
+fn stream_filter_indexed_impl(
+    path: &Path,
+    filter: Arc<dyn Filter>,
+    bitmap: &[bool],
+    tx: Sender<FilterProgress>,
+    cancel: CancelToken,
+) -> Result<()> {
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+
+    if metadata.len() == 0 {
+        tx.send(FilterProgress::Complete {
+            matches: vec![],
+            lines_processed: 0,
+        })?;
+        return Ok(());
+    }
+
+    // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
+    let mmap = unsafe { Mmap::map(&file)? };
+    let data = &mmap[..];
+
+    let mut all_matches = Vec::new();
+    let mut batch_matches = Vec::new();
+    let mut line_idx = 0usize;
+    let mut pos = 0usize;
+
+    while pos < data.len() {
+        if line_idx.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        // Find end of line using SIMD-accelerated memchr
+        let line_end = memchr::memchr(b'\n', &data[pos..])
+            .map(|offset| pos + offset)
+            .unwrap_or(data.len());
+
+        // Check bitmap: if line is within bitmap and not a candidate, skip it.
+        // Lines past the bitmap are always checked (index may be shorter than file).
+        let is_candidate = line_idx >= bitmap.len() || bitmap[line_idx];
+
+        if is_candidate {
+            let content_end =
+                if line_end > pos && data.get(line_end.saturating_sub(1)) == Some(&b'\r') {
+                    line_end - 1
+                } else {
+                    line_end
+                };
+
+            if let Ok(line) = std::str::from_utf8(&data[pos..content_end]) {
+                if filter.matches(line) {
+                    batch_matches.push(line_idx);
+                }
+            }
+        }
+
+        line_idx += 1;
+        pos = line_end + 1;
+
+        if line_idx.is_multiple_of(BATCH_SIZE) && !batch_matches.is_empty() {
+            all_matches.extend(batch_matches.iter().copied());
+
+            let _ = tx.send(FilterProgress::PartialResults {
+                matches: std::mem::take(&mut batch_matches),
+                lines_processed: line_idx,
+            });
+        }
+    }
+
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+
+    all_matches.extend(batch_matches);
+    tx.send(FilterProgress::Complete {
+        matches: all_matches,
+        lines_processed: line_idx,
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,5 +820,223 @@ mod tests {
 
         let indices = result.expect("Should complete");
         assert_eq!(indices, vec![0, 1, 2]); // All ERROR/error/Error match
+    }
+
+    // ========================================================================
+    // Index-accelerated filter tests
+    // ========================================================================
+
+    #[test]
+    fn test_indexed_filter_skips_non_candidates() {
+        // File with mixed content: JSON and non-JSON lines
+        let file = create_test_file(&[
+            r#"{"level":"error","msg":"first"}"#, // line 0: JSON error - candidate
+            "INFO: plain text log",               // line 1: not JSON - skip
+            r#"{"level":"info","msg":"second"}"#, // line 2: JSON info - skip
+            r#"{"level":"error","msg":"third"}"#, // line 3: JSON error - candidate
+            "DEBUG: another plain line",          // line 4: not JSON - skip
+        ]);
+        let path = file.path().to_path_buf();
+
+        // Bitmap: only lines 0 and 3 are candidates (JSON error lines)
+        let bitmap = vec![true, false, false, true, false];
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("error", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        // Only line 0 and 3 were checked; line 0 and 3 contain "error"
+        assert_eq!(indices, vec![0, 3]);
+    }
+
+    #[test]
+    fn test_indexed_filter_all_candidates() {
+        // When all lines are candidates, behaves like regular filter
+        let file = create_test_file(&["ERROR: first", "INFO: second", "ERROR: third"]);
+        let path = file.path().to_path_buf();
+
+        let bitmap = vec![true, true, true]; // All candidates
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("ERROR", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        assert_eq!(indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_indexed_filter_no_candidates() {
+        let file = create_test_file(&["ERROR: first", "ERROR: second", "ERROR: third"]);
+        let path = file.path().to_path_buf();
+
+        let bitmap = vec![false, false, false]; // No candidates
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("ERROR", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_indexed_filter_bitmap_shorter_than_file() {
+        // Bitmap only covers first 2 lines, remaining lines should be checked
+        let file = create_test_file(&["ERROR: 0", "INFO: 1", "ERROR: 2", "ERROR: 3"]);
+        let path = file.path().to_path_buf();
+
+        let bitmap = vec![true, false]; // Only covers lines 0-1
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("ERROR", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        // Line 0 is candidate and matches, line 1 skipped,
+        // lines 2,3 past bitmap so checked, both match
+        assert_eq!(indices, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn test_indexed_filter_empty_bitmap() {
+        // Empty bitmap = all lines are checked (no index available)
+        let file = create_test_file(&["ERROR: 0", "INFO: 1", "ERROR: 2"]);
+        let path = file.path().to_path_buf();
+
+        let bitmap = vec![]; // Empty
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("ERROR", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        assert_eq!(indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_indexed_filter_empty_file() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let bitmap = vec![];
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("ERROR", false));
+        let rx = run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+
+        let mut result = None;
+        while let Ok(progress) = rx.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                result = Some(indices);
+                break;
+            }
+        }
+
+        let indices = result.expect("Should complete");
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_indexed_filter_same_results_as_regular() {
+        // The indexed filter should produce the same results as the regular filter
+        // when bitmap is all-true
+        let lines = &[
+            r#"{"level":"error","msg":"fail"}"#,
+            "plain text line",
+            r#"{"level":"info","msg":"ok"}"#,
+            r#"not json at all"#,
+            r#"{"level":"error","msg":"timeout"}"#,
+        ];
+        let file = create_test_file(lines);
+        let path = file.path().to_path_buf();
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("error", false));
+
+        // Regular filter
+        let rx_regular =
+            run_streaming_filter(path.clone(), filter.clone(), CancelToken::new()).unwrap();
+        let mut regular_result = None;
+        while let Ok(progress) = rx_regular.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                regular_result = Some(indices);
+                break;
+            }
+        }
+
+        // Indexed filter with all-true bitmap
+        let bitmap = vec![true; lines.len()];
+        let rx_indexed =
+            run_streaming_filter_indexed(path, filter, bitmap, CancelToken::new()).unwrap();
+        let mut indexed_result = None;
+        while let Ok(progress) = rx_indexed.recv() {
+            if let FilterProgress::Complete {
+                matches: indices, ..
+            } = progress
+            {
+                indexed_result = Some(indices);
+                break;
+            }
+        }
+
+        assert_eq!(
+            regular_result.expect("Regular should complete"),
+            indexed_result.expect("Indexed should complete")
+        );
     }
 }

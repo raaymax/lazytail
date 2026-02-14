@@ -490,6 +490,80 @@ pub struct FilterQuery {
     pub exclude: Vec<ExcludePattern>,
 }
 
+impl FilterQuery {
+    /// Build a (mask, want) pair for index pre-filtering.
+    ///
+    /// Returns `None` if the query cannot benefit from index pre-filtering
+    /// (e.g., Raw parser). When `Some((mask, want))` is returned, lines where
+    /// `flags & mask != want` can be skipped without parsing content.
+    ///
+    /// The mask encodes:
+    /// - Format flag (JSON or logfmt) from the parser type
+    /// - Empty-line exclusion
+    /// - Severity level from `level == "value"` filters (exact match only)
+    /// Build a (mask, want) pair for index pre-filtering.
+    ///
+    /// Returns `None` if the query cannot benefit from index pre-filtering
+    /// (e.g., Raw parser). When `Some((mask, want))` is returned, lines where
+    /// `flags & mask != want` can be skipped without parsing content.
+    ///
+    /// The mask encodes:
+    /// - Format flag (JSON or logfmt) from the parser type
+    /// - Empty-line exclusion
+    /// - Severity level from `level == "value"` filters (exact match only)
+    pub fn index_mask(&self) -> Option<(u32, u32)> {
+        use lazytail::index::flags::{
+            FLAG_FORMAT_JSON, FLAG_FORMAT_LOGFMT, FLAG_IS_EMPTY, SEVERITY_MASK,
+        };
+
+        let mut mask = 0u32;
+        let mut want = 0u32;
+
+        match self.parser {
+            Parser::Json => {
+                mask |= FLAG_FORMAT_JSON;
+                want |= FLAG_FORMAT_JSON;
+            }
+            Parser::Logfmt => {
+                mask |= FLAG_FORMAT_LOGFMT;
+                want |= FLAG_FORMAT_LOGFMT;
+            }
+            Parser::Raw => return None,
+        }
+
+        // Empty lines never match structured queries
+        mask |= FLAG_IS_EMPTY;
+
+        // Severity from level == "value" filter (exact match only)
+        for filter in &self.filters {
+            if filter.field == "level" && filter.op == Operator::Eq {
+                if let Some(sev) = severity_from_level_value(&filter.value) {
+                    mask |= SEVERITY_MASK;
+                    want |= sev.to_bits();
+                    break;
+                }
+            }
+        }
+
+        Some((mask, want))
+    }
+}
+
+/// Map a level filter value to a Severity enum for index pre-filtering.
+fn severity_from_level_value(value: &str) -> Option<lazytail::index::flags::Severity> {
+    use lazytail::index::flags::Severity;
+
+    match value.to_ascii_lowercase().as_str() {
+        "trace" => Some(Severity::Trace),
+        "debug" => Some(Severity::Debug),
+        "info" => Some(Severity::Info),
+        "warn" | "warning" => Some(Severity::Warn),
+        "error" | "err" => Some(Severity::Error),
+        "fatal" | "critical" | "crit" | "emerg" | "emergency" | "panic" => Some(Severity::Fatal),
+        _ => None,
+    }
+}
+
 /// Filter implementation for structured queries.
 #[derive(Debug)]
 pub struct QueryFilter {
@@ -1411,5 +1485,149 @@ mod tests {
         assert!(filter.matches("status=500 msg=error"));
         assert!(filter.matches("status=400 msg=error"));
         assert!(!filter.matches("status=200 msg=ok"));
+    }
+
+    // ========================================================================
+    // index_mask() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_index_mask_json_level_error() {
+        use lazytail::index::flags::*;
+
+        let query = parse_query("json | level == \"error\"").unwrap();
+        let (mask, want) = query.index_mask().unwrap();
+
+        assert_ne!(mask & FLAG_FORMAT_JSON, 0);
+        assert_ne!(want & FLAG_FORMAT_JSON, 0);
+        assert_ne!(mask & SEVERITY_MASK, 0);
+        assert_eq!(want & SEVERITY_MASK, SEVERITY_ERROR);
+        // Empty lines excluded
+        assert_ne!(mask & FLAG_IS_EMPTY, 0);
+        assert_eq!(want & FLAG_IS_EMPTY, 0);
+    }
+
+    #[test]
+    fn test_index_mask_logfmt_level_warn() {
+        use lazytail::index::flags::*;
+
+        let query = parse_query("logfmt | level == warn").unwrap();
+        let (mask, want) = query.index_mask().unwrap();
+
+        assert_ne!(mask & FLAG_FORMAT_LOGFMT, 0);
+        assert_ne!(want & FLAG_FORMAT_LOGFMT, 0);
+        assert_eq!(want & SEVERITY_MASK, SEVERITY_WARN);
+    }
+
+    #[test]
+    fn test_index_mask_json_no_level_filter() {
+        use lazytail::index::flags::*;
+
+        let query = parse_query("json | service == \"api\"").unwrap();
+        let (mask, want) = query.index_mask().unwrap();
+
+        // Has format flag
+        assert_ne!(mask & FLAG_FORMAT_JSON, 0);
+        assert_ne!(want & FLAG_FORMAT_JSON, 0);
+        // No severity constraint
+        assert_eq!(mask & SEVERITY_MASK, 0);
+    }
+
+    #[test]
+    fn test_index_mask_json_only() {
+        use lazytail::index::flags::*;
+
+        let query = parse_query("json").unwrap();
+        let (mask, want) = query.index_mask().unwrap();
+
+        assert_ne!(mask & FLAG_FORMAT_JSON, 0);
+        assert_ne!(want & FLAG_FORMAT_JSON, 0);
+        assert_eq!(mask & SEVERITY_MASK, 0);
+    }
+
+    #[test]
+    fn test_index_mask_raw_returns_none() {
+        let query = FilterQuery {
+            parser: Parser::Raw,
+            filters: vec![],
+            exclude: vec![],
+        };
+        assert!(query.index_mask().is_none());
+    }
+
+    #[test]
+    fn test_index_mask_ne_no_severity() {
+        use lazytail::index::flags::*;
+
+        // level != "error" cannot be expressed as a simple mask
+        let query = parse_query("json | level != \"error\"").unwrap();
+        let (mask, _want) = query.index_mask().unwrap();
+
+        // Has format flag but no severity constraint
+        assert_ne!(mask & FLAG_FORMAT_JSON, 0);
+        assert_eq!(mask & SEVERITY_MASK, 0);
+    }
+
+    #[test]
+    fn test_index_mask_severity_aliases() {
+        use lazytail::index::flags::*;
+
+        // "err" is an alias for error
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Eq,
+                value: "err".to_string(),
+            }],
+            exclude: vec![],
+        };
+        let (_, want) = query.index_mask().unwrap();
+        assert_eq!(want & SEVERITY_MASK, SEVERITY_ERROR);
+
+        // "WARNING" maps to warn
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Eq,
+                value: "WARNING".to_string(),
+            }],
+            exclude: vec![],
+        };
+        let (_, want) = query.index_mask().unwrap();
+        assert_eq!(want & SEVERITY_MASK, SEVERITY_WARN);
+
+        // "critical" maps to fatal
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Eq,
+                value: "critical".to_string(),
+            }],
+            exclude: vec![],
+        };
+        let (_, want) = query.index_mask().unwrap();
+        assert_eq!(want & SEVERITY_MASK, SEVERITY_FATAL);
+    }
+
+    #[test]
+    fn test_index_mask_unknown_level_no_severity() {
+        use lazytail::index::flags::*;
+
+        // "notice" is not a known severity
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Eq,
+                value: "notice".to_string(),
+            }],
+            exclude: vec![],
+        };
+        let (mask, _want) = query.index_mask().unwrap();
+        // No severity constraint since we can't map "notice"
+        assert_eq!(mask & SEVERITY_MASK, 0);
     }
 }
