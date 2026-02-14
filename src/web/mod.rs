@@ -509,13 +509,6 @@ pub fn run(args: WebArgs) -> Result<(), i32> {
     println!("LazyTail Web UI started at {}", open_url);
     println!("Press Ctrl+C to stop.");
 
-    if !args.no_open {
-        if let Err(err) = webbrowser::open(&open_url) {
-            eprintln!("warning: Failed to open browser automatically: {}", err);
-            eprintln!("Open this URL manually: {}", open_url);
-        }
-    }
-
     let shutdown_flag = match setup_shutdown_handlers() {
         Ok(flag) => flag,
         Err(err) => {

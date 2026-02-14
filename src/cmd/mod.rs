@@ -56,10 +56,6 @@ pub struct WebArgs {
     #[arg(short = 'p', long, default_value_t = 8421)]
     pub port: u16,
 
-    /// Do not open browser automatically
-    #[arg(long)]
-    pub no_open: bool,
-
     /// Disable file watching (sources won't auto-reload on changes)
     #[arg(long = "no-watch")]
     pub no_watch: bool,
