@@ -125,6 +125,58 @@ fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'stat
     overflow
 }
 
+/// Build a source line with indicators (loading, filter, follow, status)
+fn build_source_line(
+    tab: &TabState,
+    number: &str,
+    indicator: &str,
+    name: &str,
+    style: Style,
+) -> Line<'static> {
+    let mut line = Line::from(vec![Span::styled(
+        format!("  {}{} {}", number, indicator, name),
+        style,
+    )]);
+
+    if tab.stream_receiver.is_some() {
+        line.spans
+            .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+    }
+    if tab.filter.pattern.is_some() {
+        line.spans
+            .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
+    }
+    if tab.follow_mode {
+        line.spans
+            .push(Span::styled(" F", Style::default().fg(Color::Green)));
+    }
+    if let Some(status) = tab.source_status {
+        let (status_ind, color) = match status {
+            SourceStatus::Active => ("●", Color::Green),
+            SourceStatus::Ended => ("○", Color::DarkGray),
+        };
+        line.spans.push(Span::styled(
+            format!(" {}", status_ind),
+            Style::default().fg(color),
+        ));
+    }
+
+    line
+}
+
+/// Format metadata string for a source (line count and optional file size)
+fn format_source_meta(tab: &TabState) -> String {
+    if let Some(size) = tab.file_size {
+        format!(
+            " {} \u{00b7} {}",
+            format_count(tab.total_lines),
+            format_file_size(size)
+        )
+    } else {
+        format!(" {}", format_count(tab.total_lines))
+    }
+}
+
 fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
     let mut items: Vec<ListItem> = Vec::new();
     let categories = app.tabs_by_category();
@@ -219,51 +271,11 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                     Style::default().fg(Color::White)
                 };
 
-                let mut line = Line::from(vec![Span::styled(
-                    format!("  {}{} {}", number, indicator, name),
-                    item_style,
-                )]);
-
-                // Add loading indicator if stream is still loading
-                if tab.stream_receiver.is_some() {
-                    line.spans
-                        .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
-                }
-
-                // Add filter indicator if tab has active filter
-                if tab.filter.pattern.is_some() {
-                    line.spans
-                        .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
-                }
-
-                // Add follow indicator if tab is in follow mode
-                if tab.follow_mode {
-                    line.spans
-                        .push(Span::styled(" F", Style::default().fg(Color::Green)));
-                }
-
-                // Add source status indicator for discovered sources
-                if let Some(status) = tab.source_status {
-                    let (status_ind, color) = match status {
-                        SourceStatus::Active => ("●", Color::Green),
-                        SourceStatus::Ended => ("○", Color::DarkGray),
-                    };
-                    line.spans.push(Span::styled(
-                        format!(" {}", status_ind),
-                        Style::default().fg(color),
-                    ));
-                }
+                // Build line with indicators and metadata
+                let mut line = build_source_line(tab, &number, indicator, &name, item_style);
 
                 // Inline metadata (line count · file size) - show whatever fits
-                let meta = if let Some(size) = tab.file_size {
-                    format!(
-                        " {} \u{00b7} {}",
-                        format_count(tab.total_lines),
-                        format_file_size(size)
-                    )
-                } else {
-                    format!(" {}", format_count(tab.total_lines))
-                };
+                let meta = format_source_meta(tab);
                 let used_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
                 let panel_inner = (area.width as usize).saturating_sub(2); // borders
                 let remaining = panel_inner.saturating_sub(used_width);
@@ -277,35 +289,8 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
                 if is_tree_selected {
                     // Build full untruncated line for overflow overlay
-                    let mut full_line = Line::from(vec![Span::styled(
-                        format!("  {}{} {}", number, indicator, tab.name),
-                        item_style,
-                    )]);
-                    if tab.stream_receiver.is_some() {
-                        full_line
-                            .spans
-                            .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
-                    }
-                    if tab.filter.pattern.is_some() {
-                        full_line
-                            .spans
-                            .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
-                    }
-                    if tab.follow_mode {
-                        full_line
-                            .spans
-                            .push(Span::styled(" F", Style::default().fg(Color::Green)));
-                    }
-                    if let Some(status) = tab.source_status {
-                        let (status_ind, color) = match status {
-                            SourceStatus::Active => ("●", Color::Green),
-                            SourceStatus::Ended => ("○", Color::DarkGray),
-                        };
-                        full_line.spans.push(Span::styled(
-                            format!(" {}", status_ind),
-                            Style::default().fg(color),
-                        ));
-                    }
+                    let mut full_line =
+                        build_source_line(tab, &number, indicator, &tab.name, item_style);
                     full_line
                         .spans
                         .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
@@ -349,8 +334,9 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
         let panel_inner = (area.width as usize).saturating_sub(2);
 
         if line_width > panel_inner {
-            let overlay_y = area.y + 1 + row as u16; // +1 for top border
-            let needed_width = (line_width + 1) as u16; // +1 to clear trailing cell
+            let row_u16 = u16::try_from(row).unwrap_or(u16::MAX);
+            let overlay_y = area.y.saturating_add(1).saturating_add(row_u16);
+            let needed_width = u16::try_from(line_width.saturating_add(1)).unwrap_or(u16::MAX);
             let max_width = f.area().width.saturating_sub(area.x + 1);
             let overlay_width = needed_width.min(max_width);
 
@@ -987,9 +973,9 @@ fn format_count(count: usize) -> String {
     if count >= 1_000_000_000 {
         let val = count as f64 / 1_000_000_000.0;
         if val >= 10.0 {
-            format!("{}B", val as u64)
+            format!("{}Bn", val as u64)
         } else {
-            format!("{:.1}B", val)
+            format!("{:.1}Bn", val)
         }
     } else if count >= 1_000_000 {
         let val = count as f64 / 1_000_000.0;
