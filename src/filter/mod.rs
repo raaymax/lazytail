@@ -1,5 +1,6 @@
 pub mod cancel;
 pub mod engine;
+pub mod orchestrator;
 #[allow(dead_code)]
 pub mod parallel_engine;
 pub mod query;

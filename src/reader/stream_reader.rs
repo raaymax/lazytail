@@ -1,4 +1,4 @@
-use super::LogReader;
+use super::{LogReader, StreamableReader};
 use anyhow::Result;
 
 /// In-memory reader for non-seekable streams (pipes, process substitution, etc.)
@@ -48,7 +48,9 @@ impl LogReader for StreamReader {
         // Just return Ok to avoid errors
         Ok(())
     }
+}
 
+impl StreamableReader for StreamReader {
     fn append_lines(&mut self, lines: Vec<String>) {
         self.lines.extend(lines);
     }
