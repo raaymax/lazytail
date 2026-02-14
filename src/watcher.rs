@@ -96,7 +96,11 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let watcher = FileWatcher::new(temp_file.path()).unwrap();
 
-        // Should return None immediately with no events
+        // Drain any spurious initial events (macOS FSEvents may fire on watcher creation)
+        thread::sleep(Duration::from_millis(100));
+        while watcher.try_recv().is_some() {}
+
+        // Should return None when no new events
         assert!(watcher.try_recv().is_none());
     }
 
