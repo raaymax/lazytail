@@ -308,8 +308,19 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
     ) -> String {
+        use lazytail::index::reader::IndexReader;
+
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
+
+        // Try index-accelerated path
+        let bitmap = query.index_mask().and_then(|(mask, want)| {
+            let reader = IndexReader::open(path)?;
+            if reader.is_empty() {
+                return None;
+            }
+            Some(reader.candidate_bitmap(mask, want, reader.len()))
+        });
 
         let query_filter = match QueryFilter::new(query) {
             Ok(f) => f,
@@ -318,14 +329,36 @@ impl LazyTailMcp {
 
         let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
-        let rx = match streaming_filter::run_streaming_filter(
-            path.to_path_buf(),
-            filter,
-            CancelToken::new(),
-        ) {
-            Ok(rx) => rx,
-            Err(e) => {
-                return error_response(format!("Failed to search file '{}': {}", path.display(), e))
+        let rx = if let Some(bitmap) = bitmap {
+            match streaming_filter::run_streaming_filter_indexed(
+                path.to_path_buf(),
+                filter,
+                bitmap,
+                CancelToken::new(),
+            ) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    return error_response(format!(
+                        "Failed to search file '{}': {}",
+                        path.display(),
+                        e
+                    ))
+                }
+            }
+        } else {
+            match streaming_filter::run_streaming_filter(
+                path.to_path_buf(),
+                filter,
+                CancelToken::new(),
+            ) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    return error_response(format!(
+                        "Failed to search file '{}': {}",
+                        path.display(),
+                        e
+                    ))
+                }
             }
         };
 
