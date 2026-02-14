@@ -29,9 +29,17 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 const INDEX_HTML: &str = include_str!("index.html");
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const MAX_LINES_PER_REQUEST: usize = 5_000;
-const MAX_REQUEST_BODY_SIZE: usize = 1 * 1024 * 1024;
+const MAX_REQUEST_BODY_SIZE: usize = 1024 * 1024;
 const TICK_INTERVAL_MS: u64 = 150;
 const EVENTS_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
+
+type InitialTabsBuild = (
+    Vec<TabState>,
+    Option<DirectoryWatcher>,
+    Option<SourceLocation>,
+    Option<PathBuf>,
+    Option<PathBuf>,
+);
 
 static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
@@ -548,17 +556,7 @@ pub fn run(args: WebArgs) -> Result<(), i32> {
     Ok(())
 }
 
-fn build_initial_tabs(
-    files: &[PathBuf],
-    watch: bool,
-    verbose: bool,
-) -> Result<(
-    Vec<TabState>,
-    Option<DirectoryWatcher>,
-    Option<SourceLocation>,
-    Option<PathBuf>,
-    Option<PathBuf>,
-)> {
+fn build_initial_tabs(files: &[PathBuf], watch: bool, verbose: bool) -> Result<InitialTabsBuild> {
     let (discovery, searched_paths) = config::discovery::discover_verbose();
 
     if verbose {
