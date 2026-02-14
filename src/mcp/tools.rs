@@ -16,6 +16,8 @@ use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
+use crate::index::checkpoint::CheckpointReader;
+use crate::index::meta::{ColumnBit, IndexMeta};
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
 use memchr::memchr_iter;
@@ -86,6 +88,15 @@ fn format_search(resp: &SearchResponse, output: OutputFormat) -> String {
 fn format_context(resp: &GetContextResponse, output: OutputFormat) -> String {
     match output {
         OutputFormat::Text => format::format_context_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
+}
+
+/// Format a GetStatsResponse according to the requested output format.
+fn format_stats(resp: &GetStatsResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format::format_stats_text(resp),
         OutputFormat::Json => serde_json::to_string_pretty(resp)
             .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
     }
@@ -369,6 +380,70 @@ impl LazyTailMcp {
         }
 
         format_search(&response, output)
+    }
+
+    pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
+        let idx_dir = source::index_dir_for_log(path);
+        let meta_path = idx_dir.join("meta");
+
+        if !meta_path.exists() {
+            let response = GetStatsResponse {
+                source: source_name.to_string(),
+                indexed_lines: 0,
+                log_file_size: 0,
+                has_index: false,
+                severity_counts: None,
+                columns: Vec::new(),
+            };
+            return format_stats(&response, output);
+        }
+
+        let meta = match IndexMeta::read_from(&meta_path) {
+            Ok(m) => m,
+            Err(e) => return error_response(format!("Failed to read index meta: {}", e)),
+        };
+
+        let mut columns = Vec::new();
+        let column_names = [
+            (ColumnBit::Offsets, "offsets"),
+            (ColumnBit::Lengths, "lengths"),
+            (ColumnBit::Time, "time"),
+            (ColumnBit::Flags, "flags"),
+            (ColumnBit::Checkpoints, "checkpoints"),
+        ];
+        for (bit, name) in &column_names {
+            if meta.has_column(*bit) {
+                columns.push(name.to_string());
+            }
+        }
+
+        let severity_counts = if meta.has_column(ColumnBit::Checkpoints) {
+            CheckpointReader::open(idx_dir.join("checkpoints"))
+                .ok()
+                .and_then(|cr| cr.last())
+                .map(|cp| SeverityCountsInfo {
+                    unknown: cp.severity_counts.unknown,
+                    trace: cp.severity_counts.trace,
+                    debug: cp.severity_counts.debug,
+                    info: cp.severity_counts.info,
+                    warn: cp.severity_counts.warn,
+                    error: cp.severity_counts.error,
+                    fatal: cp.severity_counts.fatal,
+                })
+        } else {
+            None
+        };
+
+        let response = GetStatsResponse {
+            source: source_name.to_string(),
+            indexed_lines: meta.entry_count,
+            log_file_size: meta.log_file_size,
+            has_index: true,
+            severity_counts,
+            columns,
+        };
+
+        format_stats(&response, output)
     }
 
     /// Fetch line content and context for search matches using a single-pass mmap scan.
@@ -676,6 +751,18 @@ impl LazyTailMcp {
         serde_json::to_string_pretty(&response)
             .unwrap_or_else(|e| format!("Error serializing response: {}", e))
     }
+
+    /// Get index statistics for a lazytail source.
+    #[tool(
+        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, and severity breakdown (from checkpoint data). Useful for understanding log composition before searching. Pass a source name from list_sources."
+    )]
+    fn get_stats(&self, #[tool(aggr)] req: GetStatsRequest) -> String {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::get_stats_impl(&path, &req.source, req.output)
+    }
 }
 
 // Generate the tool_box function
@@ -684,7 +771,8 @@ tool_box!(LazyTailMcp {
     get_tail,
     search,
     get_context,
-    list_sources
+    list_sources,
+    get_stats
 });
 
 impl ServerHandler for LazyTailMcp {
@@ -1382,5 +1470,70 @@ plain line with no escapes\n\
 
         assert_eq!(req.pattern, "");
         assert!(req.query.is_some());
+    }
+
+    // -- get_stats tests --
+
+    #[test]
+    fn get_stats_no_index() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "just a log line").unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_stats_impl(f.path(), "test", OutputFormat::Json);
+        let resp: GetStatsResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.source, "test");
+        assert!(!resp.has_index);
+        assert_eq!(resp.indexed_lines, 0);
+        assert!(resp.severity_counts.is_none());
+        assert!(resp.columns.is_empty());
+    }
+
+    #[test]
+    fn get_stats_with_index() {
+        use crate::index::builder::IndexBuilder;
+
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "2024-01-01 INFO server started").unwrap();
+        writeln!(f, "2024-01-01 ERROR connection failed").unwrap();
+        writeln!(f, "2024-01-01 WARN disk space low").unwrap();
+        f.flush().unwrap();
+
+        let idx_dir = tempfile::tempdir().unwrap();
+        IndexBuilder::new().build(f.path(), idx_dir.path()).unwrap();
+
+        // Create a symlink-like setup: the index dir must be at path.with_extension("idx")
+        // Instead, use a temp file whose .idx/ sibling we control
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.log");
+        std::fs::copy(f.path(), &log_path).unwrap();
+        let real_idx_dir = dir.path().join("test.idx");
+        std::fs::create_dir_all(&real_idx_dir).unwrap();
+
+        // Copy index files
+        for entry in std::fs::read_dir(idx_dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), real_idx_dir.join(entry.file_name())).unwrap();
+        }
+
+        let result = LazyTailMcp::get_stats_impl(&log_path, "test", OutputFormat::Json);
+        let resp: GetStatsResponse = serde_json::from_str(&result).unwrap();
+
+        assert!(resp.has_index);
+        assert_eq!(resp.indexed_lines, 3);
+        assert!(!resp.columns.is_empty());
+        assert!(resp.columns.contains(&"flags".to_string()));
+    }
+
+    #[test]
+    fn get_stats_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "test").unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_stats_impl(f.path(), "myapp", OutputFormat::Text);
+        assert!(result.contains("--- source: myapp"));
+        assert!(result.contains("--- has_index: false"));
     }
 }

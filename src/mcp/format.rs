@@ -9,7 +9,7 @@
 
 use std::fmt::Write;
 
-use super::types::{GetContextResponse, GetLinesResponse, SearchResponse};
+use super::types::{GetContextResponse, GetLinesResponse, GetStatsResponse, SearchResponse};
 
 /// Format a GetLinesResponse (used by get_lines and get_tail) as plain text.
 pub fn format_lines_text(resp: &GetLinesResponse) -> String {
@@ -74,6 +74,30 @@ pub fn format_context_text(resp: &GetContextResponse) -> String {
 
     for line in &resp.after_lines {
         writeln!(out, "  {}|{}", line.line_number, line.content).unwrap();
+    }
+
+    out
+}
+
+/// Format a GetStatsResponse as plain text.
+pub fn format_stats_text(resp: &GetStatsResponse) -> String {
+    let mut out = String::with_capacity(256);
+    writeln!(out, "--- source: {}", resp.source).unwrap();
+    writeln!(out, "--- has_index: {}", resp.has_index).unwrap();
+    writeln!(out, "--- indexed_lines: {}", resp.indexed_lines).unwrap();
+    writeln!(out, "--- log_file_size: {}", resp.log_file_size).unwrap();
+    writeln!(out, "--- columns: {}", resp.columns.join(", ")).unwrap();
+
+    if let Some(ref counts) = resp.severity_counts {
+        out.push('\n');
+        writeln!(out, "severity_counts:").unwrap();
+        writeln!(out, "  fatal: {}", counts.fatal).unwrap();
+        writeln!(out, "  error: {}", counts.error).unwrap();
+        writeln!(out, "  warn: {}", counts.warn).unwrap();
+        writeln!(out, "  info: {}", counts.info).unwrap();
+        writeln!(out, "  debug: {}", counts.debug).unwrap();
+        writeln!(out, "  trace: {}", counts.trace).unwrap();
+        writeln!(out, "  unknown: {}", counts.unknown).unwrap();
     }
 
     out
