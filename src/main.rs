@@ -8,7 +8,6 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
-#[allow(dead_code)]
 mod index;
 #[cfg(feature = "mcp")]
 mod mcp;
@@ -245,6 +244,16 @@ fn main() -> Result<()> {
         }
     }
 
+    // Build columnar indexes for file tabs that don't have one yet
+    for tab in &tabs {
+        if let Some(path) = tab.file_path() {
+            let idx_dir = source::index_dir_for_log(path);
+            if !idx_dir.join("meta").exists() {
+                let _ = index::builder::IndexBuilder::new().build(path, &idx_dir);
+            }
+        }
+    }
+
     // Log config errors to stderr (debug source is a future enhancement)
     for err in &config_errors {
         eprintln!("[config error] {}", err);
@@ -292,6 +301,9 @@ fn run_discovery_mode(
 
     // Discover existing sources from both project and global directories
     let sources = discover_sources_for_context(discovery)?;
+
+    // Build columnar indexes for sources that don't have one yet
+    source::build_missing_indexes(&sources);
 
     let watch = !no_watch;
 

@@ -16,7 +16,7 @@ use super::meta::{ColumnBit, IndexMeta};
 
 const BATCH: usize = 1024;
 
-fn now_millis() -> u64 {
+pub(crate) fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -55,6 +55,7 @@ impl IndexBuilder {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_checkpoint_interval(mut self, interval: u16) -> Self {
         self.checkpoint_interval = interval;
         self
@@ -262,6 +263,7 @@ impl LineIndexer {
         })
     }
 
+    #[allow(dead_code)]
     pub fn resume(index_dir: &Path) -> Result<Self> {
         let meta = IndexMeta::read_from(index_dir.join("meta"))?;
 

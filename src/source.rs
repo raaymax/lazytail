@@ -12,6 +12,12 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+/// Derive the index directory path for a given log file.
+/// e.g., `/path/to/myapp.log` → `/path/to/myapp.idx/`
+pub fn index_dir_for_log(log_path: &Path) -> PathBuf {
+    log_path.with_extension("idx")
+}
+
 #[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 
@@ -488,6 +494,20 @@ pub fn resolve_source_for_context(name: &str, discovery: &DiscoveryResult) -> Re
     // Fall back to global data directory
     let data = data_dir().context("Could not determine data directory")?;
     resolve_source_in(name, &data)
+}
+
+/// Build columnar indexes for discovered sources that don't have one.
+pub fn build_missing_indexes(sources: &[DiscoveredSource]) {
+    use crate::index::builder::IndexBuilder;
+    for source in sources {
+        let idx_dir = index_dir_for_log(&source.log_path);
+        if idx_dir.join("meta").exists() {
+            continue;
+        }
+        if let Err(e) = IndexBuilder::new().build(&source.log_path, &idx_dir) {
+            eprintln!("Warning: failed to build index for {}: {}", source.name, e);
+        }
+    }
 }
 
 /// Validate a source name for use in capture mode.

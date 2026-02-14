@@ -124,6 +124,11 @@ impl TabState {
         self.expansion.expanded_lines.contains(&file_line_number)
     }
 
+    /// Get the file path for this tab (None for stdin/pipe tabs).
+    pub fn file_path(&self) -> Option<&std::path::Path> {
+        self.source_path.as_deref()
+    }
+
     /// Get the source type for this tab (ProjectSource, GlobalSource, Global, File, or Pipe)
     pub fn source_type(&self) -> SourceType {
         // Config source type takes precedence

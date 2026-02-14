@@ -11,8 +11,8 @@
 - [x] LineIndexer capture-time indexing (builder.rs)
 
 ## Remaining Integration Tasks
-- [ ] Wire LineIndexer into capture.rs (capture mode -n flag)
-- [ ] Wire IndexBuilder into source discovery (build index for existing files)
+- [x] Wire LineIndexer into capture.rs (capture mode -n flag)
+- [x] Wire IndexBuilder into source discovery (build index for existing files)
 - [ ] Add index-aware LogReader (read lines via offset column instead of sparse index)
 - [ ] TUI: severity-based line coloring from flags column
 - [ ] TUI: severity histogram from checkpoint counts
