@@ -1,4 +1,5 @@
 use crate::app::{App, FilterState, InputMode, SourceType, TreeSelection, ViewMode};
+use crate::index::flags::Severity;
 use crate::source::SourceStatus;
 use crate::tab::TabState;
 use anyhow::Result;
@@ -14,12 +15,25 @@ use unicode_width::UnicodeWidthStr;
 // UI Style Constants
 const SELECTED_BG: Color = Color::DarkGray;
 const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
+const SEVERITY_WARN_BG: Color = Color::Rgb(50, 40, 0);
+const SEVERITY_ERROR_BG: Color = Color::Rgb(55, 10, 10);
+const SEVERITY_FATAL_BG: Color = Color::Rgb(75, 0, 15);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 const TAB_SIZE: usize = 4;
 
 // Help overlay dimensions (as percentage of screen)
 const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
 const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
+
+/// Map severity to a subtle background color for line highlighting.
+fn severity_bg(severity: Severity) -> Option<Color> {
+    match severity {
+        Severity::Warn => Some(SEVERITY_WARN_BG),
+        Severity::Error => Some(SEVERITY_ERROR_BG),
+        Severity::Fatal => Some(SEVERITY_FATAL_BG),
+        _ => None,
+    }
+}
 
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
 fn apply_selection_style(style: Style) -> Style {
@@ -433,9 +447,10 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
     let prefix_width = LINE_PREFIX_WIDTH;
 
-    // Get reader access and collect expanded_lines snapshot
+    // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.reader.lock().unwrap();
     let expanded_lines = tab.expansion.expanded_lines.clone();
+    let index_reader = tab.index_reader.as_ref();
 
     // Fetch the lines to display
     let mut items = Vec::new();
@@ -497,10 +512,19 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
                     }
                 }
 
-                // Apply selection background if this is the selected line
+                // Apply line styling: selection takes priority, then severity background
                 if is_selected {
                     for span in &mut final_line.spans {
                         span.style = apply_selection_style(span.style);
+                    }
+                } else if let Some(bg) = index_reader
+                    .map(|ir| ir.severity(line_number))
+                    .and_then(severity_bg)
+                {
+                    for span in &mut final_line.spans {
+                        if span.style.bg.is_none() {
+                            span.style = span.style.bg(bg);
+                        }
                     }
                 }
 

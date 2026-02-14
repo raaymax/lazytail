@@ -3,6 +3,7 @@ use crate::config;
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
+use crate::index::reader::IndexReader;
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
@@ -115,6 +116,8 @@ pub struct TabState {
     pub disabled: bool,
     /// File size in bytes (None for stdin/pipes without a file path)
     pub file_size: Option<u64>,
+    /// Columnar index reader for severity coloring and stats (None if no index)
+    pub index_reader: Option<IndexReader>,
 }
 
 impl TabState {
@@ -174,6 +177,7 @@ impl TabState {
             let total_lines = file_reader.total_lines();
             let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
+            let index_reader = IndexReader::open(&path);
 
             Ok(Self {
                 name,
@@ -195,6 +199,7 @@ impl TabState {
                 config_source_type: None,
                 disabled: false,
                 file_size,
+                index_reader,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -226,6 +231,7 @@ impl TabState {
                 config_source_type: None,
                 disabled: false,
                 file_size: None,
+                index_reader: None,
             })
         }
     }
@@ -260,6 +266,7 @@ impl TabState {
             config_source_type: None,
             disabled: false,
             file_size: None,
+            index_reader: None,
         })
     }
 
@@ -276,6 +283,7 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
+        let index_reader = IndexReader::open(&source.log_path);
 
         Ok(Self {
             name: source.name,
@@ -300,6 +308,7 @@ impl TabState {
             },
             disabled: false,
             file_size,
+            index_reader,
         })
     }
 
@@ -329,6 +338,7 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
+        let index_reader = IndexReader::open(&source.path);
 
         Ok(Self {
             name: source.name.clone(),
@@ -350,6 +360,7 @@ impl TabState {
             config_source_type: Some(source_type),
             disabled: false,
             file_size,
+            index_reader,
         })
     }
 
@@ -379,6 +390,7 @@ impl TabState {
             config_source_type: Some(source_type),
             disabled: true,
             file_size: None,
+            index_reader: None,
         })
     }
 
