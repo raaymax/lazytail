@@ -21,20 +21,20 @@ pub trait LogReader {
 
     /// Reload the source (e.g., for file watching)
     fn reload(&mut self) -> Result<()>;
+}
 
-    /// Append lines for incremental loading (only supported by StreamReader)
-    fn append_lines(&mut self, _lines: Vec<String>) {
-        // Default: no-op for readers that don't support incremental loading
-    }
+/// Extension trait for stream-based readers that support incremental loading.
+///
+/// Only implemented by `StreamReader` — `FileReader` does not implement this.
+/// Tab stores an optional `Box<dyn StreamableReader>` for stream-specific operations.
+pub trait StreamableReader: LogReader + Send {
+    /// Append lines for incremental loading
+    fn append_lines(&mut self, lines: Vec<String>);
 
-    /// Mark stream as complete (only supported by StreamReader)
-    fn mark_complete(&mut self) {
-        // Default: no-op for readers that don't support incremental loading
-    }
+    /// Mark the stream as complete (no more data will arrive)
+    fn mark_complete(&mut self);
 
-    /// Check if this is a streaming reader that's still loading
+    /// Check if this stream is still loading
     #[allow(dead_code)]
-    fn is_loading(&self) -> bool {
-        false // Default: not a streaming reader
-    }
+    fn is_loading(&self) -> bool;
 }

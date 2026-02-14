@@ -3,7 +3,9 @@ use crate::config;
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
-use crate::reader::{file_reader::FileReader, stream_reader::StreamReader, LogReader};
+use crate::reader::{
+    file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
+};
 use crate::source::{
     check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
 };
@@ -100,6 +102,9 @@ pub struct TabState {
     pub filter: FilterConfig,
     /// Line expansion state
     pub expansion: ExpansionState,
+    /// Stream writer handle for stream-specific operations (append, mark_complete).
+    /// Only set for stdin/pipe tabs. Uses `StreamableReader` trait (ISP).
+    stream_writer: Option<Arc<Mutex<dyn StreamableReader>>>,
     /// Receiver for background stream loading (pipes/stdin)
     pub stream_receiver: Option<Receiver<StreamMessage>>,
     /// Source status for discovered sources (Active/Ended)
@@ -176,6 +181,7 @@ impl TabState {
                 viewport: Viewport::new(selected_line),
                 filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
+                stream_writer: None,
                 stream_receiver: None,
                 source_status: None,
                 config_source_type: None,
@@ -183,8 +189,9 @@ impl TabState {
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
-            let stream_reader = StreamReader::new_incremental();
-            let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
+            let stream_reader = Arc::new(Mutex::new(StreamReader::new_incremental()));
+            let reader: Arc<Mutex<dyn LogReader + Send>> = stream_reader.clone();
+            let stream_writer: Arc<Mutex<dyn StreamableReader>> = stream_reader;
 
             // Spawn background thread to read from pipe
             let (tx, rx) = mpsc::channel();
@@ -204,6 +211,7 @@ impl TabState {
                 viewport: Viewport::new(0),
                 filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
+                stream_writer: Some(stream_writer),
                 stream_receiver: Some(rx),
                 source_status: None,
                 config_source_type: None,
@@ -214,8 +222,9 @@ impl TabState {
 
     /// Create a new tab from stdin (with background loading)
     pub fn from_stdin() -> Result<Self> {
-        let stream_reader = StreamReader::new_incremental();
-        let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
+        let stream_reader = Arc::new(Mutex::new(StreamReader::new_incremental()));
+        let reader: Arc<Mutex<dyn LogReader + Send>> = stream_reader.clone();
+        let stream_writer: Arc<Mutex<dyn StreamableReader>> = stream_reader;
 
         // Spawn background thread to read from stdin
         let (tx, rx) = mpsc::channel();
@@ -235,6 +244,7 @@ impl TabState {
             viewport: Viewport::new(0),
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
+            stream_writer: Some(stream_writer),
             stream_receiver: Some(rx),
             source_status: None,
             config_source_type: None,
@@ -269,6 +279,7 @@ impl TabState {
             viewport: Viewport::new(selected_line),
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
+            stream_writer: None,
             stream_receiver: None,
             source_status: Some(source.status),
             config_source_type: match source.location {
@@ -319,6 +330,7 @@ impl TabState {
             viewport: Viewport::new(selected_line),
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
+            stream_writer: None,
             stream_receiver: None,
             source_status: None,
             config_source_type: Some(source_type),
@@ -328,7 +340,7 @@ impl TabState {
 
     /// Create a disabled tab for a missing source (shown grayed out in UI).
     fn disabled_source(name: String, path: PathBuf, source_type: SourceType) -> Result<Self> {
-        // Use an empty stream reader as a placeholder
+        // Use an empty stream reader as a placeholder (no stream_writer needed)
         let stream_reader = StreamReader::new_incremental();
         let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
@@ -346,6 +358,7 @@ impl TabState {
             viewport: Viewport::new(0),
             filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
+            stream_writer: None,
             stream_receiver: None,
             source_status: None,
             config_source_type: Some(source_type),
@@ -380,10 +393,10 @@ impl TabState {
         let old_total = self.total_lines;
         let new_lines_count = lines.len();
 
-        // Add lines to the reader
-        {
-            let mut reader = self.reader.lock().unwrap();
-            reader.append_lines(lines);
+        // Add lines via the StreamableReader handle
+        if let Some(ref writer) = self.stream_writer {
+            let mut writer = writer.lock().unwrap();
+            writer.append_lines(lines);
         }
 
         // Update total lines
@@ -403,9 +416,9 @@ impl TabState {
 
     /// Mark stream loading as complete
     pub fn mark_stream_complete(&mut self) {
-        {
-            let mut reader = self.reader.lock().unwrap();
-            reader.mark_complete();
+        if let Some(ref writer) = self.stream_writer {
+            let mut writer = writer.lock().unwrap();
+            writer.mark_complete();
         }
         // Clear the receiver since we won't need it anymore
         self.stream_receiver = None;
@@ -651,6 +664,65 @@ impl TabState {
     /// Collapse all expanded lines
     pub fn collapse_all(&mut self) {
         self.expansion.expanded_lines.clear();
+    }
+
+    /// Handle a file modification event (works for both active and inactive tabs).
+    ///
+    /// Updates total_lines, line_indices, and triggers incremental filtering if needed.
+    pub fn apply_file_modification(&mut self, new_total: usize) {
+        self.total_lines = new_total;
+
+        if self.mode == ViewMode::Normal {
+            self.line_indices = (0..new_total).collect();
+        }
+
+        // If tab has an active filter, trigger incremental filtering
+        if let Some(pattern) = self.filter.pattern.clone() {
+            if new_total > self.filter.last_filtered_line {
+                let mode = self.filter.mode;
+                let range = Some((self.filter.last_filtered_line, new_total));
+                crate::filter::orchestrator::FilterOrchestrator::trigger(
+                    self, pattern, mode, range,
+                );
+            }
+        }
+    }
+
+    /// Apply a filter event directly to this tab (works for both active and inactive tabs).
+    ///
+    /// Returns `true` if the filter operation completed (receiver should be cleared).
+    pub fn apply_filter_event(&mut self, event: &crate::event::AppEvent) -> bool {
+        use crate::event::AppEvent;
+
+        match event {
+            AppEvent::FilterProgress(lines_processed) => {
+                self.filter.state = FilterState::Processing {
+                    lines_processed: *lines_processed,
+                };
+                false
+            }
+            AppEvent::FilterComplete {
+                indices,
+                incremental,
+            } => {
+                if *incremental {
+                    self.append_filter_results(indices.clone());
+                } else {
+                    let pattern = self.filter.pattern.clone().unwrap_or_default();
+                    self.apply_filter(indices.clone(), pattern);
+                }
+                if self.follow_mode {
+                    self.jump_to_end();
+                }
+                true
+            }
+            AppEvent::FilterError(err) => {
+                eprintln!("Filter error: {}", err);
+                self.filter.state = FilterState::Inactive;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
