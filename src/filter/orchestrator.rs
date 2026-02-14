@@ -38,11 +38,46 @@ impl FilterOrchestrator {
 
         // Check for query syntax (json | ... or logfmt | ...)
         if query::is_query_syntax(&pattern) {
-            // Parse and build query filter
             let filter_query = match query::parse_query(&pattern) {
                 Ok(q) => q,
                 Err(_) => return,
             };
+
+            // Try index-accelerated path: full filter + file source + index available
+            if range.is_none() {
+                if let Some(path) = &tab.source_path {
+                    if let Some((mask, want)) = filter_query.index_mask() {
+                        if let Some(ref index_reader) = tab.index_reader {
+                            let bitmap =
+                                index_reader.candidate_bitmap(mask, want, index_reader.len());
+
+                            let query_filter = match query::QueryFilter::new(filter_query) {
+                                Ok(f) => f,
+                                Err(_) => return,
+                            };
+                            let filter: Arc<dyn Filter> = Arc::new(query_filter);
+
+                            let cancel = CancelToken::new();
+                            tab.filter.cancel_token = Some(cancel.clone());
+                            tab.filter.needs_clear = true;
+                            tab.filter.state = FilterState::Processing { lines_processed: 0 };
+                            tab.filter.is_incremental = false;
+
+                            if let Ok(rx) = streaming_filter::run_streaming_filter_indexed(
+                                path.clone(),
+                                filter,
+                                bitmap,
+                                cancel,
+                            ) {
+                                tab.filter.receiver = Some(rx);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Fallback: no index or incremental — use standard dispatch
             let query_filter = match query::QueryFilter::new(filter_query) {
                 Ok(f) => f,
                 Err(_) => return,
