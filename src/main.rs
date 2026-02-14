@@ -8,6 +8,8 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
+#[allow(dead_code)]
+mod index;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
