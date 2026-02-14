@@ -18,18 +18,20 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 const INDEX_HTML: &str = include_str!("index.html");
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const MAX_LINES_PER_REQUEST: usize = 5_000;
+const MAX_REQUEST_BODY_SIZE: usize = 1 * 1024 * 1024;
 const TICK_INTERVAL_MS: u64 = 150;
+const EVENTS_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
 
 static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
@@ -139,34 +141,25 @@ struct CloseSourceRequest {
     delete_ended: bool,
 }
 
-struct EventHub {
-    clients: Mutex<Vec<Sender<u64>>>,
+#[derive(Debug)]
+enum BodyReadError {
+    TooLarge,
+    Invalid(String),
 }
 
-impl EventHub {
-    fn new() -> Self {
-        Self {
-            clients: Mutex::new(Vec::new()),
+impl std::fmt::Display for BodyReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BodyReadError::TooLarge => write!(f, "request body too large"),
+            BodyReadError::Invalid(msg) => f.write_str(msg),
         }
     }
+}
 
-    fn subscribe(&self) -> Receiver<u64> {
-        let (tx, rx) = mpsc::channel();
-        let mut clients = match self.clients.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        clients.push(tx);
-        rx
-    }
-
-    fn broadcast(&self, revision: u64) {
-        let mut clients = match self.clients.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        clients.retain(|tx| tx.send(revision).is_ok());
-    }
+struct PendingEventRequest {
+    request: tiny_http::Request,
+    since: u64,
+    started_at: Instant,
 }
 
 struct WebState {
@@ -177,7 +170,7 @@ struct WebState {
     global_data_dir: Option<PathBuf>,
     watch_enabled: bool,
     revision: u64,
-    events: Arc<EventHub>,
+    pending_event_requests: Vec<PendingEventRequest>,
 }
 
 impl WebState {
@@ -188,7 +181,6 @@ impl WebState {
         project_data_dir: Option<PathBuf>,
         global_data_dir: Option<PathBuf>,
         watch_enabled: bool,
-        events: Arc<EventHub>,
     ) -> Self {
         Self {
             tabs,
@@ -198,13 +190,12 @@ impl WebState {
             global_data_dir,
             watch_enabled,
             revision: 1,
-            events,
+            pending_event_requests: Vec::new(),
         }
     }
 
     fn bump_revision(&mut self) {
         self.revision = self.revision.saturating_add(1);
-        self.events.broadcast(self.revision);
     }
 
     fn tick(&mut self) {
@@ -214,10 +205,36 @@ impl WebState {
         changed |= self.process_file_events();
         changed |= self.process_filter_progress();
         changed |= self.refresh_source_statuses();
+        self.process_pending_event_requests();
 
         if changed {
             self.bump_revision();
+            self.process_pending_event_requests();
         }
+    }
+
+    fn process_pending_event_requests(&mut self) {
+        if self.pending_event_requests.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        let mut remaining = Vec::with_capacity(self.pending_event_requests.len());
+
+        for pending in self.pending_event_requests.drain(..) {
+            if self.revision > pending.since {
+                respond_events(pending.request, Some(self.revision));
+                continue;
+            }
+
+            if now.duration_since(pending.started_at) >= EVENTS_WAIT_TIMEOUT {
+                respond_events(pending.request, None);
+            } else {
+                remaining.push(pending);
+            }
+        }
+
+        self.pending_event_requests = remaining;
     }
 
     fn process_directory_events(&mut self) -> bool {
@@ -478,8 +495,6 @@ pub fn run(args: WebArgs) -> Result<(), i32> {
         return Err(1);
     }
 
-    let event_hub = Arc::new(EventHub::new());
-
     let shared = Arc::new(Mutex::new(WebState::new(
         tabs,
         dir_watcher,
@@ -487,7 +502,6 @@ pub fn run(args: WebArgs) -> Result<(), i32> {
         project_data_dir,
         global_data_dir,
         watch,
-        event_hub.clone(),
     )));
 
     let bind_addr = format!("{}:{}", args.host, args.port);
@@ -519,7 +533,7 @@ pub fn run(args: WebArgs) -> Result<(), i32> {
 
     while !shutdown_flag.load(Ordering::SeqCst) {
         match server.recv_timeout(Duration::from_millis(TICK_INTERVAL_MS)) {
-            Ok(Some(request)) => handle_request(request, &shared, &event_hub),
+            Ok(Some(request)) => handle_request(request, &shared),
             Ok(None) => {
                 let mut state = lock_state(&shared);
                 state.tick();
@@ -658,11 +672,7 @@ fn build_initial_tabs(
     ))
 }
 
-fn handle_request(
-    request: tiny_http::Request,
-    shared: &Arc<Mutex<WebState>>,
-    event_hub: &Arc<EventHub>,
-) {
+fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
     let mut request = request;
     let url = request.url().to_string();
     let (path, query) = split_url_and_query(&url);
@@ -686,13 +696,19 @@ fn handle_request(
         (&Method::Get, "/api/events") => {
             let since =
                 parse_u64_query(&query, "since").unwrap_or_else(|| read_last_event_id(&request));
-            let revision = {
-                let mut state = lock_state(shared);
-                state.tick();
-                state.revision
-            };
-            let rx = event_hub.subscribe();
-            spawn_sse_response(request, rx, revision, since);
+
+            let mut state = lock_state(shared);
+            state.tick();
+
+            if state.revision > since {
+                respond_events(request, Some(state.revision));
+            } else {
+                state.pending_event_requests.push(PendingEventRequest {
+                    request,
+                    since,
+                    started_at: Instant::now(),
+                });
+            }
             return;
         }
         (&Method::Get, "/api/lines") => {
@@ -757,7 +773,11 @@ fn handle_request(
         (&Method::Post, "/api/filter") => {
             let body = match read_body(&mut request) {
                 Ok(body) => body,
-                Err(err) => {
+                Err(BodyReadError::TooLarge) => {
+                    respond_json_error(request, 413, "Request body too large");
+                    return;
+                }
+                Err(BodyReadError::Invalid(err)) => {
                     respond_json_error(request, 400, format!("Invalid request body: {}", err));
                     return;
                 }
@@ -829,7 +849,11 @@ fn handle_request(
         (&Method::Post, "/api/filter/clear") => {
             let body = match read_body(&mut request) {
                 Ok(body) => body,
-                Err(err) => {
+                Err(BodyReadError::TooLarge) => {
+                    respond_json_error(request, 413, "Request body too large");
+                    return;
+                }
+                Err(BodyReadError::Invalid(err)) => {
                     respond_json_error(request, 400, format!("Invalid request body: {}", err));
                     return;
                 }
@@ -871,7 +895,11 @@ fn handle_request(
         (&Method::Post, "/api/follow") => {
             let body = match read_body(&mut request) {
                 Ok(body) => body,
-                Err(err) => {
+                Err(BodyReadError::TooLarge) => {
+                    respond_json_error(request, 413, "Request body too large");
+                    return;
+                }
+                Err(BodyReadError::Invalid(err)) => {
                     respond_json_error(request, 400, format!("Invalid request body: {}", err));
                     return;
                 }
@@ -912,7 +940,11 @@ fn handle_request(
         (&Method::Post, "/api/source/close") => {
             let body = match read_body(&mut request) {
                 Ok(body) => body,
-                Err(err) => {
+                Err(BodyReadError::TooLarge) => {
+                    respond_json_error(request, 413, "Request body too large");
+                    return;
+                }
+                Err(BodyReadError::Invalid(err)) => {
                     respond_json_error(request, 400, format!("Invalid request body: {}", err));
                     return;
                 }
@@ -1020,12 +1052,28 @@ fn read_last_event_id(request: &tiny_http::Request) -> u64 {
         .unwrap_or(0)
 }
 
-fn read_body(request: &mut tiny_http::Request) -> Result<String> {
+fn read_body(request: &mut tiny_http::Request) -> std::result::Result<String, BodyReadError> {
+    if let Some(content_length) = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Content-Length"))
+        .and_then(|h| h.value.as_str().parse::<u64>().ok())
+    {
+        if content_length > MAX_REQUEST_BODY_SIZE as u64 {
+            return Err(BodyReadError::TooLarge);
+        }
+    }
+
     let mut body = String::new();
-    request
-        .as_reader()
+    let mut reader = request.as_reader().take((MAX_REQUEST_BODY_SIZE as u64) + 1);
+    reader
         .read_to_string(&mut body)
-        .context("Failed to read request body")?;
+        .map_err(|err| BodyReadError::Invalid(err.to_string()))?;
+
+    if body.len() > MAX_REQUEST_BODY_SIZE {
+        return Err(BodyReadError::TooLarge);
+    }
+
     Ok(body)
 }
 
@@ -1064,43 +1112,31 @@ fn make_response(
     }
 }
 
-fn spawn_sse_response(request: tiny_http::Request, rx: Receiver<u64>, revision: u64, since: u64) {
-    thread::spawn(move || {
-        let next_revision = if revision > since {
-            Some(revision)
-        } else {
-            match rx.recv_timeout(Duration::from_secs(25)) {
-                Ok(next) => Some(next),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => None,
-            }
-        };
+fn respond_events(request: tiny_http::Request, next_revision: Option<u64>) {
+    let body = match next_revision {
+        Some(next) => format!(
+            "retry: 250\nid: {}\nevent: revision\ndata: {}\n\n",
+            next, next
+        ),
+        None => "retry: 250\n: keepalive\n\n".to_string(),
+    };
 
-        let body = match next_revision {
-            Some(next) => format!(
-                "retry: 250\nid: {}\nevent: revision\ndata: {}\n\n",
-                next, next
-            ),
-            None => "retry: 250\n: keepalive\n\n".to_string(),
-        };
+    let mut response = Response::from_string(body).with_status_code(StatusCode(200));
+    let mut headers = Vec::new();
+    if let Ok(header) = Header::from_bytes("Content-Type", "text/event-stream; charset=utf-8") {
+        headers.push(header);
+    }
+    if let Ok(header) = Header::from_bytes("Cache-Control", "no-cache") {
+        headers.push(header);
+    }
+    if let Ok(header) = Header::from_bytes("X-Accel-Buffering", "no") {
+        headers.push(header);
+    }
+    for header in headers {
+        response = response.with_header(header);
+    }
 
-        let mut response = Response::from_string(body).with_status_code(StatusCode(200));
-        let mut headers = Vec::new();
-        if let Ok(header) = Header::from_bytes("Content-Type", "text/event-stream; charset=utf-8") {
-            headers.push(header);
-        }
-        if let Ok(header) = Header::from_bytes("Cache-Control", "no-cache") {
-            headers.push(header);
-        }
-        if let Ok(header) = Header::from_bytes("X-Accel-Buffering", "no") {
-            headers.push(header);
-        }
-        for header in headers {
-            response = response.with_header(header);
-        }
-
-        let _ = request.respond(response);
-    });
+    let _ = request.respond(response);
 }
 
 fn to_json_string<T: Serialize>(value: &T) -> String {
