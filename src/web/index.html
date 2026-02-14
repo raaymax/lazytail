@@ -551,6 +551,7 @@
         { signal: controller.signal }
       );
       if (reqId !== state.linesReq) return;
+      if (state.selectedSource !== source.id) return;
 
       state.visibleRows = payload.rows || [];
       state.totalVisible = payload.total_visible || 0;
@@ -694,12 +695,16 @@
       body: JSON.stringify({ source: source.id, delete_ended: !!deleteEnded }),
     });
 
-    const currentId = state.selectedSource;
+    const removedIndex = source.id;
     await refreshSources();
-    if (state.selectedSource === currentId && state.sources.length > 0) {
-      state.selectedSource = state.sources[0].id;
+    if (state.sources.length === 0) {
+      state.selectedSource = null;
+      scheduleLinesRefresh(true);
+      return;
     }
-    scheduleLinesRefresh(true);
+
+    const nextIndex = Math.min(removedIndex, state.sources.length - 1);
+    selectSource(state.sources[nextIndex].id);
   }
 
   function selectRelativeSource(delta) {

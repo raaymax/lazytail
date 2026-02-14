@@ -30,6 +30,7 @@ const INDEX_HTML: &str = include_str!("index.html");
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const MAX_LINES_PER_REQUEST: usize = 5_000;
 const MAX_REQUEST_BODY_SIZE: usize = 1024 * 1024;
+const MAX_PENDING_EVENT_REQUESTS: usize = 256;
 const TICK_INTERVAL_MS: u64 = 150;
 const EVENTS_WAIT_TIMEOUT: Duration = Duration::from_secs(25);
 
@@ -697,9 +698,14 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
 
             let mut state = lock_state(shared);
             state.tick();
+            let revision = state.revision;
 
-            if state.revision > since {
-                respond_events(request, Some(state.revision));
+            if revision > since {
+                drop(state);
+                respond_events(request, Some(revision));
+            } else if state.pending_event_requests.len() >= MAX_PENDING_EVENT_REQUESTS {
+                drop(state);
+                respond_events_busy(request);
             } else {
                 state.pending_event_requests.push(PendingEventRequest {
                     request,
@@ -1134,6 +1140,18 @@ fn respond_events(request: tiny_http::Request, next_revision: Option<u64>) {
         response = response.with_header(header);
     }
 
+    let _ = request.respond(response);
+}
+
+fn respond_events_busy(request: tiny_http::Request) {
+    let mut response = make_response(
+        503,
+        "text/plain; charset=utf-8",
+        "Too many pending event requests".to_string(),
+    );
+    if let Ok(header) = Header::from_bytes("Retry-After", "1") {
+        response = response.with_header(header);
+    }
     let _ = request.respond(response);
 }
 
