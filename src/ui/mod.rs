@@ -124,10 +124,20 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 }
 
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
+    // Stats panel height: base 5 + 2 extra rows if severity data available
+    let has_severity = app
+        .active_tab()
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints())
+        .and_then(|cp| cp.last())
+        .is_some();
+    let stats_height = if has_severity { 7 } else { 5 };
+
     // Split side panel into sources list and stats
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(5)])
+        .constraints([Constraint::Min(3), Constraint::Length(stats_height)])
         .split(area);
 
     // Render sources list
@@ -416,6 +426,43 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::White),
             ),
         ]));
+    }
+
+    // Show severity histogram from checkpoint data
+    if let Some(counts) = tab
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints())
+        .and_then(|cp| cp.last())
+        .map(|cp| cp.severity_counts)
+    {
+        let mut sev_spans = Vec::new();
+        sev_spans.push(Span::raw(" "));
+        let mut first = true;
+        let entries: &[(u32, &str, Color)] = &[
+            (counts.fatal, "F", Color::Magenta),
+            (counts.error, "E", Color::Red),
+            (counts.warn, "W", Color::Yellow),
+            (counts.info, "I", Color::Green),
+            (counts.debug, "D", Color::Cyan),
+            (counts.trace, "T", Color::DarkGray),
+        ];
+        for &(count, label, color) in entries {
+            if count > 0 {
+                if !first {
+                    sev_spans.push(Span::raw(" "));
+                }
+                sev_spans.push(Span::styled(label, Style::default().fg(color)));
+                sev_spans.push(Span::styled(
+                    format!(":{}", format_count(count as usize)),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                first = false;
+            }
+        }
+        if !first {
+            stats_text.push(Line::from(sev_spans));
+        }
     }
 
     let stats =
