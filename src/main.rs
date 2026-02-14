@@ -17,6 +17,7 @@ mod tab;
 mod ui;
 mod viewport;
 mod watcher;
+mod web;
 
 use anyhow::{Context, Result};
 use app::{App, FilterState, SourceType, ViewMode};
@@ -113,6 +114,9 @@ fn main() -> Result<()> {
         return match command {
             cmd::Commands::Init(args) => cmd::init::run(args.force)
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
+            cmd::Commands::Web(args) => {
+                web::run(args).map_err(|code| anyhow::anyhow!("web failed with exit code {}", code))
+            }
             cmd::Commands::Config { action } => match action {
                 cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
                     anyhow::anyhow!("config validate failed with exit code {}", code)

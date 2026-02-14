@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LazyTail Web UI</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1c2029;
+      --border: #2a3140;
+      --text: #d8e0ef;
+      --muted: #96a1b8;
+      --accent: #67b3ff;
+      --ok: #5ac66f;
+      --warn: #f0bf5a;
+      --err: #ec6a5e;
+      --row-sel: #222a3a;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: "Iosevka Aile", "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --source-row-h: 34px;
+      --log-row-h: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      height: 100vh;
+      min-height: 0;
+      gap: 0;
+    }
+
+    .panel {
+      border-right: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--panel), #12151c);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 0;
+    }
+
+    .panel h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .source-viewport {
+      position: relative;
+      overflow: auto;
+      min-height: 0;
+    }
+
+    .source-spacer {
+      position: relative;
+      width: 100%;
+      height: 0;
+    }
+
+    .source-rows {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+    }
+
+    .source-row {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: var(--source-row-h);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .source-row:hover { background: rgba(255,255,255,0.04); }
+    .source-row.selected { background: var(--row-sel); outline: 1px solid #31405f; }
+    .source-row.disabled { opacity: 0.55; }
+
+    .source-main {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      min-width: 0;
+    }
+
+    .source-name {
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .source-meta {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .source-count {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+
+    .dot-active { background: var(--ok); }
+    .dot-ended { background: #6e7480; }
+
+    .panel-footer {
+      border-top: 1px solid var(--border);
+      padding: 10px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-height: 0;
+      background:
+        radial-gradient(circle at 95% 5%, rgba(103,179,255,0.10), transparent 28%),
+        linear-gradient(180deg, #11151d, #0d1016);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(23, 27, 36, 0.88);
+      backdrop-filter: blur(4px);
+      flex-wrap: wrap;
+    }
+
+    .title {
+      min-width: 180px;
+      font-size: 13px;
+      font-weight: 650;
+      color: var(--text);
+      margin-right: 8px;
+    }
+
+    .toolbar input[type="text"],
+    .toolbar select {
+      background: #11151d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 9px;
+      font-size: 13px;
+    }
+
+    #filterInput {
+      min-width: 260px;
+      flex: 1 1 320px;
+      font-family: var(--mono);
+    }
+
+    .toolbar button {
+      border: 1px solid var(--border);
+      background: #1a2230;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .toolbar button:hover { background: #223047; }
+    .toolbar label { font-size: 12px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+
+    .status {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(12, 15, 22, 0.9);
+      font-size: 12px;
+      color: var(--muted);
+      min-height: 36px;
+    }
+
+    #statusText { font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #errorText { color: var(--err); font-weight: 600; }
+
+    .log-viewport {
+      position: relative;
+      overflow: auto;
+      min-height: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: var(--log-row-h);
+      background: rgba(8, 10, 14, 0.75);
+    }
+
+    .log-spacer { position: relative; width: 100%; height: 0; }
+    .log-rows { position: absolute; top: 0; left: 0; right: 0; }
+
+    .log-row {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: var(--log-row-h);
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 0 12px;
+      white-space: nowrap;
+      border-bottom: 1px solid rgba(255,255,255,0.02);
+    }
+
+    .ln {
+      color: #8092b5;
+      text-align: right;
+      user-select: none;
+    }
+
+    .content {
+      color: #dae4ff;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: pre;
+    }
+
+    @media (max-width: 880px) {
+      .app { grid-template-columns: 220px 1fr; }
+      #filterInput { min-width: 160px; }
+      .log-row { grid-template-columns: 74px 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="panel">
+    <h1>Sources</h1>
+    <div class="source-viewport" id="sourceViewport">
+      <div class="source-spacer" id="sourceSpacer"></div>
+      <div class="source-rows" id="sourceRows"></div>
+    </div>
+    <div class="panel-footer" id="sourceFooter">Loading sources...</div>
+  </aside>
+
+  <section class="main">
+    <div class="toolbar">
+      <div class="title" id="selectedTitle">No source selected</div>
+      <input id="filterInput" type="text" placeholder="Type to filter (plain, regex, or query syntax: json | level == \"error\")">
+      <select id="modeSelect">
+        <option value="plain">Plain</option>
+        <option value="regex">Regex</option>
+      </select>
+      <label><input id="caseCheckbox" type="checkbox">Case</label>
+      <label><input id="followCheckbox" type="checkbox" checked>Follow</label>
+      <button id="clearBtn" type="button">Clear</button>
+      <button id="closeBtn" type="button">Close Tab</button>
+      <button id="deleteBtn" type="button">Delete Ended</button>
+    </div>
+
+    <div class="status">
+      <div id="statusText">Ready</div>
+      <div id="errorText"></div>
+    </div>
+
+    <div class="log-viewport" id="logViewport">
+      <div class="log-spacer" id="logSpacer"></div>
+      <div class="log-rows" id="logRows"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const SOURCE_ROW_HEIGHT = 34;
+  const LOG_ROW_HEIGHT = 22;
+  const OVERSCAN = 24;
+  const LOG_CHUNK_SIZE = 1200;
+  const LOG_CHUNK_COUNT = 3;
+
+  const sourceViewport = document.getElementById('sourceViewport');
+  const sourceSpacer = document.getElementById('sourceSpacer');
+  const sourceRows = document.getElementById('sourceRows');
+  const sourceFooter = document.getElementById('sourceFooter');
+
+  const logViewport = document.getElementById('logViewport');
+  const logSpacer = document.getElementById('logSpacer');
+  const logRows = document.getElementById('logRows');
+
+  const selectedTitle = document.getElementById('selectedTitle');
+  const statusText = document.getElementById('statusText');
+  const errorText = document.getElementById('errorText');
+
+  const filterInput = document.getElementById('filterInput');
+  const modeSelect = document.getElementById('modeSelect');
+  const caseCheckbox = document.getElementById('caseCheckbox');
+  const followCheckbox = document.getElementById('followCheckbox');
+  const clearBtn = document.getElementById('clearBtn');
+  const closeBtn = document.getElementById('closeBtn');
+  const deleteBtn = document.getElementById('deleteBtn');
+
+  const state = {
+    revision: 0,
+    sources: [],
+    selectedSource: null,
+    loadedWindow: { source: null, start: -1, end: -1, revision: -1 },
+    visibleRows: [],
+    totalVisible: 0,
+    totalLines: 0,
+    sourceReq: 0,
+    linesReq: 0,
+    filterDebounce: null,
+    eventLoopRunning: false,
+    eventAbort: null,
+    fallbackPollTimer: null,
+    refreshRaf: 0,
+    queuedForce: false,
+    linesInFlight: false,
+    linesQueued: false,
+    linesController: null,
+    syncScheduled: false,
+    syncInFlight: false,
+    syncQueued: false,
+    syncForce: false,
+  };
+
+  function setError(message) {
+    errorText.textContent = message || '';
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+    if (!res.ok) {
+      throw new Error(data.message || `Request failed (${res.status})`);
+    }
+    return data;
+  }
+
+  function selectedSourceObj() {
+    return state.sources.find(s => s.id === state.selectedSource) || null;
+  }
+
+  function sourceStatusLabel(source) {
+    const mode = source.filter_mode === 'regex' ? 'regex' : 'plain';
+    const caseLabel = source.case_sensitive ? 'Aa' : 'aa';
+    const statePart = source.filter_state.kind === 'processing'
+      ? `filtering ${source.filter_state.lines_processed}...`
+      : source.filter_state.kind === 'complete'
+        ? `${source.filter_state.matches} matches`
+        : 'idle';
+    return `${source.visible_lines}/${source.total_lines} | ${mode} ${caseLabel} | ${statePart}`;
+  }
+
+  function renderSourceVirtualList() {
+    const total = state.sources.length;
+    const viewportHeight = sourceViewport.clientHeight || 0;
+    const scrollTop = sourceViewport.scrollTop;
+    const start = Math.max(0, Math.floor(scrollTop / SOURCE_ROW_HEIGHT) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / SOURCE_ROW_HEIGHT) + OVERSCAN);
+
+    sourceSpacer.style.height = `${total * SOURCE_ROW_HEIGHT}px`;
+    sourceRows.innerHTML = '';
+
+    for (let i = start; i < end; i += 1) {
+      const source = state.sources[i];
+      const row = document.createElement('div');
+      row.className = 'source-row';
+      if (source.id === state.selectedSource) row.classList.add('selected');
+      if (source.disabled) row.classList.add('disabled');
+      row.style.transform = `translateY(${i * SOURCE_ROW_HEIGHT}px)`;
+
+      const statusDotClass = source.source_status === 'active' ? 'dot-active' : 'dot-ended';
+      const statusDot = source.source_status
+        ? `<span class="status-dot ${statusDotClass}"></span>`
+        : '';
+
+      row.innerHTML = `
+        <div class="source-main">
+          <div class="source-name">${statusDot}${escapeHtml(source.name)}</div>
+          <div class="source-meta">${escapeHtml(source.category)}</div>
+        </div>
+        <div class="source-count">${source.visible_lines}/${source.total_lines}</div>
+      `;
+
+      row.addEventListener('click', () => selectSource(source.id));
+      sourceRows.appendChild(row);
+    }
+
+    sourceFooter.textContent = `${total} source${total === 1 ? '' : 's'} loaded`;
+  }
+
+  function updateHeaderFromSelection() {
+    const source = selectedSourceObj();
+    if (!source) {
+      selectedTitle.textContent = 'No source selected';
+      statusText.textContent = 'No source selected';
+      followCheckbox.checked = false;
+      closeBtn.disabled = true;
+      deleteBtn.disabled = true;
+      return;
+    }
+
+    selectedTitle.textContent = source.name;
+    statusText.textContent = sourceStatusLabel(source);
+
+    const querySyntax = looksLikeQuery(filterInput.value);
+    if (!querySyntax) {
+      modeSelect.value = source.filter_mode;
+      caseCheckbox.checked = !!source.case_sensitive;
+    }
+    followCheckbox.checked = !!source.follow_mode;
+    closeBtn.disabled = false;
+    deleteBtn.disabled = !source.can_delete_ended;
+  }
+
+  function looksLikeQuery(input) {
+    const t = (input || '').trimStart();
+    return t.startsWith('json ') || t.startsWith('logfmt ') || t === 'json' || t === 'logfmt';
+  }
+
+  function selectSource(id) {
+    if (state.selectedSource === id) return;
+    state.selectedSource = id;
+    state.loadedWindow = { source: null, start: -1, end: -1, revision: -1 };
+    state.visibleRows = [];
+    state.totalVisible = 0;
+    state.totalLines = 0;
+    logViewport.scrollTop = 0;
+
+    const src = selectedSourceObj();
+    filterInput.value = src?.filter_pattern || '';
+    modeSelect.value = src?.filter_mode || 'plain';
+    caseCheckbox.checked = !!src?.case_sensitive;
+    followCheckbox.checked = !!src?.follow_mode;
+
+    setError('');
+    updateHeaderFromSelection();
+    scheduleLinesRefresh(true);
+    renderSourceVirtualList();
+  }
+
+  async function refreshSources() {
+    const reqId = ++state.sourceReq;
+    const payload = await api('/api/sources');
+    if (reqId !== state.sourceReq) return;
+
+    state.revision = payload.revision;
+    state.sources = payload.sources || [];
+
+    if (state.sources.length === 0) {
+      state.selectedSource = null;
+      renderSourceVirtualList();
+      updateHeaderFromSelection();
+      return;
+    }
+
+    if (!state.sources.some(s => s.id === state.selectedSource)) {
+      state.selectedSource = state.sources[0].id;
+      const src = selectedSourceObj();
+      filterInput.value = src?.filter_pattern || '';
+      modeSelect.value = src?.filter_mode || 'plain';
+      caseCheckbox.checked = !!src?.case_sensitive;
+      followCheckbox.checked = !!src?.follow_mode;
+      state.loadedWindow = { source: null, start: -1, end: -1, revision: -1 };
+      logViewport.scrollTop = 0;
+    }
+
+    renderSourceVirtualList();
+    updateHeaderFromSelection();
+  }
+
+  function scheduleLinesRefresh(force = false) {
+    state.queuedForce = state.queuedForce || force;
+    if (state.refreshRaf) return;
+
+    state.refreshRaf = requestAnimationFrame(() => {
+      state.refreshRaf = 0;
+      const forceNow = state.queuedForce;
+      state.queuedForce = false;
+      void refreshLines(forceNow).catch(err => setError(err.message || String(err)));
+    });
+  }
+
+  async function refreshLines(force = false) {
+    const source = selectedSourceObj();
+    if (!source) {
+      logRows.innerHTML = '';
+      logSpacer.style.height = '0px';
+      return;
+    }
+
+    if (state.linesInFlight) {
+      state.linesQueued = true;
+      state.queuedForce = state.queuedForce || force;
+      return;
+    }
+
+    const viewportHeight = logViewport.clientHeight || 0;
+    const scrollTop = logViewport.scrollTop;
+    const start = Math.max(0, Math.floor(scrollTop / LOG_ROW_HEIGHT) - OVERSCAN);
+    const end = Math.max(start, Math.ceil((scrollTop + viewportHeight) / LOG_ROW_HEIGHT) + OVERSCAN);
+
+    const cached = state.loadedWindow;
+    if (!force && cached.source === source.id && cached.revision === state.revision && start >= cached.start && end <= cached.end) {
+      renderLogVirtualRows(start, end);
+      return;
+    }
+
+    const chunkBase = Math.floor(start / LOG_CHUNK_SIZE) * LOG_CHUNK_SIZE;
+    const reqStart = Math.max(0, chunkBase - LOG_CHUNK_SIZE);
+    const limit = LOG_CHUNK_SIZE * LOG_CHUNK_COUNT;
+
+    state.linesInFlight = true;
+    const reqId = ++state.linesReq;
+    const controller = new AbortController();
+    state.linesController?.abort();
+    state.linesController = controller;
+
+    try {
+      const payload = await api(
+        `/api/lines?source=${source.id}&offset=${reqStart}&limit=${limit}`,
+        { signal: controller.signal }
+      );
+      if (reqId !== state.linesReq) return;
+
+      state.visibleRows = payload.rows || [];
+      state.totalVisible = payload.total_visible || 0;
+      state.totalLines = payload.total_lines || 0;
+      state.loadedWindow = {
+        source: source.id,
+        start: reqStart,
+        end: reqStart + state.visibleRows.length,
+        revision: payload.revision,
+      };
+
+      if (source.follow_mode) {
+        const maxScroll = Math.max(0, state.totalVisible * LOG_ROW_HEIGHT - viewportHeight);
+        if (Math.abs(logViewport.scrollTop - maxScroll) < LOG_ROW_HEIGHT * 2 || force) {
+          logViewport.scrollTop = maxScroll;
+        }
+      }
+
+      renderLogVirtualRows(start, end);
+      updateHeaderFromSelection();
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        throw err;
+      }
+    } finally {
+      state.linesInFlight = false;
+      if (state.linesController === controller) {
+        state.linesController = null;
+      }
+
+      if (state.linesQueued) {
+        const nextForce = state.queuedForce;
+        state.linesQueued = false;
+        state.queuedForce = false;
+        scheduleLinesRefresh(nextForce);
+      }
+    }
+  }
+
+  function renderLogVirtualRows(start, end) {
+    logSpacer.style.height = `${state.totalVisible * LOG_ROW_HEIGHT}px`;
+    logRows.innerHTML = '';
+
+    const rowMap = new Map();
+    for (const row of state.visibleRows) rowMap.set(row.visible_index, row);
+
+    for (let i = start; i < end; i += 1) {
+      const row = rowMap.get(i);
+      if (!row) continue;
+
+      const el = document.createElement('div');
+      el.className = 'log-row';
+      el.style.transform = `translateY(${i * LOG_ROW_HEIGHT}px)`;
+      el.innerHTML = `
+        <div class="ln">${row.line_number}</div>
+        <div class="content" title="${escapeHtml(row.content)}">${escapeHtml(row.content)}</div>
+      `;
+      logRows.appendChild(el);
+    }
+  }
+
+  async function postFilter() {
+    const source = selectedSourceObj();
+    if (!source) return;
+
+    const payload = {
+      source: source.id,
+      pattern: filterInput.value,
+      mode: modeSelect.value,
+      case_sensitive: !!caseCheckbox.checked,
+    };
+
+    const res = await api('/api/filter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok === false) {
+      throw new Error(res.message || 'Failed to apply filter');
+    }
+
+    setError('');
+    state.loadedWindow = { source: null, start: -1, end: -1, revision: -1 };
+  }
+
+  function scheduleFilter(delay = 500) {
+    clearTimeout(state.filterDebounce);
+    state.filterDebounce = setTimeout(async () => {
+      try {
+        await postFilter();
+        scheduleSync(true);
+      } catch (err) {
+        setError(err.message || String(err));
+      }
+    }, delay);
+  }
+
+  async function clearFilter() {
+    const source = selectedSourceObj();
+    if (!source) return;
+
+    await api('/api/filter/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: source.id }),
+    });
+
+    filterInput.value = '';
+    setError('');
+    state.loadedWindow = { source: null, start: -1, end: -1, revision: -1 };
+    await refreshSources();
+    scheduleLinesRefresh(true);
+  }
+
+  async function setFollow(enabled) {
+    const source = selectedSourceObj();
+    if (!source) return;
+
+    await api('/api/follow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: source.id, enabled: !!enabled }),
+    });
+
+    await refreshSources();
+    if (enabled) scheduleLinesRefresh(true);
+  }
+
+  async function closeSource(deleteEnded) {
+    const source = selectedSourceObj();
+    if (!source) return;
+
+    if (deleteEnded && !source.can_delete_ended) {
+      throw new Error('Only ended captured sources in lazytail data directories can be deleted');
+    }
+
+    await api('/api/source/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: source.id, delete_ended: !!deleteEnded }),
+    });
+
+    const currentId = state.selectedSource;
+    await refreshSources();
+    if (state.selectedSource === currentId && state.sources.length > 0) {
+      state.selectedSource = state.sources[0].id;
+    }
+    scheduleLinesRefresh(true);
+  }
+
+  function selectRelativeSource(delta) {
+    if (state.sources.length === 0 || state.selectedSource == null) return;
+    const idx = state.sources.findIndex(s => s.id === state.selectedSource);
+    if (idx === -1) return;
+    const next = Math.max(0, Math.min(state.sources.length - 1, idx + delta));
+    const source = state.sources[next];
+    if (source) selectSource(source.id);
+  }
+
+  function cycleSource(delta) {
+    if (state.sources.length === 0 || state.selectedSource == null) return;
+    const idx = state.sources.findIndex(s => s.id === state.selectedSource);
+    if (idx === -1) return;
+    const next = (idx + delta + state.sources.length) % state.sources.length;
+    selectSource(state.sources[next].id);
+  }
+
+  function selectSourceByDigit(digit) {
+    const idx = digit - 1;
+    if (idx < 0 || idx >= state.sources.length) return;
+    selectSource(state.sources[idx].id);
+  }
+
+  function scrollByLines(lines) {
+    logViewport.scrollTop += lines * LOG_ROW_HEIGHT;
+    scheduleLinesRefresh();
+  }
+
+  function scrollToTop() {
+    logViewport.scrollTop = 0;
+    scheduleLinesRefresh(true);
+  }
+
+  function scrollToBottom() {
+    logViewport.scrollTop = Math.max(0, state.totalVisible * LOG_ROW_HEIGHT - logViewport.clientHeight);
+    scheduleLinesRefresh(true);
+  }
+
+  function handleGlobalKeys(ev) {
+    const target = ev.target;
+    const isInputLike = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+
+    if (!isInputLike && ev.key === '/') {
+      ev.preventDefault();
+      filterInput.focus();
+      filterInput.select();
+      return;
+    }
+
+    if (!isInputLike && ev.key === 'Tab') {
+      ev.preventDefault();
+      cycleSource(ev.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (isInputLike && target === filterInput) {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        filterInput.blur();
+      }
+      return;
+    }
+
+    if (isInputLike) return;
+
+    if (ev.key >= '1' && ev.key <= '9') {
+      ev.preventDefault();
+      selectSourceByDigit(Number(ev.key));
+      return;
+    }
+
+    switch (ev.key) {
+      case 'ArrowDown':
+      case 'j':
+        ev.preventDefault();
+        scrollByLines(1);
+        break;
+      case 'ArrowUp':
+      case 'k':
+        ev.preventDefault();
+        scrollByLines(-1);
+        break;
+      case 'PageDown':
+        ev.preventDefault();
+        logViewport.scrollTop += logViewport.clientHeight;
+        scheduleLinesRefresh();
+        break;
+      case 'PageUp':
+        ev.preventDefault();
+        logViewport.scrollTop -= logViewport.clientHeight;
+        scheduleLinesRefresh();
+        break;
+      case 'g':
+        ev.preventDefault();
+        scrollToTop();
+        break;
+      case 'G':
+        ev.preventDefault();
+        scrollToBottom();
+        break;
+      case 'J':
+        ev.preventDefault();
+        selectRelativeSource(1);
+        break;
+      case 'K':
+        ev.preventDefault();
+        selectRelativeSource(-1);
+        break;
+      case 'f':
+        ev.preventDefault();
+        followCheckbox.checked = !followCheckbox.checked;
+        void setFollow(followCheckbox.checked).catch(err => setError(err.message || String(err)));
+        break;
+      case 'u':
+        if (ev.ctrlKey) {
+          ev.preventDefault();
+          logViewport.scrollTop -= Math.floor(logViewport.clientHeight / 2);
+          scheduleLinesRefresh();
+        }
+        break;
+      case 'd':
+        if (ev.ctrlKey) {
+          ev.preventDefault();
+          logViewport.scrollTop += Math.floor(logViewport.clientHeight / 2);
+          scheduleLinesRefresh();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  function startEventStream() {
+    if (state.eventLoopRunning) {
+      return;
+    }
+
+    state.eventLoopRunning = true;
+
+    const run = async () => {
+      while (state.eventLoopRunning) {
+        const since = state.revision || 0;
+        const controller = new AbortController();
+        state.eventAbort = controller;
+
+        try {
+          const response = await fetch(`/api/events?since=${since}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+          });
+
+          if (!response.ok) {
+            throw new Error(`events request failed: ${response.status}`);
+          }
+
+          const text = await response.text();
+          const match = text.match(/\bdata:\s*(\d+)/);
+          if (match) {
+            const nextRevision = Number(match[1]);
+            if (Number.isFinite(nextRevision) && nextRevision > state.revision) {
+              state.revision = nextRevision;
+              scheduleSync(true);
+            }
+          }
+        } catch (err) {
+          if (err?.name === 'AbortError') {
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 600));
+        }
+      }
+    };
+
+    void run();
+  }
+
+  function escapeHtml(input) {
+    return String(input)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  sourceViewport.addEventListener('scroll', () => renderSourceVirtualList());
+  logViewport.addEventListener('scroll', () => {
+    scheduleLinesRefresh();
+  });
+
+  filterInput.addEventListener('input', () => scheduleFilter(500));
+  modeSelect.addEventListener('change', () => scheduleFilter(80));
+  caseCheckbox.addEventListener('change', () => scheduleFilter(80));
+  clearBtn.addEventListener('click', () => {
+    void clearFilter().catch(err => setError(err.message || String(err)));
+  });
+  closeBtn.addEventListener('click', () => {
+    void closeSource(false).catch(err => setError(err.message || String(err)));
+  });
+  deleteBtn.addEventListener('click', () => {
+    void closeSource(true).catch(err => setError(err.message || String(err)));
+  });
+  followCheckbox.addEventListener('change', () => {
+    void setFollow(followCheckbox.checked).catch(err => setError(err.message || String(err)));
+  });
+  document.addEventListener('keydown', handleGlobalKeys);
+  window.addEventListener('beforeunload', () => {
+    state.eventLoopRunning = false;
+    state.eventAbort?.abort();
+    state.linesController?.abort();
+    if (state.fallbackPollTimer) {
+      clearInterval(state.fallbackPollTimer);
+      state.fallbackPollTimer = null;
+    }
+  });
+
+  function scheduleSync(force = false) {
+    state.syncForce = state.syncForce || force;
+    if (state.syncScheduled) {
+      state.syncQueued = true;
+      return;
+    }
+
+    state.syncScheduled = true;
+    requestAnimationFrame(() => {
+      state.syncScheduled = false;
+      void refreshLoop().catch(err => setError(err.message || String(err)));
+    });
+  }
+
+  async function refreshLoop() {
+    if (state.syncInFlight) {
+      state.syncQueued = true;
+      return;
+    }
+
+    state.syncInFlight = true;
+    try {
+      const prevRevision = state.revision;
+      await refreshSources();
+      const forceLines = state.syncForce || state.revision !== prevRevision;
+      state.syncForce = false;
+      scheduleLinesRefresh(forceLines);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      state.syncInFlight = false;
+      if (state.syncQueued) {
+        state.syncQueued = false;
+        scheduleSync();
+      }
+    }
+  }
+
+  async function boot() {
+    try {
+      await refreshSources();
+      scheduleLinesRefresh(true);
+      setError('');
+    } catch (err) {
+      setError(err.message || String(err));
+    }
+
+    startEventStream();
+
+    state.fallbackPollTimer = setInterval(() => {
+      scheduleSync();
+      if (!state.eventLoopRunning) {
+        startEventStream();
+      }
+    }, 15000);
+  }
+
+  void boot();
+})();
+</script>
+</body>
+</html>
