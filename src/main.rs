@@ -528,6 +528,11 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                         let old_total = tab.total_lines;
                         drop(reader_guard);
 
+                        // Update file size
+                        if let Some(ref path) = tab.source_path {
+                            tab.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                        }
+
                         if tab_idx == active_tab {
                             // Collect for processing after the loop
                             active_tab_modification = Some(ActiveTabFileModification {

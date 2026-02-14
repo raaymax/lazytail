@@ -113,6 +113,8 @@ pub struct TabState {
     pub config_source_type: Option<SourceType>,
     /// Whether this source is disabled (file doesn't exist)
     pub disabled: bool,
+    /// File size in bytes (None for stdin/pipes without a file path)
+    pub file_size: Option<u64>,
 }
 
 impl TabState {
@@ -155,6 +157,7 @@ impl TabState {
 
         if is_regular_file {
             // Regular file - close this handle and use FileReader (which opens its own)
+            let file_size = Some(metadata.len());
             drop(file);
             let file_reader = FileReader::new(&path)?;
             let watcher = if watch {
@@ -186,6 +189,7 @@ impl TabState {
                 source_status: None,
                 config_source_type: None,
                 disabled: false,
+                file_size,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -216,6 +220,7 @@ impl TabState {
                 source_status: None,
                 config_source_type: None,
                 disabled: false,
+                file_size: None,
             })
         }
     }
@@ -249,11 +254,13 @@ impl TabState {
             source_status: None,
             config_source_type: None,
             disabled: false,
+            file_size: None,
         })
     }
 
     /// Create a new tab from a discovered source
     pub fn from_discovered_source(source: DiscoveredSource, watch: bool) -> Result<Self> {
+        let file_size = std::fs::metadata(&source.log_path).map(|m| m.len()).ok();
         let file_reader = FileReader::new(&source.log_path)?;
         let watcher = if watch {
             FileWatcher::new(&source.log_path).ok()
@@ -287,6 +294,7 @@ impl TabState {
                 SourceLocation::Global => None,
             },
             disabled: false,
+            file_size,
         })
     }
 
@@ -305,6 +313,7 @@ impl TabState {
         }
 
         // Create normal file tab
+        let file_size = std::fs::metadata(&source.path).map(|m| m.len()).ok();
         let file_reader = FileReader::new(&source.path)?;
         let watcher = if watch {
             FileWatcher::new(&source.path).ok()
@@ -335,6 +344,7 @@ impl TabState {
             source_status: None,
             config_source_type: Some(source_type),
             disabled: false,
+            file_size,
         })
     }
 
@@ -363,6 +373,7 @@ impl TabState {
             source_status: None,
             config_source_type: Some(source_type),
             disabled: true,
+            file_size: None,
         })
     }
 
