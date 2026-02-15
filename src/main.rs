@@ -8,7 +8,6 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
-mod index;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
@@ -28,6 +27,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::orchestrator::FilterOrchestrator;
+use lazytail::index;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -249,7 +249,22 @@ fn main() -> Result<()> {
         if let Some(path) = tab.file_path() {
             let idx_dir = source::index_dir_for_log(path);
             if !idx_dir.join("meta").exists() {
-                let _ = index::builder::IndexBuilder::new().build(path, &idx_dir);
+                let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                eprintln!("Building index for {} ({} bytes)...", name, file_size);
+                let start = std::time::Instant::now();
+                match index::builder::IndexBuilder::new().build(path, &idx_dir) {
+                    Ok(meta) => {
+                        eprintln!(
+                            "  Done: {} lines indexed in {:.1?}",
+                            meta.entry_count,
+                            start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("  Warning: failed to build index: {}", e);
+                    }
+                }
             }
         }
     }
