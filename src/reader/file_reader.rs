@@ -1,8 +1,11 @@
 use super::sparse_index::SparseIndex;
 use super::LogReader;
+use crate::index::column::ColumnReader;
+use crate::index::meta::IndexMeta;
+use crate::source::index_dir_for_log;
 use anyhow::{Context, Result};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Default sparse index interval (index every 10,000 lines)
@@ -28,7 +31,10 @@ pub struct FileReader {
 }
 
 impl FileReader {
-    /// Create a new FileReader and build the sparse line index
+    /// Create a new FileReader and build the sparse line index.
+    ///
+    /// If a columnar index exists, seeds the sparse index from its offsets column
+    /// (essentially instant). Otherwise falls back to scanning the file.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::with_interval(path, DEFAULT_INDEX_INTERVAL)
     }
@@ -44,36 +50,85 @@ impl FileReader {
             sparse_index: SparseIndex::new(interval),
         };
 
-        reader.build_index()?;
+        if !reader.try_seed_from_index() {
+            reader.build_index()?;
+        }
         Ok(reader)
     }
 
+    /// Try to seed the sparse index from the columnar index's offsets column.
+    /// Returns true if successful.
+    fn try_seed_from_index(&mut self) -> bool {
+        let idx_dir = index_dir_for_log(&self.path);
+        let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+
+        let total_lines = meta.entry_count as usize;
+        if total_lines == 0 {
+            self.sparse_index.set_total_lines(0);
+            return true;
+        }
+
+        let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), total_lines) {
+            Ok(r) if r.len() == total_lines => r,
+            _ => return false,
+        };
+
+        let interval = self.sparse_index.interval();
+
+        // Sample every `interval`th offset from the columnar index.
+        // Sparse index entry at line N stores the byte offset where line N starts,
+        // which equals offsets[N] in the columnar index.
+        let mut line = interval;
+        while line < total_lines {
+            if let Some(offset) = offsets.get(line) {
+                self.sparse_index.append(line, offset);
+            }
+            line += interval;
+        }
+
+        self.sparse_index.set_total_lines(total_lines);
+        true
+    }
+
     /// Build the sparse line index by scanning through the file
+    ///
+    /// Uses raw byte scanning with memchr for ~10x speedup over read_line(),
+    /// since we only need newline byte offsets, not line content or UTF-8 validation.
     fn build_index(&mut self) -> Result<()> {
         self.reader.seek(SeekFrom::Start(0))?;
         self.sparse_index.clear();
 
-        let mut current_offset = 0u64;
-        let mut line_buffer = String::new();
+        let mut buf = [0u8; 64 * 1024];
         let mut line_count = 0usize;
+        let mut file_offset = 0u64;
+        let mut last_byte_was_newline = true; // treat start-of-file as "after newline"
         let interval = self.sparse_index.interval();
 
         loop {
-            line_buffer.clear();
-            let bytes_read = self.reader.read_line(&mut line_buffer)?;
-
+            let bytes_read = self.reader.read(&mut buf)?;
             if bytes_read == 0 {
-                // End of file
                 break;
             }
 
-            line_count += 1;
-            current_offset += bytes_read as u64;
-
-            // Index every `interval` lines (store the offset AFTER this line)
-            if line_count.is_multiple_of(interval) {
-                self.sparse_index.append(line_count, current_offset);
+            let chunk = &buf[..bytes_read];
+            for pos in memchr::memchr_iter(b'\n', chunk) {
+                line_count += 1;
+                if line_count.is_multiple_of(interval) {
+                    self.sparse_index
+                        .append(line_count, file_offset + pos as u64 + 1);
+                }
             }
+
+            last_byte_was_newline = chunk[bytes_read - 1] == b'\n';
+            file_offset += bytes_read as u64;
+        }
+
+        // Count final line if file doesn't end with newline
+        if file_offset > 0 && !last_byte_was_newline {
+            line_count += 1;
         }
 
         self.sparse_index.set_total_lines(line_count);
