@@ -131,8 +131,7 @@ fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'stat
     let severity_rows = tab
         .index_reader
         .as_ref()
-        .and_then(|ir| ir.checkpoints())
-        .and_then(|cp| cp.last())
+        .and_then(|ir| ir.checkpoints().last())
         .map(|cp| {
             let c = &cp.severity_counts;
             [c.fatal, c.error, c.warn, c.info, c.debug, c.trace]
@@ -453,8 +452,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     if let Some(counts) = tab
         .index_reader
         .as_ref()
-        .and_then(|ir| ir.checkpoints())
-        .and_then(|cp| cp.last())
+        .and_then(|ir| ir.checkpoints().last())
         .map(|cp| cp.severity_counts)
     {
         let entries: &[(u32, &str, Color)] = &[
