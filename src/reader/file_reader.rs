@@ -28,6 +28,9 @@ pub struct FileReader {
 
     /// Sparse index storing byte offsets for every Nth line
     sparse_index: SparseIndex,
+
+    /// Byte offset up to which the file has been scanned (for incremental reload)
+    scanned_up_to: u64,
 }
 
 impl FileReader {
@@ -48,6 +51,7 @@ impl FileReader {
             path,
             reader: BufReader::new(file),
             sparse_index: SparseIndex::new(interval),
+            scanned_up_to: 0,
         };
 
         if !reader.try_seed_from_index() {
@@ -65,14 +69,22 @@ impl FileReader {
             Err(_) => return false,
         };
 
-        let total_lines = meta.entry_count as usize;
-        if total_lines == 0 {
+        // Validate index is usable: reject if file was truncated (smaller than indexed size).
+        // If the file grew, the index is still valid for the lines it covers — the file
+        // watcher will pick up the new tail incrementally.
+        let file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if file_size < meta.log_file_size {
+            return false;
+        }
+
+        let indexed_lines = meta.entry_count as usize;
+        if indexed_lines == 0 {
             self.sparse_index.set_total_lines(0);
             return true;
         }
 
-        let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), total_lines) {
-            Ok(r) if r.len() == total_lines => r,
+        let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), indexed_lines) {
+            Ok(r) if r.len() == indexed_lines => r,
             _ => return false,
         };
 
@@ -82,15 +94,63 @@ impl FileReader {
         // Sparse index entry at line N stores the byte offset where line N starts,
         // which equals offsets[N] in the columnar index.
         let mut line = interval;
-        while line < total_lines {
+        while line < indexed_lines {
             if let Some(offset) = offsets.get(line) {
                 self.sparse_index.append(line, offset);
             }
             line += interval;
         }
 
-        self.sparse_index.set_total_lines(total_lines);
+        // If the file grew beyond the index, scan only the new tail
+        if file_size > meta.log_file_size {
+            if self.scan_tail(indexed_lines, meta.log_file_size).is_err() {
+                return false;
+            }
+        } else {
+            self.sparse_index.set_total_lines(indexed_lines);
+            self.scanned_up_to = meta.log_file_size;
+        }
+
         true
+    }
+
+    /// Scan only the tail of the file (from `start_offset`) to count new lines
+    /// and extend the sparse index. `base_lines` is the number of lines already indexed.
+    fn scan_tail(&mut self, base_lines: usize, start_offset: u64) -> Result<()> {
+        self.reader.seek(SeekFrom::Start(start_offset))?;
+
+        let mut buf = [0u8; 64 * 1024];
+        let mut line_count = base_lines;
+        let mut file_offset = start_offset;
+        let mut last_byte_was_newline = true;
+        let interval = self.sparse_index.interval();
+
+        loop {
+            let bytes_read = self.reader.read(&mut buf)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let chunk = &buf[..bytes_read];
+            for pos in memchr::memchr_iter(b'\n', chunk) {
+                line_count += 1;
+                if line_count.is_multiple_of(interval) {
+                    self.sparse_index
+                        .append(line_count, file_offset + pos as u64 + 1);
+                }
+            }
+
+            last_byte_was_newline = chunk[bytes_read - 1] == b'\n';
+            file_offset += bytes_read as u64;
+        }
+
+        if file_offset > start_offset && !last_byte_was_newline {
+            line_count += 1;
+        }
+
+        self.sparse_index.set_total_lines(line_count);
+        self.scanned_up_to = file_offset;
+        Ok(())
     }
 
     /// Build the sparse line index by scanning through the file
@@ -132,6 +192,7 @@ impl FileReader {
         }
 
         self.sparse_index.set_total_lines(line_count);
+        self.scanned_up_to = file_offset;
         Ok(())
     }
 
@@ -191,7 +252,17 @@ impl LogReader for FileReader {
     fn reload(&mut self) -> Result<()> {
         let file = File::open(&self.path)?;
         self.reader = BufReader::new(file);
-        self.build_index()
+
+        let new_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+
+        if new_size >= self.scanned_up_to && self.scanned_up_to > 0 {
+            // File grew or stayed the same — scan only the new tail
+            let old_lines = self.sparse_index.total_lines();
+            self.scan_tail(old_lines, self.scanned_up_to)
+        } else {
+            // File was truncated or empty — full rebuild
+            self.build_index()
+        }
     }
 }
 
