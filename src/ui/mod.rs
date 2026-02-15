@@ -124,9 +124,10 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 }
 
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
-    // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + severity rows
+    // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
     let tab = app.active_tab();
     let is_filtered = tab.filter.pattern.is_some();
+    let has_index = tab.index_size.is_some();
     let severity_rows = tab
         .index_reader
         .as_ref()
@@ -140,7 +141,8 @@ fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'stat
                 .count() as u16
         })
         .unwrap_or(0);
-    let stats_height = 3 + if is_filtered { 1 } else { 0 } + severity_rows;
+    let stats_height =
+        3 + if is_filtered { 1 } else { 0 } + if has_index { 1 } else { 0 } + severity_rows;
 
     // Split side panel into sources list and stats
     let chunks = Layout::default()
@@ -432,6 +434,17 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 format!("{}", total_lines),
                 Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+
+    // Show index size if available
+    if let Some(index_size) = tab.index_size {
+        stats_text.push(Line::from(vec![
+            Span::raw(" Index: "),
+            Span::styled(
+                format_file_size(index_size),
+                Style::default().fg(Color::DarkGray),
             ),
         ]));
     }

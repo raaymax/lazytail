@@ -8,7 +8,8 @@ use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
-    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
+    check_source_status, check_source_status_in_dir, index_dir_for_log, DiscoveredSource,
+    SourceLocation, SourceStatus,
 };
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
@@ -16,13 +17,34 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Batch size for sending lines from background reader
 const STREAM_BATCH_SIZE: usize = 10_000;
+
+/// Calculate the total size of all files in the index directory
+fn calculate_index_size(log_path: &Path) -> Option<u64> {
+    let index_dir = index_dir_for_log(log_path);
+    if !index_dir.exists() || !index_dir.is_dir() {
+        return None;
+    }
+
+    let mut total_size = 0u64;
+    let entries = std::fs::read_dir(&index_dir).ok()?;
+
+    for entry in entries.flatten() {
+        if let Ok(metadata) = entry.metadata() {
+            if metadata.is_file() {
+                total_size += metadata.len();
+            }
+        }
+    }
+
+    Some(total_size)
+}
 
 /// Messages sent from the background stream reader thread
 #[derive(Debug)]
@@ -118,6 +140,8 @@ pub struct TabState {
     pub file_size: Option<u64>,
     /// Columnar index reader for severity coloring and stats (None if no index)
     pub index_reader: Option<IndexReader>,
+    /// Index directory size in bytes (None if no index)
+    pub index_size: Option<u64>,
 }
 
 impl TabState {
@@ -178,6 +202,9 @@ impl TabState {
             let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
             let index_reader = IndexReader::open(&path);
+            let index_size = index_reader
+                .as_ref()
+                .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
                 name,
@@ -200,6 +227,7 @@ impl TabState {
                 disabled: false,
                 file_size,
                 index_reader,
+                index_size,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -232,6 +260,7 @@ impl TabState {
                 disabled: false,
                 file_size: None,
                 index_reader: None,
+                index_size: None,
             })
         }
     }
@@ -267,6 +296,7 @@ impl TabState {
             disabled: false,
             file_size: None,
             index_reader: None,
+            index_size: None,
         })
     }
 
@@ -284,6 +314,9 @@ impl TabState {
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
         let index_reader = IndexReader::open(&source.log_path);
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
             name: source.name,
@@ -309,6 +342,7 @@ impl TabState {
             disabled: false,
             file_size,
             index_reader,
+            index_size,
         })
     }
 
@@ -339,6 +373,9 @@ impl TabState {
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
         let index_reader = IndexReader::open(&source.path);
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
             name: source.name.clone(),
@@ -361,6 +398,7 @@ impl TabState {
             disabled: false,
             file_size,
             index_reader,
+            index_size,
         })
     }
 
@@ -391,6 +429,7 @@ impl TabState {
             disabled: true,
             file_size: None,
             index_reader: None,
+            index_size: None,
         })
     }
 
