@@ -124,15 +124,23 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 }
 
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
-    // Stats panel height: base 5 + 2 extra rows if severity data available
-    let has_severity = app
-        .active_tab()
+    // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + severity rows
+    let tab = app.active_tab();
+    let is_filtered = tab.filter.pattern.is_some();
+    let severity_rows = tab
         .index_reader
         .as_ref()
         .and_then(|ir| ir.checkpoints())
         .and_then(|cp| cp.last())
-        .is_some();
-    let stats_height = if has_severity { 7 } else { 5 };
+        .map(|cp| {
+            let c = &cp.severity_counts;
+            [c.fatal, c.error, c.warn, c.info, c.debug, c.trace]
+                .iter()
+                .filter(|&&v| v > 0)
+                .count() as u16
+        })
+        .unwrap_or(0);
+    let stats_height = 3 + if is_filtered { 1 } else { 0 } + severity_rows;
 
     // Split side panel into sources list and stats
     let chunks = Layout::default()
@@ -428,7 +436,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
-    // Show severity histogram from checkpoint data
+    // Show severity bar chart from checkpoint data
     if let Some(counts) = tab
         .index_reader
         .as_ref()
@@ -436,32 +444,37 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         .and_then(|cp| cp.last())
         .map(|cp| cp.severity_counts)
     {
-        let mut sev_spans = Vec::new();
-        sev_spans.push(Span::raw(" "));
-        let mut first = true;
         let entries: &[(u32, &str, Color)] = &[
-            (counts.fatal, "F", Color::Magenta),
-            (counts.error, "E", Color::Red),
-            (counts.warn, "W", Color::Yellow),
-            (counts.info, "I", Color::Green),
-            (counts.debug, "D", Color::Cyan),
-            (counts.trace, "T", Color::DarkGray),
+            (counts.fatal, "Fatal", Color::Magenta),
+            (counts.error, "Error", Color::Red),
+            (counts.warn, "Warn", Color::Yellow),
+            (counts.info, "Info", Color::Green),
+            (counts.debug, "Debug", Color::Cyan),
+            (counts.trace, "Trace", Color::DarkGray),
         ];
+
+        let max_count = entries.iter().map(|&(c, _, _)| c).max().unwrap_or(1).max(1);
+        // Available width: panel_width - 2 (borders) - 1 (left pad) - 6 (label) - 1 (space) - 1 (space) - count width
+        // Use a fixed bar width that fits comfortably
+        let bar_max = 10u32;
+
         for &(count, label, color) in entries {
             if count > 0 {
-                if !first {
-                    sev_spans.push(Span::raw(" "));
-                }
-                sev_spans.push(Span::styled(label, Style::default().fg(color)));
-                sev_spans.push(Span::styled(
-                    format!(":{}", format_count(count as usize)),
-                    Style::default().fg(Color::DarkGray),
-                ));
-                first = false;
+                let filled = ((count as u64 * bar_max as u64) / max_count as u64) as usize;
+                let filled = filled.max(1); // at least 1 block for non-zero
+                let empty = bar_max as usize - filled;
+                let bar_filled: String = "\u{2588}".repeat(filled);
+                let bar_empty: String = "\u{2591}".repeat(empty);
+                let count_str = format_count(count as usize);
+
+                stats_text.push(Line::from(vec![
+                    Span::raw(format!(" {:<5} ", label)),
+                    Span::styled(bar_filled, Style::default().fg(color)),
+                    Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                    Span::raw(" "),
+                    Span::styled(count_str, Style::default().fg(Color::DarkGray)),
+                ]));
             }
-        }
-        if !first {
-            stats_text.push(Line::from(sev_spans));
         }
     }
 
