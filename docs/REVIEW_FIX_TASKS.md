@@ -10,17 +10,17 @@ Performance-focused fixes and improvements identified during the columnar index 
 
   `FileReader` now keeps the full mmap-backed `ColumnReader<u64>` for O(1) direct seek to any indexed line. Falls back to sparse index for tail lines beyond the indexed range. For 50 visible lines per frame, worst case dropped from ~500K lines scanned to zero. *(commit: feat-columnar-index)*
 
-- [ ] **Range filter: seek to start offset instead of scanning from byte 0**
+- [x] **Range filter: seek to start offset instead of scanning from byte 0**
 
-  `run_streaming_filter_range()` counts newlines from the start of the file to reach `start_line`. For incremental filtering on a 1GB file where only the last 1000 lines are new, it still scans ~1GB of newlines just to find the starting position. The offsets column (or FileReader's index) knows the exact byte offset — seek directly.
+  `run_streaming_filter_range()` now accepts an optional `start_byte_offset`. The orchestrator looks up the byte offset from the columnar offsets column and passes it through, skipping the O(file_size) newline scan. Falls back to scan-from-zero when no index exists. *(commit: feat-columnar-index)*
 
-- [ ] **Extend index acceleration to incremental (range) filters**
+- [x] **Extend index acceleration to incremental (range) filters**
 
-  The orchestrator gates index use with `range.is_none()`. When a file grows and incremental filtering triggers, the bitmap is never consulted. The bitmap can be sliced to `[start..end]` trivially. Without this, every file growth event on a query-filtered view does a full content scan of the new lines.
+  The orchestrator no longer gates index use with `range.is_none()`. `run_streaming_filter_range` now accepts an optional bitmap for pre-filtering candidates. For incremental query-filtered views, the bitmap skips non-candidate lines within the range — combined with byte offset seeking, this eliminates both the prefix scan and most content parsing. *(commit: feat-columnar-index)*
 
-- [ ] **Eliminate `all_matches` duplication in streaming filters**
+- [x] **Eliminate `all_matches` duplication in streaming filters**
 
-  Every streaming filter accumulates both `batch_matches` (sent via `PartialResults`) and `all_matches` (sent in `Complete`). The `Complete` payload re-sends everything already delivered as partials, doubling peak memory for the match list. For a filter matching 1M lines, that's two copies of 1M `usize` values (~16 MB wasted). Send only the final batch in `Complete`, or send an empty sentinel.
+  Removed `all_matches` accumulation from all 6 filter functions (4 streaming filter impls + 2 engine impls). `Complete` now sends only the final unsent batch, eliminating the duplicate copy. Consumers (`merge_partial_filter_results` + `apply_filter` in the TUI, MCP tools, test helpers) all collect from both `PartialResults` and `Complete`. `apply_filter` uses a 3-way check (`needs_clear` / `Processing` state / direct call) to correctly distinguish orchestrator-driven vs direct-call usage. *(commit: feat-columnar-index)*
 
 ---
 

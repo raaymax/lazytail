@@ -5,6 +5,8 @@ use crate::filter::{
     query, regex_filter::RegexFilter, streaming_filter, string_filter::StringFilter, Filter,
     FilterMode,
 };
+use crate::index::column::ColumnReader;
+use crate::source::index_dir_for_log;
 use crate::tab::TabState;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -43,22 +45,46 @@ impl FilterOrchestrator {
                 Err(_) => return,
             };
 
-            // Try index-accelerated path: full filter + file source + index available
-            if range.is_none() {
-                if let Some(path) = &tab.source_path {
-                    if let Some((mask, want)) = filter_query.index_mask() {
-                        if let Some(ref index_reader) = tab.index_reader {
-                            let bitmap =
-                                index_reader.candidate_bitmap(mask, want, index_reader.len());
+            // Try index-accelerated path: file source + index available
+            if let Some(path) = &tab.source_path {
+                if let Some((mask, want)) = filter_query.index_mask() {
+                    if let Some(ref index_reader) = tab.index_reader {
+                        let bitmap = index_reader.candidate_bitmap(mask, want, index_reader.len());
 
-                            let query_filter = match query::QueryFilter::new(filter_query) {
-                                Ok(f) => f,
-                                Err(_) => return,
+                        let query_filter = match query::QueryFilter::new(filter_query) {
+                            Ok(f) => f,
+                            Err(_) => return,
+                        };
+                        let filter: Arc<dyn Filter> = Arc::new(query_filter);
+
+                        let cancel = CancelToken::new();
+                        tab.filter.cancel_token = Some(cancel.clone());
+
+                        if let Some((start, end)) = range {
+                            // Index-accelerated incremental filter
+                            tab.filter.state = FilterState::Processing { lines_processed: 0 };
+                            tab.filter.is_incremental = true;
+
+                            let start_byte_offset = {
+                                let idx_dir = index_dir_for_log(path);
+                                ColumnReader::<u64>::open(idx_dir.join("offsets"), start + 1)
+                                    .ok()
+                                    .and_then(|r| r.get(start))
                             };
-                            let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
-                            let cancel = CancelToken::new();
-                            tab.filter.cancel_token = Some(cancel.clone());
+                            if let Ok(rx) = streaming_filter::run_streaming_filter_range(
+                                path.clone(),
+                                filter,
+                                start,
+                                end,
+                                start_byte_offset,
+                                Some(bitmap),
+                                cancel,
+                            ) {
+                                tab.filter.receiver = Some(rx);
+                            }
+                        } else {
+                            // Index-accelerated full filter
                             tab.filter.needs_clear = true;
                             tab.filter.state = FilterState::Processing { lines_processed: 0 };
                             tab.filter.is_incremental = false;
@@ -71,13 +97,13 @@ impl FilterOrchestrator {
                             ) {
                                 tab.filter.receiver = Some(rx);
                             }
-                            return;
                         }
+                        return;
                     }
                 }
             }
 
-            // Fallback: no index or incremental — use standard dispatch
+            // Fallback: no index — use standard dispatch
             let query_filter = match query::QueryFilter::new(filter_query) {
                 Ok(f) => f,
                 Err(_) => return,
@@ -139,11 +165,21 @@ impl FilterOrchestrator {
             tab.filter.is_incremental = true;
 
             if let Some(path) = &tab.source_path {
+                // Look up byte offset for start_line from columnar index
+                let start_byte_offset = {
+                    let idx_dir = index_dir_for_log(path);
+                    ColumnReader::<u64>::open(idx_dir.join("offsets"), start + 1)
+                        .ok()
+                        .and_then(|r| r.get(start))
+                };
+
                 match streaming_filter::run_streaming_filter_range(
                     path.clone(),
                     filter,
                     start,
                     end,
+                    start_byte_offset,
+                    None,
                     cancel,
                 ) {
                     Ok(rx) => rx,

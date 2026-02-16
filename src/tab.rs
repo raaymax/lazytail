@@ -571,7 +571,17 @@ impl TabState {
         // Capture screen offset BEFORE changing line_indices
         let screen_offset = self.viewport.get_screen_offset(&self.line_indices);
 
-        self.line_indices = matching_indices;
+        if self.filter.needs_clear {
+            // Orchestrator set needs_clear but no partials arrived — Complete has all matches
+            self.line_indices = matching_indices;
+            self.filter.needs_clear = false;
+        } else if matches!(self.filter.state, FilterState::Processing { .. }) {
+            // Partials were received (they consumed needs_clear) — extend with final batch
+            self.line_indices.extend(matching_indices);
+        } else {
+            // Direct call (no orchestrator, no partials) — replace
+            self.line_indices = matching_indices;
+        }
         self.mode = ViewMode::Filtered;
         self.filter.pattern = Some(pattern);
         self.filter.state = FilterState::Complete {
