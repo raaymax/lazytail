@@ -238,7 +238,6 @@ impl FilterEngine {
             return Ok(());
         }
 
-        let mut all_matches = Vec::new();
         let mut current_end = end;
 
         while current_end > start_line {
@@ -265,7 +264,6 @@ impl FilterEngine {
             if !batch_matches.is_empty() {
                 // Sort this batch (it's from a contiguous range, so already mostly sorted)
                 batch_matches.sort_unstable();
-                all_matches.extend(batch_matches.iter().copied());
 
                 if cancel.is_cancelled() {
                     return Ok(());
@@ -287,10 +285,9 @@ impl FilterEngine {
             return Ok(());
         }
 
-        // Sort all matches and send final complete message
-        all_matches.sort_unstable();
+        // All matches were already sent as partials; signal completion
         tx.send(FilterProgress::Complete {
-            matches: all_matches,
+            matches: vec![],
             lines_processed: range_size,
         })?;
 
@@ -337,7 +334,6 @@ impl FilterEngine {
             return Ok(());
         }
 
-        let mut all_matches = Vec::new();
         let mut current_end = end;
 
         while current_end > start_line {
@@ -375,7 +371,6 @@ impl FilterEngine {
             // Send partial results immediately if we found matches
             if !batch_matches.is_empty() {
                 batch_matches.sort_unstable();
-                all_matches.extend(batch_matches.iter().copied());
 
                 if cancel.is_cancelled() {
                     return Ok(());
@@ -394,9 +389,9 @@ impl FilterEngine {
             return Ok(());
         }
 
-        all_matches.sort_unstable();
+        // All matches were already sent as partials; signal completion
         tx.send(FilterProgress::Complete {
-            matches: all_matches,
+            matches: vec![],
             lines_processed: range_size,
         })?;
 
@@ -434,6 +429,25 @@ mod tests {
         }
     }
 
+    /// Collect all matches from both PartialResults and Complete messages.
+    fn collect_all_matches(rx: Receiver<FilterProgress>) -> Vec<usize> {
+        let mut all = Vec::new();
+        while let Ok(progress) = rx.recv() {
+            match progress {
+                FilterProgress::PartialResults { matches, .. } => {
+                    all.extend(matches);
+                }
+                FilterProgress::Complete { matches, .. } => {
+                    all.extend(matches);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        all.sort_unstable();
+        all
+    }
+
     #[test]
     fn test_filter_all_matching() {
         let lines = vec![
@@ -448,20 +462,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
         let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
-
-        // Collect all progress updates
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices, vec![0, 2, 4]);
     }
 
@@ -477,19 +478,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
         let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert!(indices.is_empty());
     }
 
@@ -505,19 +494,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
         let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices, vec![0, 1, 2]);
     }
 
@@ -529,19 +506,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("ERROR", false));
 
         let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert!(indices.is_empty());
     }
 
@@ -562,31 +527,7 @@ mod tests {
 
         let rx = FilterEngine::run_filter(reader, filter, 10, CancelToken::new());
 
-        let mut progress_updates = vec![];
-        let mut final_result = None;
-
-        while let Ok(progress) = rx.recv() {
-            match progress {
-                FilterProgress::Processing(line_num) => {
-                    progress_updates.push(line_num);
-                }
-                FilterProgress::PartialResults { .. } => {
-                    // Partial results are fine, just continue
-                }
-                FilterProgress::Complete {
-                    matches: indices, ..
-                } => {
-                    final_result = Some(indices);
-                    break;
-                }
-                FilterProgress::Error(_) => panic!("Should not receive error"),
-            }
-        }
-
-        // Should receive some progress updates (either Processing or PartialResults)
-        // Note: with new partial results, we may not always get Processing updates
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices, vec![0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
     }
 
@@ -607,19 +548,7 @@ mod tests {
 
         // Filter only lines 5-15
         let rx = FilterEngine::run_filter_range(reader, filter, 1, 5, 15, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         // Lines 5-14, only even numbers: 6, 8, 10, 12, 14
         assert_eq!(indices, vec![6, 8, 10, 12, 14]);
     }
@@ -641,19 +570,7 @@ mod tests {
 
         // Filter from line 3 to end
         let rx = FilterEngine::run_filter_range(reader, filter, 1, 3, 10, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices, vec![5, 6, 7, 8, 9]);
     }
 
@@ -669,19 +586,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("ERROR", true));
 
         let rx = FilterEngine::run_filter(reader, filter, 1, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices, vec![0]); // Only the uppercase ERROR
     }
 
@@ -702,19 +607,7 @@ mod tests {
         let filter = Arc::new(StringFilter::new("MARKER", false));
 
         let rx = FilterEngine::run_filter(reader, filter, 1000, CancelToken::new());
-
-        let mut final_result = None;
-        while let Ok(progress) = rx.recv() {
-            if let FilterProgress::Complete {
-                matches: indices, ..
-            } = progress
-            {
-                final_result = Some(indices);
-                break;
-            }
-        }
-
-        let indices = final_result.expect("Should receive Complete message");
+        let indices = collect_all_matches(rx);
         assert_eq!(indices.len(), 100); // Should find 100 markers
         assert_eq!(indices[0], 0);
         assert_eq!(indices[99], 9900);

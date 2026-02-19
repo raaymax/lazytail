@@ -12,6 +12,12 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+/// Derive the index directory path for a given log file.
+/// e.g., `/path/to/myapp.log` → `/path/to/myapp.idx/`
+pub fn index_dir_for_log(log_path: &Path) -> PathBuf {
+    log_path.with_extension("idx")
+}
+
 #[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 
@@ -488,6 +494,73 @@ pub fn resolve_source_for_context(name: &str, discovery: &DiscoveryResult) -> Re
     // Fall back to global data directory
     let data = data_dir().context("Could not determine data directory")?;
     resolve_source_in(name, &data)
+}
+
+/// Build columnar indexes for discovered sources that don't have one.
+pub fn build_missing_indexes(sources: &[DiscoveredSource]) {
+    use crate::index::builder::IndexBuilder;
+
+    let missing: Vec<_> = sources
+        .iter()
+        .filter(|s| !index_dir_for_log(&s.log_path).join("meta").exists())
+        .collect();
+
+    if missing.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "Building indexes for {} source{}...",
+        missing.len(),
+        if missing.len() == 1 { "" } else { "s" }
+    );
+
+    for (i, source) in missing.iter().enumerate() {
+        let idx_dir = index_dir_for_log(&source.log_path);
+        let file_size = std::fs::metadata(&source.log_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        eprintln!(
+            "  [{}/{}] Indexing {} ({})...",
+            i + 1,
+            missing.len(),
+            source.name,
+            format_bytes(file_size),
+        );
+        let start = std::time::Instant::now();
+        match IndexBuilder::new().build(&source.log_path, &idx_dir) {
+            Ok(meta) => {
+                eprintln!(
+                    "  [{}/{}] Done: {} lines indexed in {:.1?}",
+                    i + 1,
+                    missing.len(),
+                    meta.entry_count,
+                    start.elapsed(),
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "  [{}/{}] Warning: failed to build index for {}: {}",
+                    i + 1,
+                    missing.len(),
+                    source.name,
+                    e,
+                );
+            }
+        }
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 /// Validate a source name for use in capture mode.

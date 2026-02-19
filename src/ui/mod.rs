@@ -1,4 +1,5 @@
 use crate::app::{App, FilterState, InputMode, SourceType, TreeSelection, ViewMode};
+use crate::index::flags::Severity;
 use crate::source::SourceStatus;
 use crate::tab::TabState;
 use anyhow::Result;
@@ -14,12 +15,25 @@ use unicode_width::UnicodeWidthStr;
 // UI Style Constants
 const SELECTED_BG: Color = Color::DarkGray;
 const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
+const SEVERITY_WARN_BG: Color = Color::Rgb(50, 40, 0);
+const SEVERITY_ERROR_BG: Color = Color::Rgb(55, 10, 10);
+const SEVERITY_FATAL_BG: Color = Color::Rgb(75, 0, 15);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 const TAB_SIZE: usize = 4;
 
 // Help overlay dimensions (as percentage of screen)
 const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
 const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
+
+/// Map severity to a subtle background color for line highlighting.
+fn severity_bg(severity: Severity) -> Option<Color> {
+    match severity {
+        Severity::Warn => Some(SEVERITY_WARN_BG),
+        Severity::Error => Some(SEVERITY_ERROR_BG),
+        Severity::Fatal => Some(SEVERITY_FATAL_BG),
+        _ => None,
+    }
+}
 
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
 fn apply_selection_style(style: Style) -> Style {
@@ -65,7 +79,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
         .split(f.area());
 
     // Render side panel with tabs
-    render_side_panel(f, main_chunks[0], app);
+    let source_overflow = render_side_panel(f, main_chunks[0], app);
 
     // Content area layout
     let content_chunks = Layout::default()
@@ -90,6 +104,12 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
         render_line_jump_prompt(f, content_chunks[2], app);
     }
 
+    // Render source overflow overlay on top of log view
+    if let Some((line_content, overlay_area)) = source_overflow {
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(Paragraph::new(line_content), overlay_area);
+    }
+
     // Render help overlay on top of everything if active
     if app.show_help {
         render_help_overlay(f, f.area());
@@ -103,27 +123,103 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     Ok(())
 }
 
-fn render_side_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
+    // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
+    let tab = app.active_tab();
+    let is_filtered = tab.filter.pattern.is_some();
+    let has_index = tab.index_size.is_some();
+    let severity_rows = tab
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints().last())
+        .map(|cp| {
+            let c = &cp.severity_counts;
+            [c.fatal, c.error, c.warn, c.info, c.debug, c.trace]
+                .iter()
+                .filter(|&&v| v > 0)
+                .count() as u16
+        })
+        .unwrap_or(0);
+    let stats_height =
+        3 + if is_filtered { 1 } else { 0 } + if has_index { 1 } else { 0 } + severity_rows;
+
     // Split side panel into sources list and stats
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(5)])
+        .constraints([Constraint::Min(3), Constraint::Length(stats_height)])
         .split(area);
 
     // Render sources list
-    render_sources_list(f, chunks[0], app);
+    let overflow = render_sources_list(f, chunks[0], app);
 
     // Render stats panel
     render_stats_panel(f, chunks[1], app);
+
+    overflow
 }
 
-fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
+/// Build a source line with indicators (loading, filter, follow, status)
+fn build_source_line(
+    tab: &TabState,
+    number: &str,
+    indicator: &str,
+    name: &str,
+    style: Style,
+) -> Line<'static> {
+    let mut line = Line::from(vec![Span::styled(
+        format!("  {}{} {}", number, indicator, name),
+        style,
+    )]);
+
+    if tab.stream_receiver.is_some() {
+        line.spans
+            .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+    }
+    if tab.filter.pattern.is_some() {
+        line.spans
+            .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
+    }
+    if tab.follow_mode {
+        line.spans
+            .push(Span::styled(" F", Style::default().fg(Color::Green)));
+    }
+    if let Some(status) = tab.source_status {
+        let (status_ind, color) = match status {
+            SourceStatus::Active => ("●", Color::Green),
+            SourceStatus::Ended => ("○", Color::DarkGray),
+        };
+        line.spans.push(Span::styled(
+            format!(" {}", status_ind),
+            Style::default().fg(color),
+        ));
+    }
+
+    line
+}
+
+/// Format metadata string for a source (line count and optional file size)
+fn format_source_meta(tab: &TabState) -> String {
+    if let Some(size) = tab.file_size {
+        format!(
+            " {} \u{00b7} {}",
+            format_count(tab.total_lines),
+            format_file_size(size)
+        )
+    } else {
+        format!(" {}", format_count(tab.total_lines))
+    }
+}
+
+fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
     let mut items: Vec<ListItem> = Vec::new();
     let categories = app.tabs_by_category();
     let is_panel_focused = app.input_mode == InputMode::SourcePanel;
 
-    // Track global tab index for numbering
+    // Track global tab index for numbering and selected item for overflow overlay
     let mut global_idx = 0usize;
+    let mut row_idx = 0usize;
+    let mut selected_row: Option<usize> = None;
+    let mut selected_line_content: Option<Line> = None;
 
     for (cat, tab_indices) in &categories {
         if tab_indices.is_empty() {
@@ -160,6 +256,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
             format!("{} {}", arrow, cat_name),
             cat_style,
         )])));
+        row_idx += 1;
 
         // Category items (if expanded)
         if expanded {
@@ -168,6 +265,10 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
                 let is_active = tab_idx == app.active_tab;
                 let is_tree_selected = is_panel_focused
                     && app.source_panel.selection == Some(TreeSelection::Item(*cat, in_cat_idx));
+
+                if is_tree_selected {
+                    selected_row = Some(row_idx);
+                }
 
                 // Build item display (indented)
                 let number = if global_idx < 9 {
@@ -203,42 +304,34 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(Color::White)
                 };
 
-                let mut line = Line::from(vec![Span::styled(
-                    format!("  {}{} {}", number, indicator, name),
-                    item_style,
-                )]);
+                // Build line with indicators and metadata
+                let mut line = build_source_line(tab, &number, indicator, &name, item_style);
 
-                // Add loading indicator if stream is still loading
-                if tab.stream_receiver.is_some() {
-                    line.spans
-                        .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
-                }
-
-                // Add filter indicator if tab has active filter
-                if tab.filter.pattern.is_some() {
-                    line.spans
-                        .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
-                }
-
-                // Add follow indicator if tab is in follow mode
-                if tab.follow_mode {
-                    line.spans
-                        .push(Span::styled(" F", Style::default().fg(Color::Green)));
-                }
-
-                // Add source status indicator for discovered sources
-                if let Some(status) = tab.source_status {
-                    let (status_ind, color) = match status {
-                        SourceStatus::Active => ("●", Color::Green),
-                        SourceStatus::Ended => ("○", Color::DarkGray),
-                    };
+                // Inline metadata (line count · file size) - show whatever fits
+                let meta = format_source_meta(tab);
+                let used_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
+                let panel_inner = (area.width as usize).saturating_sub(2); // borders
+                let remaining = panel_inner.saturating_sub(used_width);
+                if remaining > 0 {
+                    let truncated: String = meta.chars().take(remaining).collect();
                     line.spans.push(Span::styled(
-                        format!(" {}", status_ind),
-                        Style::default().fg(color),
+                        truncated,
+                        Style::default().fg(Color::DarkGray),
                     ));
                 }
 
+                if is_tree_selected {
+                    // Build full untruncated line for overflow overlay
+                    let mut full_line =
+                        build_source_line(tab, &number, indicator, &tab.name, item_style);
+                    full_line
+                        .spans
+                        .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
+                    selected_line_content = Some(full_line);
+                }
+
                 items.push(ListItem::new(line));
+                row_idx += 1;
                 global_idx += 1;
             }
         } else {
@@ -267,6 +360,37 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) {
     );
 
     f.render_widget(list, area);
+
+    // Return overflow overlay data if the selected line was clipped
+    if let (Some(row), Some(mut line_content)) = (selected_row, selected_line_content) {
+        let line_width: usize = line_content.spans.iter().map(|s| s.content.width()).sum();
+        let panel_inner = (area.width as usize).saturating_sub(2);
+
+        if line_width > panel_inner {
+            let row_u16 = u16::try_from(row).unwrap_or(u16::MAX);
+            let overlay_y = area.y.saturating_add(1).saturating_add(row_u16);
+            let needed_width = u16::try_from(line_width.saturating_add(1)).unwrap_or(u16::MAX);
+            let max_width = f.area().width.saturating_sub(area.x + 1);
+            let overlay_width = needed_width.min(max_width);
+
+            if overlay_y < area.y + area.height.saturating_sub(1) {
+                for span in &mut line_content.spans {
+                    span.style = span.style.bg(Color::Black);
+                }
+                return Some((
+                    line_content,
+                    Rect {
+                        x: area.x + 1,
+                        y: overlay_y,
+                        width: overlay_width,
+                        height: 1,
+                    },
+                ));
+            }
+        }
+    }
+
+    None
 }
 
 fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
@@ -313,6 +437,58 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Show index size if available
+    if let Some(index_size) = tab.index_size {
+        stats_text.push(Line::from(vec![
+            Span::raw(" Index: "),
+            Span::styled(
+                format_file_size(index_size),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    // Show severity bar chart from checkpoint data
+    if let Some(counts) = tab
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints().last())
+        .map(|cp| cp.severity_counts)
+    {
+        let entries: &[(u32, &str, Color)] = &[
+            (counts.fatal, "Fatal", Color::Magenta),
+            (counts.error, "Error", Color::Red),
+            (counts.warn, "Warn", Color::Yellow),
+            (counts.info, "Info", Color::Green),
+            (counts.debug, "Debug", Color::Cyan),
+            (counts.trace, "Trace", Color::DarkGray),
+        ];
+
+        let max_count = entries.iter().map(|&(c, _, _)| c).max().unwrap_or(1).max(1);
+        // Available width: panel_width - 2 (borders) - 1 (left pad) - 6 (label) - 1 (space) - 1 (space) - count width
+        // Use a fixed bar width that fits comfortably
+        let bar_max = 10u32;
+
+        for &(count, label, color) in entries {
+            if count > 0 {
+                let filled = ((count as u64 * bar_max as u64) / max_count as u64) as usize;
+                let filled = filled.max(1); // at least 1 block for non-zero
+                let empty = bar_max as usize - filled;
+                let bar_filled: String = "\u{2588}".repeat(filled);
+                let bar_empty: String = "\u{2591}".repeat(empty);
+                let count_str = format_count(count as usize);
+
+                stats_text.push(Line::from(vec![
+                    Span::raw(format!(" {:<5} ", label)),
+                    Span::styled(bar_filled, Style::default().fg(color)),
+                    Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                    Span::raw(" "),
+                    Span::styled(count_str, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+    }
+
     let stats =
         Paragraph::new(stats_text).block(Block::default().borders(Borders::ALL).title("Stats"));
 
@@ -342,9 +518,10 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
     let prefix_width = LINE_PREFIX_WIDTH;
 
-    // Get reader access and collect expanded_lines snapshot
+    // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.reader.lock().unwrap();
     let expanded_lines = tab.expansion.expanded_lines.clone();
+    let index_reader = tab.index_reader.as_ref();
 
     // Fetch the lines to display
     let mut items = Vec::new();
@@ -406,10 +583,19 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
                     }
                 }
 
-                // Apply selection background if this is the selected line
+                // Apply line styling: selection takes priority, then severity background
                 if is_selected {
                     for span in &mut final_line.spans {
                         span.style = apply_selection_style(span.style);
+                    }
+                } else if let Some(bg) = index_reader
+                    .map(|ir| ir.severity(line_number))
+                    .and_then(severity_bg)
+                {
+                    for span in &mut final_line.spans {
+                        if span.style.bg.is_none() {
+                            span.style = span.style.bg(bg);
+                        }
                     }
                 }
 
@@ -841,6 +1027,68 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     // Clear the area first to remove background content
     f.render_widget(Clear, popup_area);
     f.render_widget(help_paragraph, popup_area);
+}
+
+/// Format a file size in compact human-readable form.
+/// Examples: `0B`, `512B`, `45KB`, `2.3MB`, `12MB`, `6GB`
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        let val = bytes as f64 / GB as f64;
+        if val >= 10.0 {
+            format!("{}GB", val as u64)
+        } else {
+            format!("{:.1}GB", val)
+        }
+    } else if bytes >= MB {
+        let val = bytes as f64 / MB as f64;
+        if val >= 10.0 {
+            format!("{}MB", val as u64)
+        } else {
+            format!("{:.1}MB", val)
+        }
+    } else if bytes >= KB {
+        let val = bytes as f64 / KB as f64;
+        if val >= 10.0 {
+            format!("{}KB", val as u64)
+        } else {
+            format!("{:.1}KB", val)
+        }
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+/// Format a line count in compact human-readable form.
+/// Examples: `0`, `999`, `1.2K`, `60M`, `1.3B`
+fn format_count(count: usize) -> String {
+    if count >= 1_000_000_000 {
+        let val = count as f64 / 1_000_000_000.0;
+        if val >= 10.0 {
+            format!("{}Bn", val as u64)
+        } else {
+            format!("{:.1}Bn", val)
+        }
+    } else if count >= 1_000_000 {
+        let val = count as f64 / 1_000_000.0;
+        if val >= 10.0 {
+            format!("{}M", val as u64)
+        } else {
+            format!("{:.1}M", val)
+        }
+    } else if count >= 1_000 {
+        let val = count as f64 / 1_000.0;
+        if val >= 10.0 {
+            format!("{}K", val as u64)
+        } else {
+            format!("{:.1}K", val)
+        }
+    } else {
+        format!("{}", count)
+    }
 }
 
 fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {

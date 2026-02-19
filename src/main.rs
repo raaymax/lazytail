@@ -20,30 +20,24 @@ mod watcher;
 mod web;
 
 use anyhow::{Context, Result};
-use app::{App, FilterState, SourceType, ViewMode};
+use app::{App, SourceType};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use filter::{
-    cancel::CancelToken, engine::FilterEngine, query, regex_filter::RegexFilter, streaming_filter,
-    string_filter::StringFilter, Filter, FilterMode,
-};
+use filter::orchestrator::FilterOrchestrator;
+use lazytail::index;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // Constants
-const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const INPUT_POLL_DURATION_MS: u64 = 100;
 const PAGE_SIZE_OFFSET: usize = 5;
 const MOUSE_SCROLL_LINES: usize = 3;
-/// Debounce delay for live filter preview (milliseconds)
-const FILTER_DEBOUNCE_MS: u64 = 500;
 
 #[derive(Parser, Debug)]
 #[command(name = "lazytail")]
@@ -107,7 +101,13 @@ struct Cli {
 fn main() -> Result<()> {
     use std::io::IsTerminal;
 
+    let startup = Instant::now();
+    let mut phase = Instant::now();
     let cli = Cli::parse();
+    let verbose = cli.verbose;
+    if verbose {
+        eprintln!("[startup]   cli parse: {:.1?}", phase.elapsed());
+    }
 
     // Handle subcommands first (before mode detection)
     if let Some(command) = cli.command {
@@ -129,11 +129,19 @@ fn main() -> Result<()> {
 
     // Cleanup stale markers from previous SIGKILL scenarios
     // This runs before any mode to ensure collision checks work correctly
+    phase = Instant::now();
     source::cleanup_stale_markers();
+    if verbose {
+        eprintln!("[startup]   stale marker cleanup: {:.1?}", phase.elapsed());
+    }
 
     // Config discovery - run before mode dispatch
+    phase = Instant::now();
     let (discovery, searched_paths) = config::discovery::discover_verbose();
-    if cli.verbose {
+    if verbose {
+        eprintln!("[startup]   config discovery: {:.1?}", phase.elapsed());
+    }
+    if verbose {
         for path in &searched_paths {
             eprintln!("[discovery] Searched: {}", path.display());
         }
@@ -164,6 +172,7 @@ fn main() -> Result<()> {
     }
 
     // Load config from discovered files
+    phase = Instant::now();
     let config_result = config::load(&discovery);
     let (cfg, mut config_errors) = match config_result {
         Ok(c) => (c, Vec::new()),
@@ -172,8 +181,11 @@ fn main() -> Result<()> {
             (config::Config::default(), vec![err_msg])
         }
     };
+    if verbose {
+        eprintln!("[startup]   config load: {:.1?}", phase.elapsed());
+    }
 
-    if cli.verbose {
+    if verbose {
         if let Some(name) = &cfg.name {
             eprintln!("[config] Project name: {}", name);
         }
@@ -206,7 +218,14 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if cli.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(cli.no_watch, cfg, config_errors, &discovery);
+        return run_discovery_mode(
+            cli.no_watch,
+            cfg,
+            config_errors,
+            &discovery,
+            startup,
+            verbose,
+        );
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -214,6 +233,7 @@ fn main() -> Result<()> {
     let watch = !cli.no_watch;
 
     // Build tabs from config sources first
+    phase = Instant::now();
     let mut tabs = Vec::new();
 
     // Add project sources
@@ -253,13 +273,48 @@ fn main() -> Result<()> {
             tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
         }
     }
+    if verbose {
+        eprintln!("[startup]   tab creation: {:.1?}", phase.elapsed());
+    }
+
+    // Build columnar indexes for file tabs that don't have one yet
+    phase = Instant::now();
+    for tab in &tabs {
+        if let Some(path) = tab.file_path() {
+            let idx_dir = source::index_dir_for_log(path);
+            if !idx_dir.join("meta").exists() {
+                let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                eprintln!("Building index for {} ({} bytes)...", name, file_size);
+                let start = std::time::Instant::now();
+                match index::builder::IndexBuilder::new().build(path, &idx_dir) {
+                    Ok(meta) => {
+                        eprintln!(
+                            "  Done: {} lines indexed in {:.1?}",
+                            meta.entry_count,
+                            start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("  Warning: failed to build index: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    if verbose {
+        eprintln!("[startup]   index build: {:.1?}", phase.elapsed());
+    }
 
     // Log config errors to stderr (debug source is a future enhancement)
     for err in &config_errors {
         eprintln!("[config error] {}", err);
     }
 
+    phase = Instant::now();
     let mut app = App::with_tabs(tabs);
+    app.startup_time = Some(startup);
+    app.verbose = verbose;
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
@@ -267,6 +322,9 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    if verbose {
+        eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
+    }
 
     // Main loop
     let res = run_app(&mut terminal, &mut app);
@@ -279,6 +337,12 @@ fn main() -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+
+    if app.verbose {
+        if let Some(elapsed) = app.first_render_elapsed {
+            eprintln!("[startup] First render in {:.1?}", elapsed);
+        }
+    }
 
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
@@ -293,6 +357,8 @@ fn run_discovery_mode(
     cfg: config::Config,
     mut config_errors: Vec<String>,
     discovery: &config::DiscoveryResult,
+    startup: Instant,
+    verbose: bool,
 ) -> Result<()> {
     use source::{discover_sources_for_context, ensure_directories_for_context};
 
@@ -300,11 +366,23 @@ fn run_discovery_mode(
     ensure_directories_for_context(discovery)?;
 
     // Discover existing sources from both project and global directories
+    let mut phase = Instant::now();
     let sources = discover_sources_for_context(discovery)?;
+    if verbose {
+        eprintln!("[startup]   source discovery: {:.1?}", phase.elapsed());
+    }
+
+    // Build columnar indexes for sources that don't have one yet
+    phase = Instant::now();
+    source::build_missing_indexes(&sources);
+    if verbose {
+        eprintln!("[startup]   index build: {:.1?}", phase.elapsed());
+    }
 
     let watch = !no_watch;
 
     // Build tabs from config sources first
+    phase = Instant::now();
     let mut tabs = Vec::new();
 
     // Add project sources
@@ -329,6 +407,9 @@ fn run_discovery_mode(
         .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
         .collect();
     tabs.extend(discovery_tabs);
+    if verbose {
+        eprintln!("[startup]   tab creation: {:.1?}", phase.elapsed());
+    }
 
     // Log config errors to stderr (debug source is a future enhancement)
     for err in &config_errors {
@@ -345,7 +426,10 @@ fn run_discovery_mode(
         std::process::exit(0);
     }
 
+    phase = Instant::now();
     let mut app = App::with_tabs(tabs);
+    app.startup_time = Some(startup);
+    app.verbose = verbose;
 
     // Optionally set up directory watcher for new sources
     // Watch project data dir if in project, otherwise global
@@ -366,6 +450,9 @@ fn run_discovery_mode(
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    if verbose {
+        eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
+    }
 
     // Determine watched location for newly discovered sources
     let watched_location = if discovery.project_root.is_some() {
@@ -386,188 +473,17 @@ fn run_discovery_mode(
     )?;
     terminal.show_cursor()?;
 
+    if app.verbose {
+        if let Some(elapsed) = app.first_render_elapsed {
+            eprintln!("[startup] First render in {:.1?}", elapsed);
+        }
+    }
+
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
 
     Ok(())
-}
-
-/// Helper function to trigger a filter operation for a specific tab
-fn trigger_filter(
-    tab: &mut tab::TabState,
-    pattern: String,
-    mode: FilterMode,
-    start_line: Option<usize>,
-    end_line: Option<usize>,
-) {
-    // Cancel any previous filter operation
-    if let Some(ref cancel) = tab.filter.cancel_token {
-        cancel.cancel();
-    }
-
-    // Check for query syntax (json | ... or logfmt | ...)
-    if query::is_query_syntax(&pattern) {
-        trigger_query_filter(tab, pattern, start_line, end_line);
-        return;
-    }
-
-    let case_sensitive = mode.is_case_sensitive();
-    let is_regex = mode.is_regex();
-
-    // Create new cancel token for this operation
-    let cancel = CancelToken::new();
-    tab.filter.cancel_token = Some(cancel.clone());
-
-    // For incremental filtering, we need the generic filter
-    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = true;
-
-        let filter: Arc<dyn Filter> = if is_regex {
-            match RegexFilter::new(&pattern, case_sensitive) {
-                Ok(f) => Arc::new(f),
-                Err(_) => return,
-            }
-        } else {
-            Arc::new(StringFilter::new(&pattern, case_sensitive))
-        };
-
-        if let Some(path) = &tab.source_path {
-            match streaming_filter::run_streaming_filter_range(
-                path.clone(),
-                filter,
-                start,
-                end,
-                cancel,
-            ) {
-                Ok(rx) => rx,
-                Err(_) => return,
-            }
-        } else {
-            FilterEngine::run_filter_range(
-                tab.reader.clone(),
-                filter,
-                FILTER_PROGRESS_INTERVAL,
-                start,
-                end,
-                cancel,
-            )
-        }
-    } else {
-        // Full filtering
-        tab.filter.needs_clear = true;
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = false;
-
-        if let Some(path) = &tab.source_path {
-            if is_regex {
-                // Regex: use generic filter
-                let filter: Arc<dyn Filter> = match RegexFilter::new(&pattern, case_sensitive) {
-                    Ok(f) => Arc::new(f),
-                    Err(_) => return,
-                };
-                match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
-                    Ok(rx) => rx,
-                    Err(_) => return,
-                }
-            } else {
-                // Plain text: use FAST byte-level filter with SIMD
-                match streaming_filter::run_streaming_filter_fast(
-                    path.clone(),
-                    pattern.as_bytes(),
-                    case_sensitive,
-                    cancel,
-                ) {
-                    Ok(rx) => rx,
-                    Err(_) => return,
-                }
-            }
-        } else {
-            // Stdin: use generic filter
-            let filter: Arc<dyn Filter> = if is_regex {
-                match RegexFilter::new(&pattern, case_sensitive) {
-                    Ok(f) => Arc::new(f),
-                    Err(_) => return,
-                }
-            } else {
-                Arc::new(StringFilter::new(&pattern, case_sensitive))
-            };
-            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
-        }
-    };
-
-    tab.filter.receiver = Some(receiver);
-}
-
-/// Trigger a query-based filter (json | ... or logfmt | ...)
-fn trigger_query_filter(
-    tab: &mut tab::TabState,
-    pattern: String,
-    start_line: Option<usize>,
-    end_line: Option<usize>,
-) {
-    // Parse the query
-    let filter_query = match query::parse_query(&pattern) {
-        Ok(q) => q,
-        Err(_) => return, // Invalid query, don't filter
-    };
-
-    // Create QueryFilter
-    let query_filter = match query::QueryFilter::new(filter_query) {
-        Ok(f) => f,
-        Err(_) => return, // Invalid filter (e.g., bad regex)
-    };
-
-    let filter: Arc<dyn Filter> = Arc::new(query_filter);
-
-    // Create new cancel token for this operation
-    let cancel = CancelToken::new();
-    tab.filter.cancel_token = Some(cancel.clone());
-
-    // For incremental filtering
-    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = true;
-
-        if let Some(path) = &tab.source_path {
-            match streaming_filter::run_streaming_filter_range(
-                path.clone(),
-                filter,
-                start,
-                end,
-                cancel,
-            ) {
-                Ok(rx) => rx,
-                Err(_) => return,
-            }
-        } else {
-            FilterEngine::run_filter_range(
-                tab.reader.clone(),
-                filter,
-                FILTER_PROGRESS_INTERVAL,
-                start,
-                end,
-                cancel,
-            )
-        }
-    } else {
-        // Full filtering
-        tab.filter.needs_clear = true;
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = false;
-
-        if let Some(path) = &tab.source_path {
-            match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
-                Ok(rx) => rx,
-                Err(_) => return,
-            }
-        } else {
-            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
-        }
-    };
-
-    tab.filter.receiver = Some(receiver);
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
@@ -587,11 +503,15 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         // Phase 1: Render
         render(terminal, app)?;
 
+        if let Some(start) = app.startup_time.take() {
+            app.first_render_elapsed = Some(start.elapsed());
+        }
+
         // Phase 2: Check for pending debounced filter
         if let Some(trigger_at) = app.pending_filter_at {
             if Instant::now() >= trigger_at {
                 app.pending_filter_at = None;
-                trigger_live_filter_preview(app);
+                FilterOrchestrator::trigger_preview(app);
             }
         }
 
@@ -651,12 +571,12 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         events.extend(collect_input_events(terminal, app)?);
 
         // Phase 4: Process all events
-        let has_start_filter = events
+        app.has_start_filter_in_batch = events
             .iter()
             .any(|e| matches!(e, AppEvent::StartFilter { .. }));
 
         for event in events {
-            process_event(app, event, has_start_filter);
+            process_event(app, event);
         }
 
         if app.should_quit {
@@ -716,6 +636,11 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                         let old_total = tab.total_lines;
                         drop(reader_guard);
 
+                        // Update file size
+                        if let Some(ref path) = tab.source_path {
+                            tab.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                        }
+
                         if tab_idx == active_tab {
                             // Collect for processing after the loop
                             active_tab_modification = Some(ActiveTabFileModification {
@@ -724,7 +649,7 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                             });
                         } else {
                             // Inactive tab: update state directly
-                            handle_inactive_tab_file_modification(tab, new_total);
+                            tab.apply_file_modification(new_total);
                         }
                     }
                     watcher::FileEvent::Error(err) => {
@@ -744,29 +669,6 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
         )
     } else {
         Vec::new()
-    }
-}
-
-/// Handle file modification for an inactive tab
-fn handle_inactive_tab_file_modification(tab: &mut tab::TabState, new_total: usize) {
-    tab.total_lines = new_total;
-
-    if tab.mode == ViewMode::Normal {
-        tab.line_indices = (0..new_total).collect();
-    }
-
-    // If tab has an active filter, trigger incremental filtering
-    if let Some(pattern) = tab.filter.pattern.clone() {
-        if new_total > tab.filter.last_filtered_line {
-            let mode = tab.filter.mode;
-            trigger_filter(
-                tab,
-                pattern,
-                mode,
-                Some(tab.filter.last_filtered_line),
-                Some(new_total),
-            );
-        }
     }
 }
 
@@ -798,51 +700,17 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
                     }
                 } else {
                     // Inactive tab: apply filter events directly
-                    apply_filter_events_to_tab(tab, tab_idx, filter_events);
+                    for ev in &filter_events {
+                        if tab.apply_filter_event(ev) {
+                            tab.filter.receiver = None;
+                        }
+                    }
                 }
             }
         }
     }
 
     events
-}
-
-/// Apply filter events directly to a tab (used for inactive tabs)
-fn apply_filter_events_to_tab(
-    tab: &mut tab::TabState,
-    tab_idx: usize,
-    filter_events: Vec<event::AppEvent>,
-) {
-    use event::AppEvent;
-
-    for ev in filter_events {
-        match ev {
-            AppEvent::FilterProgress(lines_processed) => {
-                tab.filter.state = FilterState::Processing { lines_processed };
-            }
-            AppEvent::FilterComplete {
-                indices,
-                incremental,
-            } => {
-                if incremental {
-                    tab.append_filter_results(indices);
-                } else {
-                    let pattern = tab.filter.pattern.clone().unwrap_or_default();
-                    tab.apply_filter(indices, pattern);
-                }
-                if tab.follow_mode {
-                    tab.jump_to_end();
-                }
-                tab.filter.receiver = None;
-            }
-            AppEvent::FilterError(err) => {
-                eprintln!("Filter error for tab {}: {}", tab_idx, err);
-                tab.filter.state = FilterState::Inactive;
-                tab.filter.receiver = None;
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Collect and process stream events from background readers (pipes/stdin)
@@ -988,131 +856,10 @@ fn collect_input_events<B: ratatui::backend::Backend>(
     Ok(events)
 }
 
-/// Process a single event, handling side effects
-fn process_event(app: &mut App, event: event::AppEvent, has_start_filter: bool) {
-    use event::AppEvent;
-
-    match &event {
-        // Filter start - trigger background filter
-        AppEvent::StartFilter { pattern, range, .. } => {
-            let mode = app.current_filter_mode;
-            let tab = app.active_tab_mut();
-            tab.filter.pattern = Some(pattern.clone());
-            tab.filter.mode = mode;
-            trigger_filter(
-                tab,
-                pattern.clone(),
-                mode,
-                range.map(|(start, _)| start),
-                range.map(|(_, end)| end),
-            );
-        }
-
-        // Live filter preview events - debounce to avoid lag while typing
-        AppEvent::FilterInputChar(_)
-        | AppEvent::FilterInputBackspace
-        | AppEvent::HistoryUp
-        | AppEvent::HistoryDown
-        | AppEvent::ToggleFilterMode
-        | AppEvent::ToggleCaseSensitivity => {
-            app.apply_event(event);
-            // Cancel any in-progress filter immediately to free the reader lock
-            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
-                cancel.cancel();
-            }
-            // Schedule filter to run after debounce delay
-            app.pending_filter_at =
-                Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
-        }
-
-        // Mouse scroll - handle directly
-        AppEvent::MouseScrollDown(lines) => {
-            app.mouse_scroll_down(*lines);
-        }
-        AppEvent::MouseScrollUp(lines) => {
-            app.mouse_scroll_up(*lines);
-        }
-
-        // Clear filter - also clear receiver and pending filter
-        AppEvent::ClearFilter => {
-            app.pending_filter_at = None;
-            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
-                cancel.cancel();
-            }
-            app.active_tab_mut().filter.receiver = None;
-            app.apply_event(event);
-        }
-
-        // File truncated - cancel in-progress filter
-        AppEvent::FileTruncated { .. } => {
-            let tab = app.active_tab_mut();
-            tab.filter.receiver = None;
-            tab.filter.is_incremental = false;
-            app.apply_event(event);
-        }
-
-        // Filter complete - handle follow mode
-        AppEvent::FilterComplete { .. } => {
-            app.apply_event(event);
-            if app.active_tab().follow_mode {
-                app.jump_to_end();
-            }
-        }
-
-        // File modified - handle follow mode
-        AppEvent::FileModified { .. } => {
-            let should_jump = app.active_tab().follow_mode
-                && app.active_tab().mode == ViewMode::Normal
-                && !has_start_filter;
-            app.apply_event(event);
-            if should_jump {
-                app.jump_to_end();
-            }
-        }
-
-        // Filter input cancelled - clear pending filter and cancel any in-progress
-        AppEvent::FilterInputCancel => {
-            app.pending_filter_at = None;
-            if let Some(ref cancel) = app.active_tab().filter.cancel_token {
-                cancel.cancel();
-            }
-            app.apply_event(event);
-        }
-
-        // Filter input submitted - trigger filter immediately (bypass debounce)
-        AppEvent::FilterInputSubmit => {
-            app.pending_filter_at = None;
-            // Trigger filter with current input BEFORE apply_event clears it
-            let pattern = app.get_input().to_string();
-            let mode = app.current_filter_mode;
-            if !pattern.is_empty() && app.is_regex_valid() {
-                let tab = app.active_tab_mut();
-                tab.filter.pattern = Some(pattern.clone());
-                tab.filter.mode = mode;
-                trigger_filter(tab, pattern, mode, None, None);
-            }
-            app.apply_event(event);
-        }
-
-        // All other events - apply directly
-        _ => {
-            app.apply_event(event);
-        }
-    }
-}
-
-/// Trigger live filter preview based on current input
-fn trigger_live_filter_preview(app: &mut App) {
-    let pattern = app.get_input().to_string();
-    let mode = app.current_filter_mode;
-
-    if !pattern.is_empty() && app.is_regex_valid() {
-        let tab = app.active_tab_mut();
-        tab.filter.pattern = Some(pattern.clone());
-        tab.filter.mode = mode;
-        trigger_filter(tab, pattern, mode, None, None);
-    } else {
-        app.clear_filter();
-        app.active_tab_mut().filter.receiver = None;
-    }
+/// Process a single event — delegates to `app.apply_event()`.
+///
+/// All filter side-effects (debounce, cancellation, follow-mode jumps) are now
+/// handled inside `App::apply_event()`, so this function is a thin passthrough.
+fn process_event(app: &mut App, event: event::AppEvent) {
+    app.apply_event(event);
 }

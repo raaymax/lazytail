@@ -1,20 +1,23 @@
 use super::sparse_index::SparseIndex;
 use super::LogReader;
+use crate::index::column::ColumnReader;
+use crate::index::meta::IndexMeta;
+use crate::source::index_dir_for_log;
 use anyhow::{Context, Result};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Default sparse index interval (index every 10,000 lines)
 const DEFAULT_INDEX_INTERVAL: usize = 10_000;
 
-/// Lazy file reader that uses sparse indexing for memory-efficient random access
+/// Lazy file reader with two-tier line access:
 ///
-/// Instead of storing byte offset for every line (O(n) memory), this reader
-/// stores only every Nth line's offset. For line access, it seeks to the
-/// nearest indexed position and scans forward.
-///
-/// Memory usage for 100M lines: ~120KB (vs ~800MB with full indexing)
+/// 1. **Columnar offsets (O(1))**: When a columnar index exists, the mmap-backed
+///    offsets column provides direct byte offset for every indexed line — zero scanning.
+/// 2. **Sparse index (fallback)**: For files without an index, or for tail lines
+///    beyond the indexed range (file grew after index was built), falls back to
+///    sparse sampling (every Nth line) with forward scanning.
 pub struct FileReader {
     /// Path to the file
     path: PathBuf,
@@ -23,12 +26,24 @@ pub struct FileReader {
     /// Using BufReader with seek() clears the buffer, making random access safe
     reader: BufReader<File>,
 
-    /// Sparse index storing byte offsets for every Nth line
+    /// Sparse index storing byte offsets for every Nth line (fallback for unindexed files/tails)
     sparse_index: SparseIndex,
+
+    /// Byte offset up to which the file has been scanned (for incremental reload)
+    scanned_up_to: u64,
+
+    /// Mmap-backed offsets from the columnar index — O(1) access for indexed lines
+    columnar_offsets: Option<ColumnReader<u64>>,
+
+    /// Number of lines covered by columnar_offsets
+    indexed_lines: usize,
 }
 
 impl FileReader {
-    /// Create a new FileReader and build the sparse line index
+    /// Create a new FileReader and build the sparse line index.
+    ///
+    /// If a columnar index exists, seeds the sparse index from its offsets column
+    /// (essentially instant). Otherwise falls back to scanning the file.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::with_interval(path, DEFAULT_INDEX_INTERVAL)
     }
@@ -42,56 +57,175 @@ impl FileReader {
             path,
             reader: BufReader::new(file),
             sparse_index: SparseIndex::new(interval),
+            scanned_up_to: 0,
+            columnar_offsets: None,
+            indexed_lines: 0,
         };
 
-        reader.build_index()?;
+        if !reader.try_seed_from_index() {
+            reader.build_index()?;
+        }
         Ok(reader)
     }
 
+    /// Try to load the columnar index's offsets column for O(1) line access.
+    /// Falls back to sparse index seeding if the full column can't be opened.
+    /// Returns true if successful.
+    fn try_seed_from_index(&mut self) -> bool {
+        let idx_dir = index_dir_for_log(&self.path);
+        let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+
+        // Validate index is usable: reject if file was truncated (smaller than indexed size).
+        // If the file grew, the index is still valid for the lines it covers — the file
+        // watcher will pick up the new tail incrementally.
+        let file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if file_size < meta.log_file_size {
+            return false;
+        }
+
+        let indexed_lines = meta.entry_count as usize;
+        if indexed_lines == 0 {
+            self.sparse_index.set_total_lines(0);
+            return true;
+        }
+
+        let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), indexed_lines) {
+            Ok(r) if r.len() == indexed_lines => r,
+            _ => return false,
+        };
+
+        // Keep the full mmap-backed offsets column for O(1) line access.
+        // For lines beyond the indexed range (file grew), sparse index handles the tail.
+        self.columnar_offsets = Some(offsets);
+        self.indexed_lines = indexed_lines;
+
+        // If the file grew beyond the index, scan only the new tail
+        if file_size > meta.log_file_size {
+            if self.scan_tail(indexed_lines, meta.log_file_size).is_err() {
+                return false;
+            }
+        } else {
+            self.sparse_index.set_total_lines(indexed_lines);
+            self.scanned_up_to = meta.log_file_size;
+        }
+
+        true
+    }
+
+    /// Scan only the tail of the file (from `start_offset`) to count new lines
+    /// and extend the sparse index. `base_lines` is the number of lines already indexed.
+    fn scan_tail(&mut self, base_lines: usize, start_offset: u64) -> Result<()> {
+        self.reader.seek(SeekFrom::Start(start_offset))?;
+
+        let mut buf = [0u8; 64 * 1024];
+        let mut line_count = base_lines;
+        let mut file_offset = start_offset;
+        let mut last_byte_was_newline = true;
+        let interval = self.sparse_index.interval();
+
+        loop {
+            let bytes_read = self.reader.read(&mut buf)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let chunk = &buf[..bytes_read];
+            for pos in memchr::memchr_iter(b'\n', chunk) {
+                line_count += 1;
+                if line_count.is_multiple_of(interval) {
+                    self.sparse_index
+                        .append(line_count, file_offset + pos as u64 + 1);
+                }
+            }
+
+            last_byte_was_newline = chunk[bytes_read - 1] == b'\n';
+            file_offset += bytes_read as u64;
+        }
+
+        if file_offset > start_offset && !last_byte_was_newline {
+            line_count += 1;
+        }
+
+        self.sparse_index.set_total_lines(line_count);
+        self.scanned_up_to = file_offset;
+        Ok(())
+    }
+
     /// Build the sparse line index by scanning through the file
+    ///
+    /// Uses raw byte scanning with memchr for ~10x speedup over read_line(),
+    /// since we only need newline byte offsets, not line content or UTF-8 validation.
     fn build_index(&mut self) -> Result<()> {
         self.reader.seek(SeekFrom::Start(0))?;
         self.sparse_index.clear();
 
-        let mut current_offset = 0u64;
-        let mut line_buffer = String::new();
+        let mut buf = [0u8; 64 * 1024];
         let mut line_count = 0usize;
+        let mut file_offset = 0u64;
+        let mut last_byte_was_newline = true; // treat start-of-file as "after newline"
         let interval = self.sparse_index.interval();
 
         loop {
-            line_buffer.clear();
-            let bytes_read = self.reader.read_line(&mut line_buffer)?;
-
+            let bytes_read = self.reader.read(&mut buf)?;
             if bytes_read == 0 {
-                // End of file
                 break;
             }
 
-            line_count += 1;
-            current_offset += bytes_read as u64;
-
-            // Index every `interval` lines (store the offset AFTER this line)
-            if line_count.is_multiple_of(interval) {
-                self.sparse_index.append(line_count, current_offset);
+            let chunk = &buf[..bytes_read];
+            for pos in memchr::memchr_iter(b'\n', chunk) {
+                line_count += 1;
+                if line_count.is_multiple_of(interval) {
+                    self.sparse_index
+                        .append(line_count, file_offset + pos as u64 + 1);
+                }
             }
+
+            last_byte_was_newline = chunk[bytes_read - 1] == b'\n';
+            file_offset += bytes_read as u64;
+        }
+
+        // Count final line if file doesn't end with newline
+        if file_offset > 0 && !last_byte_was_newline {
+            line_count += 1;
         }
 
         self.sparse_index.set_total_lines(line_count);
+        self.scanned_up_to = file_offset;
         Ok(())
     }
 
-    /// Read a specific line by seeking to nearest indexed position and scanning
+    /// Read a specific line. Uses O(1) columnar offset when available,
+    /// falls back to sparse index seek + scan for unindexed lines.
     fn read_line_at(&mut self, line_num: usize) -> Result<Option<String>> {
         if line_num >= self.sparse_index.total_lines() {
             return Ok(None);
         }
 
-        let (offset, skip) = self.sparse_index.locate(line_num);
+        // Fast path: O(1) direct seek via columnar offsets
+        if line_num < self.indexed_lines {
+            if let Some(offset) = self.columnar_offsets.as_ref().and_then(|c| c.get(line_num)) {
+                self.reader.seek(SeekFrom::Start(offset))?;
+                let mut line_buffer = String::new();
+                if self.reader.read_line(&mut line_buffer)? == 0 {
+                    return Ok(None);
+                }
+                if line_buffer.ends_with('\n') {
+                    line_buffer.pop();
+                    if line_buffer.ends_with('\r') {
+                        line_buffer.pop();
+                    }
+                }
+                return Ok(Some(line_buffer));
+            }
+        }
 
-        // Seek to the indexed position
+        // Slow path: sparse index locate + forward scan
+        let (offset, skip) = self.sparse_index.locate(line_num);
         self.reader.seek(SeekFrom::Start(offset))?;
 
-        // Skip lines to reach target
         let mut line_buffer = String::new();
         for _ in 0..skip {
             line_buffer.clear();
@@ -100,13 +234,11 @@ impl FileReader {
             }
         }
 
-        // Read the target line
         line_buffer.clear();
         if self.reader.read_line(&mut line_buffer)? == 0 {
             return Ok(None);
         }
 
-        // Remove trailing newline
         if line_buffer.ends_with('\n') {
             line_buffer.pop();
             if line_buffer.ends_with('\r') {
@@ -136,7 +268,19 @@ impl LogReader for FileReader {
     fn reload(&mut self) -> Result<()> {
         let file = File::open(&self.path)?;
         self.reader = BufReader::new(file);
-        self.build_index()
+
+        let new_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+
+        if new_size >= self.scanned_up_to && self.scanned_up_to > 0 {
+            // File grew or stayed the same — scan only the new tail
+            let old_lines = self.sparse_index.total_lines();
+            self.scan_tail(old_lines, self.scanned_up_to)
+        } else {
+            // File was truncated or empty — columnar offsets are now invalid
+            self.columnar_offsets = None;
+            self.indexed_lines = 0;
+            self.build_index()
+        }
     }
 }
 
@@ -608,6 +752,138 @@ mod tests {
         for i in 0..20 {
             assert_eq!(reader.get_line(i)?.unwrap(), format!("Line {}", i));
         }
+
+        Ok(())
+    }
+
+    // Tests for columnar offsets (O(1) line access)
+
+    #[test]
+    fn test_columnar_offsets_direct_access() -> Result<()> {
+        use crate::index::builder::IndexBuilder;
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Write a log file
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..100 {
+                writeln!(f, "Line number {}", i)?;
+            }
+            f.flush()?;
+        }
+
+        // Build a columnar index for it
+        let idx_dir = index_dir_for_log(&log_path);
+        IndexBuilder::new().build(&log_path, &idx_dir)?;
+
+        // Open FileReader — should use columnar offsets
+        let mut reader = FileReader::new(&log_path)?;
+
+        // Verify it loaded the columnar offsets
+        assert!(reader.columnar_offsets.is_some());
+        assert_eq!(reader.indexed_lines, 100);
+
+        // Verify random access works correctly via direct path
+        assert_eq!(reader.total_lines(), 100);
+        assert_eq!(reader.get_line(0)?.unwrap(), "Line number 0");
+        assert_eq!(reader.get_line(50)?.unwrap(), "Line number 50");
+        assert_eq!(reader.get_line(99)?.unwrap(), "Line number 99");
+        assert!(reader.get_line(100)?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_columnar_offsets_with_file_growth() -> Result<()> {
+        use crate::index::builder::IndexBuilder;
+        use crate::source::index_dir_for_log;
+        use std::fs::OpenOptions;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Write initial content
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..50 {
+                writeln!(f, "Original line {}", i)?;
+            }
+            f.flush()?;
+        }
+
+        // Build index for the initial content
+        let idx_dir = index_dir_for_log(&log_path);
+        IndexBuilder::new().build(&log_path, &idx_dir)?;
+
+        // Append more lines (beyond the index)
+        {
+            let mut f = OpenOptions::new().append(true).open(&log_path)?;
+            for i in 50..80 {
+                writeln!(f, "New line {}", i)?;
+            }
+            f.flush()?;
+        }
+
+        // Open FileReader — should use columnar offsets for 0..50 and sparse for 50..80
+        let mut reader = FileReader::new(&log_path)?;
+
+        assert!(reader.columnar_offsets.is_some());
+        assert_eq!(reader.indexed_lines, 50);
+        assert_eq!(reader.total_lines(), 80);
+
+        // Indexed lines (O(1) path)
+        assert_eq!(reader.get_line(0)?.unwrap(), "Original line 0");
+        assert_eq!(reader.get_line(49)?.unwrap(), "Original line 49");
+
+        // Tail lines beyond index (sparse fallback)
+        assert_eq!(reader.get_line(50)?.unwrap(), "New line 50");
+        assert_eq!(reader.get_line(79)?.unwrap(), "New line 79");
+        assert!(reader.get_line(80)?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_columnar_offsets_invalidated_on_truncation() -> Result<()> {
+        use crate::index::builder::IndexBuilder;
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Write and index
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..50 {
+                writeln!(f, "Line {}", i)?;
+            }
+            f.flush()?;
+        }
+        let idx_dir = index_dir_for_log(&log_path);
+        IndexBuilder::new().build(&log_path, &idx_dir)?;
+
+        let mut reader = FileReader::new(&log_path)?;
+        assert!(reader.columnar_offsets.is_some());
+        assert_eq!(reader.indexed_lines, 50);
+
+        // Truncate the file (simulate log rotation)
+        {
+            let mut f = File::create(&log_path)?;
+            writeln!(f, "Fresh line 0")?;
+            writeln!(f, "Fresh line 1")?;
+            f.flush()?;
+        }
+
+        // Reload should invalidate columnar offsets
+        reader.reload()?;
+        assert!(reader.columnar_offsets.is_none());
+        assert_eq!(reader.indexed_lines, 0);
+        assert_eq!(reader.total_lines(), 2);
+        assert_eq!(reader.get_line(0)?.unwrap(), "Fresh line 0");
+        assert_eq!(reader.get_line(1)?.unwrap(), "Fresh line 1");
 
         Ok(())
     }

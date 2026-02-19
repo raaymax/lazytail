@@ -1,3 +1,4 @@
+use crate::filter::orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
@@ -5,7 +6,10 @@ use crate::source::{self, SourceStatus};
 use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Debounce delay for live filter preview (milliseconds)
+const FILTER_DEBOUNCE_MS: u64 = 500;
 
 /// Maximum number of filter history entries to keep
 const MAX_HISTORY_ENTRIES: usize = 50;
@@ -141,6 +145,19 @@ pub struct App {
 
     /// Temporary status message shown in the status bar
     pub status_message: Option<(String, Instant)>,
+
+    /// Transient flag: set per event batch when a StartFilter event is present.
+    /// Suppresses follow-mode jump on FileModified (the filter restart handles positioning).
+    pub has_start_filter_in_batch: bool,
+
+    /// Startup timestamp for measuring time-to-first-render
+    pub startup_time: Option<Instant>,
+
+    /// Elapsed time to first render (printed after terminal restore)
+    pub first_render_elapsed: Option<Duration>,
+
+    /// Verbose mode (-v flag)
+    pub verbose: bool,
 }
 
 impl App {
@@ -179,6 +196,10 @@ impl App {
             pending_close_tab: None,
             confirm_return_mode: InputMode::Normal,
             status_message: None,
+            has_start_filter_in_batch: false,
+            startup_time: None,
+            first_render_elapsed: None,
+            verbose: false,
         }
     }
 
@@ -845,8 +866,8 @@ impl App {
             AppEvent::PageUp(page_size) => self.page_up(page_size),
             AppEvent::JumpToStart => self.jump_to_start(),
             AppEvent::JumpToEnd => self.jump_to_end(),
-            // MouseScrollDown/MouseScrollUp handled directly in main.rs process_event()
-            AppEvent::MouseScrollDown(_) | AppEvent::MouseScrollUp(_) => {}
+            AppEvent::MouseScrollDown(lines) => self.mouse_scroll_down(lines),
+            AppEvent::MouseScrollUp(lines) => self.mouse_scroll_up(lines),
             AppEvent::ViewportDown => self.viewport_down(),
             AppEvent::ViewportUp => self.viewport_up(),
 
@@ -879,24 +900,58 @@ impl App {
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
-            AppEvent::FilterInputChar(c) => self.input_char(c),
-            AppEvent::FilterInputBackspace => self.input_backspace(),
+            AppEvent::FilterInputChar(c) => {
+                self.input_char(c);
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+            }
+            AppEvent::FilterInputBackspace => {
+                self.input_backspace();
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+            }
             AppEvent::FilterInputSubmit => {
-                // Save current filter to history before closing
+                self.pending_filter_at = None;
+                // Trigger filter with current input BEFORE clearing it
                 let pattern = self.input_buffer.clone();
                 let mode = self.current_filter_mode;
+                if !pattern.is_empty() && self.is_regex_valid() {
+                    let tab = self.active_tab_mut();
+                    tab.filter.pattern = Some(pattern.clone());
+                    tab.filter.mode = mode;
+                    FilterOrchestrator::trigger(tab, pattern.clone(), mode, None);
+                }
+                // Save to history and clear input
                 self.add_to_history(pattern, mode);
-                // Clear origin line - user is committing to the filtered position
                 self.active_tab_mut().filter.origin_line = None;
                 self.cancel_filter_input();
             }
-            AppEvent::FilterInputCancel => self.cancel_filter_input(),
-            AppEvent::ClearFilter => self.clear_filter(),
+            AppEvent::FilterInputCancel => {
+                self.pending_filter_at = None;
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.cancel_filter_input();
+            }
+            AppEvent::ClearFilter => {
+                self.pending_filter_at = None;
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.active_tab_mut().filter.receiver = None;
+                self.clear_filter();
+            }
             AppEvent::ToggleFilterMode => {
                 self.current_filter_mode.toggle_mode();
                 self.validate_regex();
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
-            AppEvent::ToggleCaseSensitivity => self.current_filter_mode.toggle_case_sensitivity(),
+            AppEvent::ToggleCaseSensitivity => {
+                self.current_filter_mode.toggle_case_sensitivity();
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+            }
             AppEvent::CursorLeft => self.cursor_left(),
             AppEvent::CursorRight => self.cursor_right(),
             AppEvent::CursorHome => self.cursor_home(),
@@ -923,7 +978,9 @@ impl App {
                     let pattern = self.active_tab().filter.pattern.clone().unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
-                // Follow mode jump will be handled separately in main loop
+                if self.active_tab().follow_mode {
+                    self.jump_to_end();
+                }
             }
             AppEvent::FilterError(err) => {
                 eprintln!("Filter error: {}", err);
@@ -940,16 +997,22 @@ impl App {
                 if tab.mode == ViewMode::Normal {
                     tab.line_indices = (0..new_total).collect();
                 }
-                // Incremental filter will be handled by StartFilter event
+                // Follow mode jump (suppress if a StartFilter is in the same batch)
+                let should_jump = self.active_tab().follow_mode
+                    && self.active_tab().mode == ViewMode::Normal
+                    && !self.has_start_filter_in_batch;
+                if should_jump {
+                    self.jump_to_end();
+                }
             }
             AppEvent::FileTruncated { new_total } => {
                 let tab = self.active_tab_mut();
                 eprintln!("File truncated: {} -> {} lines", tab.total_lines, new_total);
 
                 // Cancel any in-progress filter
-                if let Some(ref cancel) = tab.filter.cancel_token {
-                    cancel.cancel();
-                }
+                FilterOrchestrator::cancel(tab);
+                tab.filter.receiver = None;
+                tab.filter.is_incremental = false;
 
                 // Reset state on truncation
                 tab.total_lines = new_total;
@@ -961,9 +1024,7 @@ impl App {
                 tab.filter.state = FilterState::Inactive;
                 tab.filter.last_filtered_line = 0;
                 tab.filter.cancel_token = None;
-                tab.filter.receiver = None;
                 tab.filter.needs_clear = false;
-                tab.filter.is_incremental = false;
 
                 // Reset viewport to valid position
                 let new_anchor = if new_total > 0 { new_total - 1 } else { 0 };
@@ -1014,8 +1075,18 @@ impl App {
             AppEvent::LineJumpInputCancel => self.cancel_line_jump_input(),
 
             // Filter history navigation
-            AppEvent::HistoryUp => self.history_up(),
-            AppEvent::HistoryDown => self.history_down(),
+            AppEvent::HistoryUp => {
+                self.history_up();
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+            }
+            AppEvent::HistoryDown => {
+                self.history_down();
+                FilterOrchestrator::cancel(self.active_tab_mut());
+                self.pending_filter_at =
+                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+            }
 
             // View positioning (vim z commands)
             AppEvent::EnterZMode => {
@@ -1042,15 +1113,13 @@ impl App {
                 self.active_tab_mut().collapse_all();
             }
 
-            // StartFilter: mark that results need clearing when first results arrive
-            AppEvent::StartFilter { incremental, .. } => {
-                if !incremental {
-                    // Defer clearing until first results arrive (prevents blink)
-                    let tab = self.active_tab_mut();
-                    tab.filter.needs_clear = true;
-                    tab.filter.state = FilterState::Processing { lines_processed: 0 };
-                }
-                // Actual filter execution is handled in main loop
+            // StartFilter: trigger background filter via orchestrator
+            AppEvent::StartFilter { pattern, range, .. } => {
+                let mode = self.current_filter_mode;
+                let tab = self.active_tab_mut();
+                tab.filter.pattern = Some(pattern.clone());
+                tab.filter.mode = mode;
+                FilterOrchestrator::trigger(tab, pattern, mode, range);
             }
 
             // Stream events are handled directly in main loop, not here
@@ -1345,40 +1414,36 @@ mod tests {
     fn test_add_to_history() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
-        let initial_len = app.filter_history.len();
 
-        // Add patterns to history (use unique names to avoid conflicts with persisted history)
         app.add_to_history("TEST_HIST_ERROR_12345".to_string(), FilterMode::plain());
         app.add_to_history("TEST_HIST_WARN_12345".to_string(), FilterMode::plain());
         app.add_to_history("TEST_HIST_INFO_12345".to_string(), FilterMode::plain());
 
-        assert_eq!(app.filter_history.len(), initial_len + 3);
+        assert_eq!(app.filter_history.len(), 3);
     }
 
     #[test]
     fn test_add_to_history_skips_duplicates() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
-        let initial_len = app.filter_history.len();
 
         app.add_to_history("ERROR_DUP_TEST".to_string(), FilterMode::plain());
         app.add_to_history("ERROR_DUP_TEST".to_string(), FilterMode::plain()); // Duplicate - should not add
 
-        assert_eq!(app.filter_history.len(), initial_len + 1);
+        assert_eq!(app.filter_history.len(), 1);
     }
 
     #[test]
     fn test_add_to_history_same_pattern_different_mode() {
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
-        let initial_len = app.filter_history.len();
 
         app.add_to_history("error_mode_test".to_string(), FilterMode::plain());
         app.add_to_history("error_mode_test".to_string(), FilterMode::regex()); // Different mode - should add
 
-        assert_eq!(app.filter_history.len(), initial_len + 2);
-        assert!(!app.filter_history[initial_len].mode.is_regex());
-        assert!(app.filter_history[initial_len + 1].mode.is_regex());
+        assert_eq!(app.filter_history.len(), 2);
+        assert!(!app.filter_history[0].mode.is_regex());
+        assert!(app.filter_history[1].mode.is_regex());
     }
 
     #[test]

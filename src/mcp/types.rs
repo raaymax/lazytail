@@ -241,3 +241,45 @@ pub enum SourceLocation {
     /// Source is in global ~/.config/lazytail/data/
     Global,
 }
+
+/// Request to get index stats for a lazytail source.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetStatsRequest {
+    /// Source name (from list_sources)
+    pub source: String,
+    /// Output format: "text" (default, plain text) or "json"
+    #[serde(default)]
+    pub output: OutputFormat,
+}
+
+/// Response containing index statistics for a source.
+#[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct GetStatsResponse {
+    /// Source name
+    pub source: String,
+    /// Total number of indexed lines
+    pub indexed_lines: u64,
+    /// Log file size in bytes (as recorded in index)
+    pub log_file_size: u64,
+    /// Whether a columnar index exists
+    pub has_index: bool,
+    /// Severity counts (from last checkpoint, approximate)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity_counts: Option<SeverityCountsInfo>,
+    /// Which index columns are present
+    pub columns: Vec<String>,
+}
+
+/// Severity count breakdown from checkpoint data.
+#[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct SeverityCountsInfo {
+    pub unknown: u32,
+    pub trace: u32,
+    pub debug: u32,
+    pub info: u32,
+    pub warn: u32,
+    pub error: u32,
+    pub fatal: u32,
+}

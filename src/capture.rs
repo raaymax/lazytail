@@ -8,10 +8,11 @@
 //! - Cleans up marker on exit (EOF or signal)
 
 use crate::config::DiscoveryResult;
+use crate::index::builder::{now_millis, LineIndexer};
 use crate::signal::setup_shutdown_handlers;
 use crate::source::{
-    create_marker_for_context, ensure_directories_for_context, remove_marker_for_context,
-    resolve_data_dir, validate_source_name,
+    create_marker_for_context, ensure_directories_for_context, index_dir_for_log,
+    remove_marker_for_context, resolve_data_dir, validate_source_name,
 };
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;
@@ -70,21 +71,29 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
         location
     );
 
-    // 8. Tee loop: read stdin, write to file AND stdout
+    // 8. Create indexer for columnar index
+    let idx_dir = index_dir_for_log(&log_path);
+    let mut indexer = LineIndexer::create(&idx_dir)
+        .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?;
+
+    // 9. Tee loop: read stdin, write to file AND stdout
     let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let reader = BufReader::new(stdin.lock());
+    let mut reader = BufReader::new(stdin.lock());
+    let mut line_buf = String::new();
 
-    for line in reader.lines() {
+    loop {
         // Check for shutdown signal
         if shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
 
-        match line {
-            Ok(line) => {
-                // Write to log file
-                if let Err(e) = writeln!(log_file, "{}", line) {
+        line_buf.clear();
+        match reader.read_line(&mut line_buf) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                // Write raw bytes to log file (already includes \n)
+                if let Err(e) = log_file.write_all(line_buf.as_bytes()) {
                     eprintln!("Error writing to log file: {}", e);
                     break;
                 }
@@ -93,8 +102,14 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
                     break;
                 }
 
+                // Index the raw line (delimiter auto-detected)
+                let ts = now_millis();
+                if let Err(e) = indexer.push_line(line_buf.as_bytes(), ts) {
+                    eprintln!("Warning: failed to index line: {}", e);
+                }
+
                 // Echo to stdout (ignore errors - stdout might be closed)
-                let _ = writeln!(stdout, "{}", line);
+                let _ = stdout.write_all(line_buf.as_bytes());
                 let _ = stdout.flush();
             }
             Err(e) => {
@@ -104,7 +119,12 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
         }
     }
 
-    // 9. Cleanup on EOF or signal - always reached (no process::exit in signal handler)
+    // 10. Finalize index before cleanup
+    if let Err(e) = indexer.finish(&idx_dir) {
+        eprintln!("Warning: failed to finalize index: {}", e);
+    }
+
+    // 11. Cleanup on EOF or signal - always reached (no process::exit in signal handler)
     remove_marker_for_context(&name, discovery)?;
 
     Ok(())

@@ -16,15 +16,55 @@ use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
+use crate::index::checkpoint::CheckpointReader;
+use crate::index::meta::{ColumnBit, IndexMeta};
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
 use memchr::memchr_iter;
 use memmap2::Mmap;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
+use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+
+/// Maximum characters per line in MCP output. Lines exceeding this are truncated
+/// with a suffix showing the number of hidden characters. Full content is available
+/// via narrower `get_context` or `get_lines` calls.
+const MAX_LINE_LEN: usize = 500;
+
+/// Collect filter results from a progress channel into matching line indices.
+fn collect_filter_results(rx: Receiver<FilterProgress>) -> Result<(Vec<usize>, usize), String> {
+    let mut matching_indices = Vec::new();
+    let mut lines_searched = 0;
+
+    for progress in rx {
+        match progress {
+            FilterProgress::PartialResults {
+                matches,
+                lines_processed,
+            } => {
+                matching_indices.extend(matches);
+                lines_searched = lines_processed;
+            }
+            FilterProgress::Complete {
+                matches,
+                lines_processed,
+            } => {
+                matching_indices.extend(matches);
+                lines_searched = lines_processed;
+            }
+            FilterProgress::Processing(n) => {
+                lines_searched = n;
+            }
+            FilterProgress::Error(e) => return Err(e),
+        }
+    }
+
+    Ok((matching_indices, lines_searched))
+}
 
 /// Create a JSON error response string.
 /// Errors are always returned as JSON regardless of the requested output format.
@@ -64,6 +104,63 @@ fn strip_context_response(resp: &mut GetContextResponse) {
     }
 }
 
+/// Truncate a single line to `max_len` characters, appending a suffix if truncated.
+fn truncate_line(line: &str, max_len: usize) -> Cow<'_, str> {
+    if line.len() <= max_len {
+        Cow::Borrowed(line)
+    } else {
+        let end = line.floor_char_boundary(max_len);
+        let excess = line.len() - end;
+        Cow::Owned(format!("{}…[+{} chars]", &line[..end], excess))
+    }
+}
+
+/// Truncate all line content in a GetLinesResponse.
+fn truncate_lines_response(resp: &mut GetLinesResponse) {
+    for line in &mut resp.lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+    }
+}
+
+/// Truncate all content in a SearchResponse.
+fn truncate_search_response(resp: &mut SearchResponse) {
+    for m in &mut resp.matches {
+        if m.content.len() > MAX_LINE_LEN {
+            m.content = truncate_line(&m.content, MAX_LINE_LEN).into_owned();
+        }
+        for line in &mut m.before {
+            if line.len() > MAX_LINE_LEN {
+                *line = truncate_line(line, MAX_LINE_LEN).into_owned();
+            }
+        }
+        for line in &mut m.after {
+            if line.len() > MAX_LINE_LEN {
+                *line = truncate_line(line, MAX_LINE_LEN).into_owned();
+            }
+        }
+    }
+}
+
+/// Truncate all content in a GetContextResponse.
+fn truncate_context_response(resp: &mut GetContextResponse) {
+    for line in &mut resp.before_lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+    }
+    if resp.target_line.content.len() > MAX_LINE_LEN {
+        resp.target_line.content =
+            truncate_line(&resp.target_line.content, MAX_LINE_LEN).into_owned();
+    }
+    for line in &mut resp.after_lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+    }
+}
+
 /// Format a GetLinesResponse according to the requested output format.
 fn format_lines(resp: &GetLinesResponse, output: OutputFormat) -> String {
     match output {
@@ -86,6 +183,15 @@ fn format_search(resp: &SearchResponse, output: OutputFormat) -> String {
 fn format_context(resp: &GetContextResponse, output: OutputFormat) -> String {
     match output {
         OutputFormat::Text => format::format_context_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
+}
+
+/// Format a GetStatsResponse according to the requested output format.
+fn format_stats(resp: &GetStatsResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format::format_stats_text(resp),
         OutputFormat::Json => serde_json::to_string_pretty(resp)
             .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
     }
@@ -152,6 +258,7 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
+        truncate_lines_response(&mut response);
 
         format_lines(&response, output)
     }
@@ -193,6 +300,7 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
+        truncate_lines_response(&mut response);
 
         format_lines(&response, output)
     }
@@ -234,38 +342,36 @@ impl LazyTailMcp {
             }
         };
 
-        // Collect matching line indices from channel
-        let mut matching_indices = Vec::new();
-        let mut lines_searched = 0;
+        let (matching_indices, lines_searched) = match collect_filter_results(rx) {
+            Ok(r) => r,
+            Err(e) => return error_response(format!("Search error: {}", e)),
+        };
 
-        for progress in rx {
-            match progress {
-                FilterProgress::PartialResults {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Complete {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Processing(n) => {
-                    lines_searched = n;
-                }
-                FilterProgress::Error(e) => return error_response(format!("Search error: {}", e)),
-            }
-        }
+        Self::build_search_response(
+            path,
+            matching_indices,
+            lines_searched,
+            max_results,
+            context_lines,
+            raw,
+            output,
+        )
+    }
 
+    /// Assemble a SearchResponse from collected filter results — shared by search and query paths.
+    fn build_search_response(
+        path: &Path,
+        mut matching_indices: Vec<usize>,
+        lines_searched: usize,
+        max_results: usize,
+        context_lines: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
         let total_matches = matching_indices.len();
         let truncated = total_matches > max_results;
         matching_indices.truncate(max_results);
 
-        // If we need line content or context, use mmap for fast random access
         let matches = if matching_indices.is_empty() {
             Vec::new()
         } else {
@@ -285,6 +391,7 @@ impl LazyTailMcp {
         if !raw {
             strip_search_response(&mut response);
         }
+        truncate_search_response(&mut response);
 
         format_search(&response, output)
     }
@@ -297,8 +404,19 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
     ) -> String {
+        use lazytail::index::reader::IndexReader;
+
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
+
+        // Try index-accelerated path
+        let bitmap = query.index_mask().and_then(|(mask, want)| {
+            let reader = IndexReader::open(path)?;
+            if reader.is_empty() {
+                return None;
+            }
+            Some(reader.candidate_bitmap(mask, want, reader.len()))
+        });
 
         let query_filter = match QueryFilter::new(query) {
             Ok(f) => f,
@@ -307,68 +425,117 @@ impl LazyTailMcp {
 
         let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
-        let rx = match streaming_filter::run_streaming_filter(
-            path.to_path_buf(),
-            filter,
-            CancelToken::new(),
-        ) {
-            Ok(rx) => rx,
-            Err(e) => {
-                return error_response(format!("Failed to search file '{}': {}", path.display(), e))
+        let rx = if let Some(bitmap) = bitmap {
+            match streaming_filter::run_streaming_filter_indexed(
+                path.to_path_buf(),
+                filter,
+                bitmap,
+                CancelToken::new(),
+            ) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    return error_response(format!(
+                        "Failed to search file '{}': {}",
+                        path.display(),
+                        e
+                    ))
+                }
             }
-        };
-
-        let mut matching_indices = Vec::new();
-        let mut lines_searched = 0;
-
-        for progress in rx {
-            match progress {
-                FilterProgress::PartialResults {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Complete {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Processing(n) => {
-                    lines_searched = n;
-                }
-                FilterProgress::Error(e) => return error_response(format!("Query error: {}", e)),
-            }
-        }
-
-        let total_matches = matching_indices.len();
-        let truncated = total_matches > max_results;
-        matching_indices.truncate(max_results);
-
-        let matches = if matching_indices.is_empty() {
-            Vec::new()
         } else {
-            match Self::get_lines_content(path, &matching_indices, context_lines) {
-                Ok(m) => m,
-                Err(e) => return error_response(format!("Failed to read line content: {}", e)),
+            match streaming_filter::run_streaming_filter(
+                path.to_path_buf(),
+                filter,
+                CancelToken::new(),
+            ) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    return error_response(format!(
+                        "Failed to search file '{}': {}",
+                        path.display(),
+                        e
+                    ))
+                }
             }
         };
 
-        let mut response = SearchResponse {
-            matches,
-            total_matches,
-            truncated,
-            lines_searched,
+        let (matching_indices, lines_searched) = match collect_filter_results(rx) {
+            Ok(r) => r,
+            Err(e) => return error_response(format!("Query error: {}", e)),
         };
 
-        if !raw {
-            strip_search_response(&mut response);
+        Self::build_search_response(
+            path,
+            matching_indices,
+            lines_searched,
+            max_results,
+            context_lines,
+            raw,
+            output,
+        )
+    }
+
+    pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
+        let idx_dir = source::index_dir_for_log(path);
+        let meta_path = idx_dir.join("meta");
+
+        if !meta_path.exists() {
+            let response = GetStatsResponse {
+                source: source_name.to_string(),
+                indexed_lines: 0,
+                log_file_size: 0,
+                has_index: false,
+                severity_counts: None,
+                columns: Vec::new(),
+            };
+            return format_stats(&response, output);
         }
 
-        format_search(&response, output)
+        let meta = match IndexMeta::read_from(&meta_path) {
+            Ok(m) => m,
+            Err(e) => return error_response(format!("Failed to read index meta: {}", e)),
+        };
+
+        let mut columns = Vec::new();
+        let column_names = [
+            (ColumnBit::Offsets, "offsets"),
+            (ColumnBit::Lengths, "lengths"),
+            (ColumnBit::Time, "time"),
+            (ColumnBit::Flags, "flags"),
+            (ColumnBit::Checkpoints, "checkpoints"),
+        ];
+        for (bit, name) in &column_names {
+            if meta.has_column(*bit) {
+                columns.push(name.to_string());
+            }
+        }
+
+        let severity_counts = if meta.has_column(ColumnBit::Checkpoints) {
+            CheckpointReader::open(idx_dir.join("checkpoints"))
+                .ok()
+                .and_then(|cr| cr.last())
+                .map(|cp| SeverityCountsInfo {
+                    unknown: cp.severity_counts.unknown,
+                    trace: cp.severity_counts.trace,
+                    debug: cp.severity_counts.debug,
+                    info: cp.severity_counts.info,
+                    warn: cp.severity_counts.warn,
+                    error: cp.severity_counts.error,
+                    fatal: cp.severity_counts.fatal,
+                })
+        } else {
+            None
+        };
+
+        let response = GetStatsResponse {
+            source: source_name.to_string(),
+            indexed_lines: meta.entry_count,
+            log_file_size: meta.log_file_size,
+            has_index: true,
+            severity_counts,
+            columns,
+        };
+
+        format_stats(&response, output)
     }
 
     /// Fetch line content and context for search matches using a single-pass mmap scan.
@@ -545,6 +712,7 @@ impl LazyTailMcp {
         if !raw {
             strip_context_response(&mut response);
         }
+        truncate_context_response(&mut response);
 
         format_context(&response, output)
     }
@@ -676,6 +844,18 @@ impl LazyTailMcp {
         serde_json::to_string_pretty(&response)
             .unwrap_or_else(|e| format!("Error serializing response: {}", e))
     }
+
+    /// Get index statistics for a lazytail source.
+    #[tool(
+        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, and severity breakdown (from checkpoint data). Useful for understanding log composition before searching. Pass a source name from list_sources."
+    )]
+    fn get_stats(&self, #[tool(aggr)] req: GetStatsRequest) -> String {
+        let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
+            Ok(p) => p,
+            Err(e) => return error_response(e),
+        };
+        Self::get_stats_impl(&path, &req.source, req.output)
+    }
 }
 
 // Generate the tool_box function
@@ -684,7 +864,8 @@ tool_box!(LazyTailMcp {
     get_tail,
     search,
     get_context,
-    list_sources
+    list_sources,
+    get_stats
 });
 
 impl ServerHandler for LazyTailMcp {
@@ -1382,5 +1563,158 @@ plain line with no escapes\n\
 
         assert_eq!(req.pattern, "");
         assert!(req.query.is_some());
+    }
+
+    // -- get_stats tests --
+
+    #[test]
+    fn get_stats_no_index() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "just a log line").unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_stats_impl(f.path(), "test", OutputFormat::Json);
+        let resp: GetStatsResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.source, "test");
+        assert!(!resp.has_index);
+        assert_eq!(resp.indexed_lines, 0);
+        assert!(resp.severity_counts.is_none());
+        assert!(resp.columns.is_empty());
+    }
+
+    #[test]
+    fn get_stats_with_index() {
+        use crate::index::builder::IndexBuilder;
+
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "2024-01-01 INFO server started").unwrap();
+        writeln!(f, "2024-01-01 ERROR connection failed").unwrap();
+        writeln!(f, "2024-01-01 WARN disk space low").unwrap();
+        f.flush().unwrap();
+
+        let idx_dir = tempfile::tempdir().unwrap();
+        IndexBuilder::new().build(f.path(), idx_dir.path()).unwrap();
+
+        // Create a symlink-like setup: the index dir must be at path.with_extension("idx")
+        // Instead, use a temp file whose .idx/ sibling we control
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.log");
+        std::fs::copy(f.path(), &log_path).unwrap();
+        let real_idx_dir = dir.path().join("test.idx");
+        std::fs::create_dir_all(&real_idx_dir).unwrap();
+
+        // Copy index files
+        for entry in std::fs::read_dir(idx_dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), real_idx_dir.join(entry.file_name())).unwrap();
+        }
+
+        let result = LazyTailMcp::get_stats_impl(&log_path, "test", OutputFormat::Json);
+        let resp: GetStatsResponse = serde_json::from_str(&result).unwrap();
+
+        assert!(resp.has_index);
+        assert_eq!(resp.indexed_lines, 3);
+        assert!(!resp.columns.is_empty());
+        assert!(resp.columns.contains(&"flags".to_string()));
+    }
+
+    #[test]
+    fn get_stats_text_format() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "test").unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_stats_impl(f.path(), "myapp", OutputFormat::Text);
+        assert!(result.contains("--- source: myapp"));
+        assert!(result.contains("--- has_index: false"));
+    }
+
+    // -- truncation tests --
+
+    #[test]
+    fn truncate_line_short_unchanged() {
+        let line = "short line";
+        let result = truncate_line(line, 500);
+        assert_eq!(&*result, "short line");
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn truncate_line_long_truncated() {
+        let line = "x".repeat(600);
+        let result = truncate_line(&line, 500);
+        assert!(result.len() < line.len());
+        assert!(result.starts_with(&"x".repeat(500)));
+        assert!(result.contains("…[+100 chars]"));
+    }
+
+    #[test]
+    fn truncate_line_multibyte_boundary() {
+        // 'é' is 2 bytes in UTF-8; build a string where byte 500 lands mid-char
+        let mut line = "a".repeat(499);
+        line.push('é'); // bytes 499..501
+        line.push_str(&"b".repeat(100));
+        let result = truncate_line(&line, 500);
+        // Must not panic and must be valid UTF-8
+        assert!(result.contains('…'));
+        // The truncation point should be at or before byte 500
+        let prefix_end = result.find('…').unwrap();
+        assert!(prefix_end <= 500);
+    }
+
+    #[test]
+    fn get_lines_truncates_long_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "short").unwrap();
+        writeln!(f, "{}", "x".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines[0].content, "short");
+        assert!(resp.lines[1].content.len() < 1000);
+        assert!(resp.lines[1].content.contains("…[+"));
+    }
+
+    #[test]
+    fn search_truncates_long_match_and_context() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", "a".repeat(1000)).unwrap();
+        writeln!(f, "error {}", "b".repeat(1000)).unwrap();
+        writeln!(f, "{}", "c".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            1,
+            false,
+            OutputFormat::Json,
+        );
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.total_matches, 1);
+        let m = &resp.matches[0];
+        assert!(m.content.contains("…[+"));
+        assert!(m.before[0].contains("…[+"));
+        assert!(m.after[0].contains("…[+"));
+    }
+
+    #[test]
+    fn get_context_truncates_long_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", "a".repeat(1000)).unwrap();
+        writeln!(f, "{}", "b".repeat(1000)).unwrap();
+        writeln!(f, "{}", "c".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json);
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.before_lines[0].content.contains("…[+"));
+        assert!(resp.target_line.content.contains("…[+"));
+        assert!(resp.after_lines[0].content.contains("…[+"));
     }
 }
