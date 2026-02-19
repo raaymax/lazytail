@@ -27,12 +27,44 @@ use rmcp::{tool, tool_box, ServerHandler};
 use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 /// Maximum characters per line in MCP output. Lines exceeding this are truncated
 /// with a suffix showing the number of hidden characters. Full content is available
 /// via narrower `get_context` or `get_lines` calls.
 const MAX_LINE_LEN: usize = 500;
+
+/// Collect filter results from a progress channel into matching line indices.
+fn collect_filter_results(rx: Receiver<FilterProgress>) -> Result<(Vec<usize>, usize), String> {
+    let mut matching_indices = Vec::new();
+    let mut lines_searched = 0;
+
+    for progress in rx {
+        match progress {
+            FilterProgress::PartialResults {
+                matches,
+                lines_processed,
+            } => {
+                matching_indices.extend(matches);
+                lines_searched = lines_processed;
+            }
+            FilterProgress::Complete {
+                matches,
+                lines_processed,
+            } => {
+                matching_indices.extend(matches);
+                lines_searched = lines_processed;
+            }
+            FilterProgress::Processing(n) => {
+                lines_searched = n;
+            }
+            FilterProgress::Error(e) => return Err(e),
+        }
+    }
+
+    Ok((matching_indices, lines_searched))
+}
 
 /// Create a JSON error response string.
 /// Errors are always returned as JSON regardless of the requested output format.
@@ -310,38 +342,36 @@ impl LazyTailMcp {
             }
         };
 
-        // Collect matching line indices from channel
-        let mut matching_indices = Vec::new();
-        let mut lines_searched = 0;
+        let (matching_indices, lines_searched) = match collect_filter_results(rx) {
+            Ok(r) => r,
+            Err(e) => return error_response(format!("Search error: {}", e)),
+        };
 
-        for progress in rx {
-            match progress {
-                FilterProgress::PartialResults {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Complete {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Processing(n) => {
-                    lines_searched = n;
-                }
-                FilterProgress::Error(e) => return error_response(format!("Search error: {}", e)),
-            }
-        }
+        Self::build_search_response(
+            path,
+            matching_indices,
+            lines_searched,
+            max_results,
+            context_lines,
+            raw,
+            output,
+        )
+    }
 
+    /// Assemble a SearchResponse from collected filter results — shared by search and query paths.
+    fn build_search_response(
+        path: &Path,
+        mut matching_indices: Vec<usize>,
+        lines_searched: usize,
+        max_results: usize,
+        context_lines: usize,
+        raw: bool,
+        output: OutputFormat,
+    ) -> String {
         let total_matches = matching_indices.len();
         let truncated = total_matches > max_results;
         matching_indices.truncate(max_results);
 
-        // If we need line content or context, use mmap for fast random access
         let matches = if matching_indices.is_empty() {
             Vec::new()
         } else {
@@ -428,58 +458,20 @@ impl LazyTailMcp {
             }
         };
 
-        let mut matching_indices = Vec::new();
-        let mut lines_searched = 0;
-
-        for progress in rx {
-            match progress {
-                FilterProgress::PartialResults {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Complete {
-                    matches,
-                    lines_processed,
-                } => {
-                    matching_indices.extend(matches);
-                    lines_searched = lines_processed;
-                }
-                FilterProgress::Processing(n) => {
-                    lines_searched = n;
-                }
-                FilterProgress::Error(e) => return error_response(format!("Query error: {}", e)),
-            }
-        }
-
-        let total_matches = matching_indices.len();
-        let truncated = total_matches > max_results;
-        matching_indices.truncate(max_results);
-
-        let matches = if matching_indices.is_empty() {
-            Vec::new()
-        } else {
-            match Self::get_lines_content(path, &matching_indices, context_lines) {
-                Ok(m) => m,
-                Err(e) => return error_response(format!("Failed to read line content: {}", e)),
-            }
+        let (matching_indices, lines_searched) = match collect_filter_results(rx) {
+            Ok(r) => r,
+            Err(e) => return error_response(format!("Query error: {}", e)),
         };
 
-        let mut response = SearchResponse {
-            matches,
-            total_matches,
-            truncated,
+        Self::build_search_response(
+            path,
+            matching_indices,
             lines_searched,
-        };
-
-        if !raw {
-            strip_search_response(&mut response);
-        }
-        truncate_search_response(&mut response);
-
-        format_search(&response, output)
+            max_results,
+            context_lines,
+            raw,
+            output,
+        )
     }
 
     pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
