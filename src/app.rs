@@ -149,6 +149,15 @@ pub struct App {
     /// Transient flag: set per event batch when a StartFilter event is present.
     /// Suppresses follow-mode jump on FileModified (the filter restart handles positioning).
     pub has_start_filter_in_batch: bool,
+
+    /// Startup timestamp for measuring time-to-first-render
+    pub startup_time: Option<Instant>,
+
+    /// Elapsed time to first render (printed after terminal restore)
+    pub first_render_elapsed: Option<Duration>,
+
+    /// Verbose mode (-v flag)
+    pub verbose: bool,
 }
 
 impl App {
@@ -188,6 +197,9 @@ impl App {
             confirm_return_mode: InputMode::Normal,
             status_message: None,
             has_start_filter_in_batch: false,
+            startup_time: None,
+            first_render_elapsed: None,
+            verbose: false,
         }
     }
 

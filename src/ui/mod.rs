@@ -1,4 +1,5 @@
 use crate::app::{App, FilterState, InputMode, SourceType, TreeSelection, ViewMode};
+use crate::index::flags::Severity;
 use crate::source::SourceStatus;
 use crate::tab::TabState;
 use anyhow::Result;
@@ -14,12 +15,25 @@ use unicode_width::UnicodeWidthStr;
 // UI Style Constants
 const SELECTED_BG: Color = Color::DarkGray;
 const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
+const SEVERITY_WARN_BG: Color = Color::Rgb(50, 40, 0);
+const SEVERITY_ERROR_BG: Color = Color::Rgb(55, 10, 10);
+const SEVERITY_FATAL_BG: Color = Color::Rgb(75, 0, 15);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 const TAB_SIZE: usize = 4;
 
 // Help overlay dimensions (as percentage of screen)
 const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
 const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
+
+/// Map severity to a subtle background color for line highlighting.
+fn severity_bg(severity: Severity) -> Option<Color> {
+    match severity {
+        Severity::Warn => Some(SEVERITY_WARN_BG),
+        Severity::Error => Some(SEVERITY_ERROR_BG),
+        Severity::Fatal => Some(SEVERITY_FATAL_BG),
+        _ => None,
+    }
+}
 
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
 fn apply_selection_style(style: Style) -> Style {
@@ -110,10 +124,29 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 }
 
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
+    // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
+    let tab = app.active_tab();
+    let is_filtered = tab.filter.pattern.is_some();
+    let has_index = tab.index_size.is_some();
+    let severity_rows = tab
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints().last())
+        .map(|cp| {
+            let c = &cp.severity_counts;
+            [c.fatal, c.error, c.warn, c.info, c.debug, c.trace]
+                .iter()
+                .filter(|&&v| v > 0)
+                .count() as u16
+        })
+        .unwrap_or(0);
+    let stats_height =
+        3 + if is_filtered { 1 } else { 0 } + if has_index { 1 } else { 0 } + severity_rows;
+
     // Split side panel into sources list and stats
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(5)])
+        .constraints([Constraint::Min(3), Constraint::Length(stats_height)])
         .split(area);
 
     // Render sources list
@@ -404,6 +437,58 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Show index size if available
+    if let Some(index_size) = tab.index_size {
+        stats_text.push(Line::from(vec![
+            Span::raw(" Index: "),
+            Span::styled(
+                format_file_size(index_size),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    // Show severity bar chart from checkpoint data
+    if let Some(counts) = tab
+        .index_reader
+        .as_ref()
+        .and_then(|ir| ir.checkpoints().last())
+        .map(|cp| cp.severity_counts)
+    {
+        let entries: &[(u32, &str, Color)] = &[
+            (counts.fatal, "Fatal", Color::Magenta),
+            (counts.error, "Error", Color::Red),
+            (counts.warn, "Warn", Color::Yellow),
+            (counts.info, "Info", Color::Green),
+            (counts.debug, "Debug", Color::Cyan),
+            (counts.trace, "Trace", Color::DarkGray),
+        ];
+
+        let max_count = entries.iter().map(|&(c, _, _)| c).max().unwrap_or(1).max(1);
+        // Available width: panel_width - 2 (borders) - 1 (left pad) - 6 (label) - 1 (space) - 1 (space) - count width
+        // Use a fixed bar width that fits comfortably
+        let bar_max = 10u32;
+
+        for &(count, label, color) in entries {
+            if count > 0 {
+                let filled = ((count as u64 * bar_max as u64) / max_count as u64) as usize;
+                let filled = filled.max(1); // at least 1 block for non-zero
+                let empty = bar_max as usize - filled;
+                let bar_filled: String = "\u{2588}".repeat(filled);
+                let bar_empty: String = "\u{2591}".repeat(empty);
+                let count_str = format_count(count as usize);
+
+                stats_text.push(Line::from(vec![
+                    Span::raw(format!(" {:<5} ", label)),
+                    Span::styled(bar_filled, Style::default().fg(color)),
+                    Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                    Span::raw(" "),
+                    Span::styled(count_str, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+    }
+
     let stats =
         Paragraph::new(stats_text).block(Block::default().borders(Borders::ALL).title("Stats"));
 
@@ -433,9 +518,10 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
     let prefix_width = LINE_PREFIX_WIDTH;
 
-    // Get reader access and collect expanded_lines snapshot
+    // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.reader.lock().unwrap();
     let expanded_lines = tab.expansion.expanded_lines.clone();
+    let index_reader = tab.index_reader.as_ref();
 
     // Fetch the lines to display
     let mut items = Vec::new();
@@ -497,10 +583,19 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
                     }
                 }
 
-                // Apply selection background if this is the selected line
+                // Apply line styling: selection takes priority, then severity background
                 if is_selected {
                     for span in &mut final_line.spans {
                         span.style = apply_selection_style(span.style);
+                    }
+                } else if let Some(bg) = index_reader
+                    .map(|ir| ir.severity(line_number))
+                    .and_then(severity_bg)
+                {
+                    for span in &mut final_line.spans {
+                        if span.style.bg.is_none() {
+                            span.style = span.style.bg(bg);
+                        }
                     }
                 }
 

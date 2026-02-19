@@ -3,11 +3,13 @@ use crate::config;
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
+use crate::index::reader::IndexReader;
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
-    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
+    check_source_status, check_source_status_in_dir, index_dir_for_log, DiscoveredSource,
+    SourceLocation, SourceStatus,
 };
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
@@ -15,13 +17,34 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Batch size for sending lines from background reader
 const STREAM_BATCH_SIZE: usize = 10_000;
+
+/// Calculate the total size of all files in the index directory
+fn calculate_index_size(log_path: &Path) -> Option<u64> {
+    let index_dir = index_dir_for_log(log_path);
+    if !index_dir.exists() || !index_dir.is_dir() {
+        return None;
+    }
+
+    let mut total_size = 0u64;
+    let entries = std::fs::read_dir(&index_dir).ok()?;
+
+    for entry in entries.flatten() {
+        if let Ok(metadata) = entry.metadata() {
+            if metadata.is_file() {
+                total_size += metadata.len();
+            }
+        }
+    }
+
+    Some(total_size)
+}
 
 /// Messages sent from the background stream reader thread
 #[derive(Debug)]
@@ -115,6 +138,10 @@ pub struct TabState {
     pub disabled: bool,
     /// File size in bytes (None for stdin/pipes without a file path)
     pub file_size: Option<u64>,
+    /// Columnar index reader for severity coloring and stats (None if no index)
+    pub index_reader: Option<IndexReader>,
+    /// Index directory size in bytes (None if no index)
+    pub index_size: Option<u64>,
 }
 
 impl TabState {
@@ -122,6 +149,11 @@ impl TabState {
     #[cfg(test)]
     pub fn is_line_expanded(&self, file_line_number: usize) -> bool {
         self.expansion.expanded_lines.contains(&file_line_number)
+    }
+
+    /// Get the file path for this tab (None for stdin/pipe tabs).
+    pub fn file_path(&self) -> Option<&std::path::Path> {
+        self.source_path.as_deref()
     }
 
     /// Get the source type for this tab (ProjectSource, GlobalSource, Global, File, or Pipe)
@@ -169,6 +201,10 @@ impl TabState {
             let total_lines = file_reader.total_lines();
             let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
+            let index_reader = IndexReader::open(&path);
+            let index_size = index_reader
+                .as_ref()
+                .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
                 name,
@@ -190,6 +226,8 @@ impl TabState {
                 config_source_type: None,
                 disabled: false,
                 file_size,
+                index_reader,
+                index_size,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -221,6 +259,8 @@ impl TabState {
                 config_source_type: None,
                 disabled: false,
                 file_size: None,
+                index_reader: None,
+                index_size: None,
             })
         }
     }
@@ -255,6 +295,8 @@ impl TabState {
             config_source_type: None,
             disabled: false,
             file_size: None,
+            index_reader: None,
+            index_size: None,
         })
     }
 
@@ -271,6 +313,10 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
+        let index_reader = IndexReader::open(&source.log_path);
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
             name: source.name,
@@ -295,6 +341,8 @@ impl TabState {
             },
             disabled: false,
             file_size,
+            index_reader,
+            index_size,
         })
     }
 
@@ -324,6 +372,10 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
+        let index_reader = IndexReader::open(&source.path);
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
             name: source.name.clone(),
@@ -345,6 +397,8 @@ impl TabState {
             config_source_type: Some(source_type),
             disabled: false,
             file_size,
+            index_reader,
+            index_size,
         })
     }
 
@@ -374,6 +428,8 @@ impl TabState {
             config_source_type: Some(source_type),
             disabled: true,
             file_size: None,
+            index_reader: None,
+            index_size: None,
         })
     }
 
@@ -515,7 +571,17 @@ impl TabState {
         // Capture screen offset BEFORE changing line_indices
         let screen_offset = self.viewport.get_screen_offset(&self.line_indices);
 
-        self.line_indices = matching_indices;
+        if self.filter.needs_clear {
+            // Orchestrator set needs_clear but no partials arrived — Complete has all matches
+            self.line_indices = matching_indices;
+            self.filter.needs_clear = false;
+        } else if matches!(self.filter.state, FilterState::Processing { .. }) {
+            // Partials were received (they consumed needs_clear) — extend with final batch
+            self.line_indices.extend(matching_indices);
+        } else {
+            // Direct call (no orchestrator, no partials) — replace
+            self.line_indices = matching_indices;
+        }
         self.mode = ViewMode::Filtered;
         self.filter.pattern = Some(pattern);
         self.filter.state = FilterState::Complete {

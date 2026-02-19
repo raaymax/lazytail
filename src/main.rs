@@ -27,6 +27,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use filter::orchestrator::FilterOrchestrator;
+use lazytail::index;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -99,7 +100,13 @@ struct Cli {
 fn main() -> Result<()> {
     use std::io::IsTerminal;
 
+    let startup = Instant::now();
+    let mut phase = Instant::now();
     let cli = Cli::parse();
+    let verbose = cli.verbose;
+    if verbose {
+        eprintln!("[startup]   cli parse: {:.1?}", phase.elapsed());
+    }
 
     // Handle subcommands first (before mode detection)
     if let Some(command) = cli.command {
@@ -118,11 +125,19 @@ fn main() -> Result<()> {
 
     // Cleanup stale markers from previous SIGKILL scenarios
     // This runs before any mode to ensure collision checks work correctly
+    phase = Instant::now();
     source::cleanup_stale_markers();
+    if verbose {
+        eprintln!("[startup]   stale marker cleanup: {:.1?}", phase.elapsed());
+    }
 
     // Config discovery - run before mode dispatch
+    phase = Instant::now();
     let (discovery, searched_paths) = config::discovery::discover_verbose();
-    if cli.verbose {
+    if verbose {
+        eprintln!("[startup]   config discovery: {:.1?}", phase.elapsed());
+    }
+    if verbose {
         for path in &searched_paths {
             eprintln!("[discovery] Searched: {}", path.display());
         }
@@ -153,6 +168,7 @@ fn main() -> Result<()> {
     }
 
     // Load config from discovered files
+    phase = Instant::now();
     let config_result = config::load(&discovery);
     let (cfg, mut config_errors) = match config_result {
         Ok(c) => (c, Vec::new()),
@@ -161,8 +177,11 @@ fn main() -> Result<()> {
             (config::Config::default(), vec![err_msg])
         }
     };
+    if verbose {
+        eprintln!("[startup]   config load: {:.1?}", phase.elapsed());
+    }
 
-    if cli.verbose {
+    if verbose {
         if let Some(name) = &cfg.name {
             eprintln!("[config] Project name: {}", name);
         }
@@ -195,7 +214,14 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if cli.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(cli.no_watch, cfg, config_errors, &discovery);
+        return run_discovery_mode(
+            cli.no_watch,
+            cfg,
+            config_errors,
+            &discovery,
+            startup,
+            verbose,
+        );
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -203,6 +229,7 @@ fn main() -> Result<()> {
     let watch = !cli.no_watch;
 
     // Build tabs from config sources first
+    phase = Instant::now();
     let mut tabs = Vec::new();
 
     // Add project sources
@@ -242,13 +269,48 @@ fn main() -> Result<()> {
             tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
         }
     }
+    if verbose {
+        eprintln!("[startup]   tab creation: {:.1?}", phase.elapsed());
+    }
+
+    // Build columnar indexes for file tabs that don't have one yet
+    phase = Instant::now();
+    for tab in &tabs {
+        if let Some(path) = tab.file_path() {
+            let idx_dir = source::index_dir_for_log(path);
+            if !idx_dir.join("meta").exists() {
+                let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                eprintln!("Building index for {} ({} bytes)...", name, file_size);
+                let start = std::time::Instant::now();
+                match index::builder::IndexBuilder::new().build(path, &idx_dir) {
+                    Ok(meta) => {
+                        eprintln!(
+                            "  Done: {} lines indexed in {:.1?}",
+                            meta.entry_count,
+                            start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("  Warning: failed to build index: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    if verbose {
+        eprintln!("[startup]   index build: {:.1?}", phase.elapsed());
+    }
 
     // Log config errors to stderr (debug source is a future enhancement)
     for err in &config_errors {
         eprintln!("[config error] {}", err);
     }
 
+    phase = Instant::now();
     let mut app = App::with_tabs(tabs);
+    app.startup_time = Some(startup);
+    app.verbose = verbose;
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
@@ -256,6 +318,9 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    if verbose {
+        eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
+    }
 
     // Main loop
     let res = run_app(&mut terminal, &mut app);
@@ -268,6 +333,12 @@ fn main() -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+
+    if app.verbose {
+        if let Some(elapsed) = app.first_render_elapsed {
+            eprintln!("[startup] First render in {:.1?}", elapsed);
+        }
+    }
 
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
@@ -282,6 +353,8 @@ fn run_discovery_mode(
     cfg: config::Config,
     mut config_errors: Vec<String>,
     discovery: &config::DiscoveryResult,
+    startup: Instant,
+    verbose: bool,
 ) -> Result<()> {
     use source::{discover_sources_for_context, ensure_directories_for_context};
 
@@ -289,11 +362,23 @@ fn run_discovery_mode(
     ensure_directories_for_context(discovery)?;
 
     // Discover existing sources from both project and global directories
+    let mut phase = Instant::now();
     let sources = discover_sources_for_context(discovery)?;
+    if verbose {
+        eprintln!("[startup]   source discovery: {:.1?}", phase.elapsed());
+    }
+
+    // Build columnar indexes for sources that don't have one yet
+    phase = Instant::now();
+    source::build_missing_indexes(&sources);
+    if verbose {
+        eprintln!("[startup]   index build: {:.1?}", phase.elapsed());
+    }
 
     let watch = !no_watch;
 
     // Build tabs from config sources first
+    phase = Instant::now();
     let mut tabs = Vec::new();
 
     // Add project sources
@@ -318,6 +403,9 @@ fn run_discovery_mode(
         .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
         .collect();
     tabs.extend(discovery_tabs);
+    if verbose {
+        eprintln!("[startup]   tab creation: {:.1?}", phase.elapsed());
+    }
 
     // Log config errors to stderr (debug source is a future enhancement)
     for err in &config_errors {
@@ -334,7 +422,10 @@ fn run_discovery_mode(
         std::process::exit(0);
     }
 
+    phase = Instant::now();
     let mut app = App::with_tabs(tabs);
+    app.startup_time = Some(startup);
+    app.verbose = verbose;
 
     // Optionally set up directory watcher for new sources
     // Watch project data dir if in project, otherwise global
@@ -355,6 +446,9 @@ fn run_discovery_mode(
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    if verbose {
+        eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
+    }
 
     // Determine watched location for newly discovered sources
     let watched_location = if discovery.project_root.is_some() {
@@ -374,6 +468,12 @@ fn run_discovery_mode(
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+
+    if app.verbose {
+        if let Some(elapsed) = app.first_render_elapsed {
+            eprintln!("[startup] First render in {:.1?}", elapsed);
+        }
+    }
 
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
@@ -398,6 +498,10 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
     loop {
         // Phase 1: Render
         render(terminal, app)?;
+
+        if let Some(start) = app.startup_time.take() {
+            app.first_render_elapsed = Some(start.elapsed());
+        }
 
         // Phase 2: Check for pending debounced filter
         if let Some(trigger_at) = app.pending_filter_at {

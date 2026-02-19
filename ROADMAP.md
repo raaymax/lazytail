@@ -135,7 +135,7 @@ Two-panel layout:
 - [x] Add tests for multi-tab behavior
 
 **Future Side Panel Enhancements:**
-- [ ] Show total line count per source in side panel (live-updating as file grows)
+- [ ] Show total line count and file size per source in side panel (live-updating as file grows)
 - [ ] Tree structure with collapsible groups
 - [ ] Drag-and-drop reordering
 - [ ] Bookmarks section (per UI instance / project scope)
@@ -259,6 +259,10 @@ lazytail
 ---
 
 #### Future Enhancements (Post-Phase 3)
+- [ ] `lazytail -n` should truncate (reset) existing log file by default instead of appending
+  - Current behavior: appends to existing log file, accumulating stale data across runs
+  - New default: truncate the file on start so each capture session begins fresh
+  - Add `--append` / `-a` flag to preserve existing contents (opt-in)
 - [ ] `--file <path>` for custom log file location
 - [ ] `--max-size <size>` for log rotation
 - [ ] Memory-only mode with streaming (no file)
@@ -415,6 +419,13 @@ struct Aggregation {
   - [x] Nested field access (`user.id`, `request.headers.host`)
 - [ ] Phase 6: Polish
   - [ ] Syntax highlighting in filter input
+  - [ ] LogQL `format` stage — render structured fields into a custom display template
+    - Text syntax: `json | format <severity> - <method> <url> - <status>`
+    - JSON syntax: `"format": "<severity> - <method> <url> - <status>"`
+    - Extracts fields from parsed log line and interpolates into template
+    - Unresolved fields render as empty or `<missing>`
+    - Useful in TUI for readable views of dense JSON/logfmt lines
+    - Useful in MCP for agents requesting specific field projections
   - [ ] Query history with mode
   - [ ] Documentation and examples
 
@@ -805,20 +816,121 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 ---
 
-#### Structured Logging
-**Goal:** Replace eprintln! with proper logging framework
+#### Structured Logging & Debug Instrumentation 🔴 HIGH PRIORITY
+**Goal:** Add comprehensive logging to debug what LazyTail is doing internally
+
+**Motivation:** Currently difficult to debug issues like:
+- Why is filtering slow on this file?
+- Which reader implementation is being used?
+- Why did the file watcher trigger?
+- What's happening during index builds?
+- Why is follow mode not working?
+- Performance bottlenecks in the event loop
+
+**Logging Framework:**
+- Use `tracing` crate (better than `log` for structured context)
+- Support multiple output targets (stderr, file, structured JSON)
+- Configurable per-module log levels
+- Span-based instrumentation for performance tracing
+
+**Key Areas to Instrument:**
+
+1. **File Operations**
+   - Reader selection (FileReader vs HugeFileReader vs StreamReader)
+   - File watching events (what changed, how many bytes)
+   - Index building progress and timing
+   - Mmap operations and failures
+
+2. **Filtering**
+   - Filter orchestrator decisions (which engine is used)
+   - Filter progress (lines scanned, matches found, elapsed time)
+   - Streaming filter vs generic filter selection
+   - Query parsing and execution
+
+3. **Event Loop**
+   - Event types received and processing time
+   - Debouncing decisions
+   - Frame timing (render, collect, process)
+   - Dropped frames / performance issues
+
+4. **MCP Server**
+   - Tool invocations (which tool, parameters)
+   - Query execution time
+   - Result sizes
+   - Errors and failures
+
+5. **Capture Mode**
+   - Lines captured per second
+   - Flush events
+   - Signal handling
+   - Marker file operations
+
+**Log Levels:**
+- `ERROR`: Failures that impact functionality
+- `WARN`: Degraded performance, recoverable errors
+- `INFO`: Major operations (file opened, filter applied, source added)
+- `DEBUG`: Detailed operation info (event types, state transitions)
+- `TRACE`: Verbose instrumentation (every line read, every event)
+
+**Configuration:**
+```bash
+# Enable debug logs for filter module
+RUST_LOG=lazytail::filter=debug lazytail app.log
+
+# Enable trace for everything
+RUST_LOG=trace lazytail app.log
+
+# Log to file
+RUST_LOG=debug lazytail app.log 2> debug.log
+
+# Structured JSON output
+RUST_LOG_FORMAT=json RUST_LOG=debug lazytail --mcp
+```
+
+**Performance Tracing:**
+```rust
+use tracing::{info_span, instrument};
+
+#[instrument(skip(reader))]
+fn apply_filter(reader: &dyn LogReader, filter: Arc<dyn Filter>) {
+    let _span = info_span!("apply_filter", total_lines = reader.total_lines()).entered();
+    // ... filtering logic
+    // Automatically logs: duration, total_lines, function args
+}
+```
 
 **Tasks:**
-- [ ] Add env_logger or tracing dependency
-- [ ] Replace eprintln! calls with log macros
-- [ ] Add log levels (debug, info, warn, error)
-- [ ] Document RUST_LOG usage in README
-- [ ] Add logging to troubleshooting section
+- [ ] Add `tracing` and `tracing-subscriber` dependencies
+- [ ] Initialize tracing subscriber in main.rs
+  - [ ] Support RUST_LOG env var
+  - [ ] Support RUST_LOG_FORMAT (text/json/compact)
+  - [ ] Support --log-file flag
+- [ ] Instrument core modules
+  - [ ] Reader selection and file operations (reader/)
+  - [ ] Filter orchestration and execution (filter/)
+  - [ ] Event loop and debouncing (main.rs)
+  - [ ] Index building (index/builder.rs)
+  - [ ] File watching (watcher.rs, dir_watcher.rs)
+  - [ ] MCP server (mcp/)
+  - [ ] Capture mode (capture.rs)
+- [ ] Add span instrumentation for performance-critical paths
+  - [ ] Filter execution (per-filter timing)
+  - [ ] Index building (progress tracking)
+  - [ ] File reading (lines/sec, bytes/sec)
+- [ ] Add diagnostic commands
+  - [ ] `lazytail --version --verbose` - show build info, feature flags
+  - [ ] `lazytail doctor` - check config, permissions, verify setup
+- [ ] Document logging in README and troubleshooting guide
+  - [ ] How to enable debug logs
+  - [ ] Common patterns for debugging issues
+  - [ ] Performance profiling with TRACE logs
 
 **Benefits:**
-- Better debugging experience
-- Controllable verbosity
-- Production-ready error reporting
+- **Debuggability:** Understand what LazyTail is doing without recompiling
+- **Performance analysis:** Find bottlenecks with span timing
+- **User support:** Ask users for logs instead of guessing
+- **Development:** Faster iteration when debugging issues
+- **Production monitoring:** Track MCP server performance
 
 ---
 
@@ -912,9 +1024,12 @@ sources:
   - MCP: `add_source` tool — let AI agents register sources programmatically (e.g. discover a log path and add it)
   - Currently the only ways to add sources are: pipe via `lazytail -n`, define in `lazytail.yaml`, or place files in data dir
   - This would allow dynamic source management without editing config or restarting captures
-- [ ] JSON log parsing and formatted view
-  - Detect JSON lines automatically
-  - Pretty-print JSON in dedicated view mode
+- [ ] JSON pretty collapsible viewer in TUI
+  - Detect JSON content in log lines automatically
+  - Pretty-print with syntax highlighting (keys, values, types)
+  - Collapsible/expandable nested objects and arrays (tree-style navigation)
+  - Expand/collapse individual nodes with keybindings
+  - Integrates with existing line expansion (`Space` to toggle)
   - Filter by JSON field values
 - [ ] Multiple display modes
   - Raw view (current)
@@ -928,7 +1043,26 @@ sources:
   - Detect common timestamp formats
   - Filter by time range
   - Jump to specific timestamp
-- [ ] Theme customization
+- [ ] Self-update (`lazytail update`)
+  - Use the `self_update` crate to check GitHub Releases and replace the binary in-place
+  - `lazytail update` — check for new version and install if available
+  - `lazytail update --check` — check only, don't install (exit code 0 = up to date, 1 = update available)
+  - Background update check on TUI startup (non-blocking, cached to `~/.config/lazytail/update_check.json`)
+  - Only check once every 24h to avoid API rate limits and startup latency
+  - Print subtle notice after TUI exits if update is available (not during — would interfere with ratatui)
+  - `--no-update-check` flag and config option to disable automatic checks
+  - Respect AUR users: detect if installed via package manager and suggest `yay -S lazytail` instead of self-replacing
+- [ ] TUI colors configuration / theme customization
+  - Configurable colors via `lazytail.yaml` (e.g., `theme:` section)
+  - Customizable elements: side panel, selected line, status bar, filter input, borders, active/ended indicators
+  - Support named colors (`red`, `cyan`) and hex (`#ff5555`)
+  - Built-in themes (e.g., default, light, solarized) with option to override individual colors
+  - Respect terminal color scheme where possible
+- [ ] Keybindings configuration
+  - Configurable keybindings via `lazytail.yaml` (e.g., `keybindings:` section)
+  - Override default vim-style bindings with custom keys
+  - Support modifier keys (`Ctrl`, `Alt`, `Shift`) and key combinations
+  - Sensible defaults that work out of the box, customization for power users
 - [ ] Merged/chronological view for multiple sources
   - Parse timestamps from all sources
   - Display merged timeline
@@ -940,6 +1074,11 @@ sources:
   - Security implications (arbitrary command execution)
   - Alternative: keep using `cmd | lazytail -n "Name"` pattern
   - Needs more thought on UX and lifecycle management
+- [ ] Tmux-aware capture
+  - During `lazytail -n`, detect tmux session via `$TMUX` / `$TMUX_PANE` env vars
+  - Store tmux coordinates (session:window.pane) in marker file alongside PID
+  - Expose tmux context in `list_sources` response when available
+  - No new MCP tools — agent has bash access and can use the info however it sees fit
 
 ### Developer Experience
 - [ ] Integration tests for full app behavior
