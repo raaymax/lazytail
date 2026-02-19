@@ -19,6 +19,7 @@ This directory contains Architecture Decision Records (ADRs) for LazyTail. Each 
 | [011](011-project-scoped-storage.md) | Project-Scoped vs Global Source Storage | Accepted |
 | [012](012-incremental-filtering.md) | Incremental Filtering on File Growth | Accepted |
 | [013](013-live-filter-preview.md) | Live Filter Preview with Debouncing | Accepted |
+| [014](014-hexagonal-log-source-state.md) | Hexagonal Architecture — LogSourceState Extraction | Accepted |
 
 ## Format
 

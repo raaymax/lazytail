@@ -2,13 +2,12 @@ use crate::app::{FilterState, SourceType, ViewMode};
 use crate::cmd::WebArgs;
 use crate::config;
 use crate::dir_watcher::{DirEvent, DirectoryWatcher};
-use crate::filter::cancel::CancelToken;
-use crate::filter::engine::{FilterEngine, FilterProgress};
+use crate::filter::engine::FilterProgress;
+use crate::filter::orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::regex_filter::RegexFilter;
-use crate::filter::streaming_filter;
-use crate::filter::string_filter::StringFilter;
-use crate::filter::{Filter, FilterMode};
+use crate::filter::FilterMode;
+use crate::index::flags::Severity;
 use crate::signal::setup_shutdown_handlers;
 use crate::source::{self, SourceLocation, SourceStatus};
 use crate::tab::TabState;
@@ -27,7 +26,6 @@ use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 const INDEX_HTML: &str = include_str!("index.html");
-const FILTER_PROGRESS_INTERVAL: usize = 1000;
 const MAX_LINES_PER_REQUEST: usize = 5_000;
 const MAX_REQUEST_BODY_SIZE: usize = 1024 * 1024;
 const MAX_PENDING_EVENT_REQUESTS: usize = 256;
@@ -73,6 +71,8 @@ struct SourceView {
     case_sensitive: bool,
     filter_state: FilterStateView,
     can_delete_ended: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity_counts: Option<SeverityCountsView>,
 }
 
 #[derive(Serialize)]
@@ -84,6 +84,16 @@ enum FilterStateView {
     Processing { lines_processed: usize },
     #[serde(rename = "complete")]
     Complete { matches: usize },
+}
+
+#[derive(Serialize)]
+struct SeverityCountsView {
+    trace: u32,
+    debug: u32,
+    info: u32,
+    warn: u32,
+    error: u32,
+    fatal: u32,
 }
 
 #[derive(Serialize)]
@@ -101,6 +111,8 @@ struct LineRow {
     visible_index: usize,
     line_number: usize,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -259,7 +271,7 @@ impl WebState {
                     let already_open = self
                         .tabs
                         .iter()
-                        .any(|t| t.source_path.as_ref() == Some(&path));
+                        .any(|t| t.source.source_path.as_ref() == Some(&path));
                     if already_open {
                         continue;
                     }
@@ -310,14 +322,14 @@ impl WebState {
 
                 match file_event {
                     FileEvent::Modified => {
-                        let old_total = tab.total_lines;
-                        let mut reader = match tab.reader.lock() {
+                        let old_total = tab.source.total_lines;
+                        let mut reader = match tab.source.reader.lock() {
                             Ok(guard) => guard,
                             Err(poisoned) => poisoned.into_inner(),
                         };
 
                         if let Err(err) = reader.reload() {
-                            eprintln!("[web] Failed to reload '{}': {}", tab.name, err);
+                            eprintln!("[web] Failed to reload '{}': {}", tab.source.name, err);
                             break;
                         }
 
@@ -330,32 +342,27 @@ impl WebState {
                             continue;
                         }
 
-                        tab.total_lines = new_total;
-                        if tab.mode == ViewMode::Normal {
-                            tab.line_indices = (0..new_total).collect();
+                        tab.source.total_lines = new_total;
+                        if tab.source.mode == ViewMode::Normal {
+                            tab.source.line_indices = (0..new_total).collect();
                         }
 
-                        if let Some(pattern) = tab.filter.pattern.clone() {
-                            if new_total > tab.filter.last_filtered_line {
-                                let mode = tab.filter.mode;
-                                let _ = trigger_filter_for_tab(
-                                    tab,
-                                    pattern,
-                                    mode,
-                                    Some(tab.filter.last_filtered_line),
-                                    Some(new_total),
-                                );
+                        if let Some(pattern) = tab.source.filter.pattern.clone() {
+                            if new_total > tab.source.filter.last_filtered_line {
+                                let mode = tab.source.filter.mode;
+                                let range = Some((tab.source.filter.last_filtered_line, new_total));
+                                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
                             }
                         }
 
-                        if tab.follow_mode {
+                        if tab.source.follow_mode {
                             tab.jump_to_end();
                         }
 
                         changed = true;
                     }
                     FileEvent::Error(err) => {
-                        eprintln!("[web] Watcher error for '{}': {}", tab.name, err);
+                        eprintln!("[web] Watcher error for '{}': {}", tab.source.name, err);
                     }
                 }
             }
@@ -370,7 +377,7 @@ impl WebState {
         for tab in &mut self.tabs {
             loop {
                 let recv_result = {
-                    let Some(rx) = tab.filter.receiver.as_ref() else {
+                    let Some(rx) = tab.source.filter.receiver.as_ref() else {
                         break;
                     };
                     rx.try_recv()
@@ -378,7 +385,7 @@ impl WebState {
 
                 match recv_result {
                     Ok(FilterProgress::Processing(lines_processed)) => {
-                        tab.filter.state = FilterState::Processing { lines_processed };
+                        tab.source.filter.state = FilterState::Processing { lines_processed };
                         changed = true;
                     }
                     Ok(FilterProgress::PartialResults {
@@ -392,29 +399,29 @@ impl WebState {
                         matches,
                         lines_processed: _,
                     }) => {
-                        if tab.filter.is_incremental {
+                        if tab.source.filter.is_incremental {
                             tab.append_filter_results(matches);
                         } else {
-                            let pattern = tab.filter.pattern.clone().unwrap_or_default();
+                            let pattern = tab.source.filter.pattern.clone().unwrap_or_default();
                             tab.apply_filter(matches, pattern);
                         }
 
-                        if tab.follow_mode {
+                        if tab.source.follow_mode {
                             tab.jump_to_end();
                         }
 
-                        tab.filter.receiver = None;
+                        tab.source.filter.receiver = None;
                         changed = true;
                     }
                     Ok(FilterProgress::Error(err)) => {
-                        eprintln!("[web] Filter error for '{}': {}", tab.name, err);
-                        tab.filter.state = FilterState::Inactive;
-                        tab.filter.receiver = None;
+                        eprintln!("[web] Filter error for '{}': {}", tab.source.name, err);
+                        tab.source.filter.state = FilterState::Inactive;
+                        tab.source.filter.receiver = None;
                         changed = true;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        tab.filter.receiver = None;
+                        tab.source.filter.receiver = None;
                         break;
                     }
                 }
@@ -427,9 +434,9 @@ impl WebState {
     fn refresh_source_statuses(&mut self) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
-            let before = tab.source_status;
+            let before = tab.source.source_status;
             tab.refresh_source_status();
-            if tab.source_status != before {
+            if tab.source.source_status != before {
                 changed = true;
             }
         }
@@ -437,33 +444,42 @@ impl WebState {
     }
 
     fn as_sources_response(&self) -> SourcesResponse {
-        let sources = self
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(id, tab)| SourceView {
-                id,
-                name: tab.name.clone(),
-                category: source_type_label(tab.source_type()),
-                disabled: tab.disabled,
-                follow_mode: tab.follow_mode,
-                source_status: tab.source_status.map(source_status_label),
-                total_lines: tab.total_lines,
-                visible_lines: tab.line_indices.len(),
-                filter_pattern: tab.filter.pattern.clone(),
-                filter_mode: match tab.filter.mode {
-                    FilterMode::Plain { .. } => "plain",
-                    FilterMode::Regex { .. } => "regex",
-                },
-                case_sensitive: tab.filter.mode.is_case_sensitive(),
-                filter_state: filter_state_view(tab.filter.state),
-                can_delete_ended: tab.source_status == Some(SourceStatus::Ended)
-                    && tab
-                        .source_path
-                        .as_ref()
-                        .is_some_and(|path| self.is_under_data_roots(path) && !tab.disabled),
-            })
-            .collect();
+        let sources =
+            self.tabs
+                .iter()
+                .enumerate()
+                .map(|(id, tab)| SourceView {
+                    id,
+                    name: tab.source.name.clone(),
+                    category: source_type_label(tab.source_type()),
+                    disabled: tab.source.disabled,
+                    follow_mode: tab.source.follow_mode,
+                    source_status: tab.source.source_status.map(source_status_label),
+                    total_lines: tab.source.total_lines,
+                    visible_lines: tab.source.line_indices.len(),
+                    filter_pattern: tab.source.filter.pattern.clone(),
+                    filter_mode: match tab.source.filter.mode {
+                        FilterMode::Plain { .. } => "plain",
+                        FilterMode::Regex { .. } => "regex",
+                    },
+                    case_sensitive: tab.source.filter.mode.is_case_sensitive(),
+                    filter_state: filter_state_view(tab.source.filter.state),
+                    can_delete_ended: tab.source.source_status == Some(SourceStatus::Ended)
+                        && tab.source.source_path.as_ref().is_some_and(|path| {
+                            self.is_under_data_roots(path) && !tab.source.disabled
+                        }),
+                    severity_counts: tab.source.index_reader.as_ref().and_then(|ir| {
+                        ir.checkpoints().last().map(|cp| SeverityCountsView {
+                            trace: cp.severity_counts.trace,
+                            debug: cp.severity_counts.debug,
+                            info: cp.severity_counts.info,
+                            warn: cp.severity_counts.warn,
+                            error: cp.severity_counts.error,
+                            fatal: cp.severity_counts.fatal,
+                        })
+                    }),
+                })
+                .collect();
 
         SourcesResponse {
             revision: self.revision,
@@ -736,18 +752,20 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
                 return;
             };
 
-            let total_visible = tab.line_indices.len();
+            let total_visible = tab.source.line_indices.len();
             let start = offset.min(total_visible);
             let end = (start + limit).min(total_visible);
 
-            let mut reader = match tab.reader.lock() {
+            let mut reader = match tab.source.reader.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
 
+            let index_reader = tab.source.index_reader.as_ref();
+
             let mut rows = Vec::with_capacity(end.saturating_sub(start));
             for visible_index in start..end {
-                if let Some(&file_line) = tab.line_indices.get(visible_index) {
+                if let Some(&file_line) = tab.source.line_indices.get(visible_index) {
                     let content = reader
                         .get_line(file_line)
                         .ok()
@@ -759,6 +777,9 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
                         visible_index,
                         line_number: file_line + 1,
                         content,
+                        severity: index_reader
+                            .map(|ir| ir.severity(file_line))
+                            .and_then(severity_label),
                     });
                 }
             }
@@ -766,7 +787,7 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
             let body = to_json_string(&LinesResponse {
                 revision,
                 total_visible,
-                total_lines: tab.total_lines,
+                total_lines: tab.source.total_lines,
                 offset: start,
                 limit,
                 rows,
@@ -807,10 +828,10 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
             let trimmed_pattern = payload.pattern;
 
             if trimmed_pattern.is_empty() {
-                if let Some(ref cancel) = tab.filter.cancel_token {
+                if let Some(ref cancel) = tab.source.filter.cancel_token {
                     cancel.cancel();
                 }
-                tab.filter.receiver = None;
+                tab.source.filter.receiver = None;
                 tab.clear_filter();
                 state.bump_revision();
                 respond_json(
@@ -824,29 +845,31 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
                 return;
             }
 
-            match trigger_filter_for_tab(tab, trimmed_pattern, mode, None, None) {
-                Ok(()) => {
-                    state.bump_revision();
-                    respond_json(
-                        request,
-                        200,
-                        to_json_string(&BasicResponse {
-                            ok: true,
-                            message: None,
-                        }),
-                    );
+            // Pre-validate pattern before passing to orchestrator
+            if query::is_query_syntax(&trimmed_pattern) {
+                if let Err(err) = query::parse_query(&trimmed_pattern) {
+                    respond_json_error(request, 400, format!("Invalid query: {}", err));
+                    return;
                 }
-                Err(err) => {
-                    respond_json(
-                        request,
-                        400,
-                        to_json_string(&BasicResponse {
-                            ok: false,
-                            message: Some(err),
-                        }),
-                    );
+            } else if mode.is_regex() {
+                if let Err(err) = RegexFilter::new(&trimmed_pattern, mode.is_case_sensitive()) {
+                    respond_json_error(request, 400, format!("Invalid regex pattern: {}", err));
+                    return;
                 }
             }
+
+            tab.source.filter.pattern = Some(trimmed_pattern.clone());
+            tab.source.filter.mode = mode;
+            FilterOrchestrator::trigger(&mut tab.source, trimmed_pattern, mode, None);
+            state.bump_revision();
+            respond_json(
+                request,
+                200,
+                to_json_string(&BasicResponse {
+                    ok: true,
+                    message: None,
+                }),
+            );
 
             return;
         }
@@ -879,10 +902,10 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
                 return;
             };
 
-            if let Some(ref cancel) = tab.filter.cancel_token {
+            if let Some(ref cancel) = tab.source.filter.cancel_token {
                 cancel.cancel();
             }
-            tab.filter.receiver = None;
+            tab.source.filter.receiver = None;
             tab.clear_filter();
             state.bump_revision();
 
@@ -925,8 +948,8 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
                 return;
             };
 
-            tab.follow_mode = payload.enabled;
-            if tab.follow_mode {
+            tab.source.follow_mode = payload.enabled;
+            if tab.source.follow_mode {
                 tab.jump_to_end();
             }
             state.bump_revision();
@@ -986,10 +1009,10 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
             }
 
             let mut tab = state.tabs.remove(payload.source);
-            if let Some(ref cancel) = tab.filter.cancel_token {
+            if let Some(ref cancel) = tab.source.filter.cancel_token {
                 cancel.cancel();
             }
-            tab.filter.receiver = None;
+            tab.source.filter.receiver = None;
 
             state.bump_revision();
 
@@ -1186,16 +1209,29 @@ fn filter_state_view(state: FilterState) -> FilterStateView {
     }
 }
 
+fn severity_label(severity: Severity) -> Option<&'static str> {
+    match severity {
+        Severity::Trace => Some("trace"),
+        Severity::Debug => Some("debug"),
+        Severity::Info => Some("info"),
+        Severity::Warn => Some("warn"),
+        Severity::Error => Some("error"),
+        Severity::Fatal => Some("fatal"),
+        Severity::Unknown => None,
+    }
+}
+
 fn strip_ansi(input: &str) -> String {
     ANSI_RE.replace_all(input, "").into_owned()
 }
 
 fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
-    if tab.source_status != Some(SourceStatus::Ended) {
+    if tab.source.source_status != Some(SourceStatus::Ended) {
         anyhow::bail!("Only ended captured sources can be deleted");
     }
 
     let path = tab
+        .source
         .source_path
         .as_ref()
         .context("Source has no file path")?;
@@ -1212,7 +1248,7 @@ fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
     if let Some(marker_path) = path
         .parent()
         .and_then(|data_dir| data_dir.parent())
-        .map(|root| root.join("sources").join(&tab.name))
+        .map(|root| root.join("sources").join(&tab.source.name))
     {
         if marker_path.exists() {
             let _ = fs::remove_file(marker_path);
@@ -1223,21 +1259,21 @@ fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
 }
 
 fn reset_tab_after_truncation(tab: &mut TabState, new_total: usize) {
-    if let Some(ref cancel) = tab.filter.cancel_token {
+    if let Some(ref cancel) = tab.source.filter.cancel_token {
         cancel.cancel();
     }
 
-    tab.total_lines = new_total;
-    tab.line_indices = (0..new_total).collect();
-    tab.mode = ViewMode::Normal;
+    tab.source.total_lines = new_total;
+    tab.source.line_indices = (0..new_total).collect();
+    tab.source.mode = ViewMode::Normal;
 
-    tab.filter.pattern = None;
-    tab.filter.state = FilterState::Inactive;
-    tab.filter.last_filtered_line = 0;
-    tab.filter.cancel_token = None;
-    tab.filter.receiver = None;
-    tab.filter.needs_clear = false;
-    tab.filter.is_incremental = false;
+    tab.source.filter.pattern = None;
+    tab.source.filter.state = FilterState::Inactive;
+    tab.source.filter.last_filtered_line = 0;
+    tab.source.filter.cancel_token = None;
+    tab.source.filter.receiver = None;
+    tab.source.filter.needs_clear = false;
+    tab.source.filter.is_incremental = false;
 
     if new_total > 0 {
         tab.jump_to_end();
@@ -1251,32 +1287,32 @@ fn merge_partial_filter_results(
     new_indices: Vec<usize>,
     lines_processed: usize,
 ) {
-    if tab.filter.needs_clear {
-        tab.mode = ViewMode::Filtered;
-        tab.line_indices.clear();
-        tab.filter.needs_clear = false;
-    } else if tab.mode == ViewMode::Normal {
-        tab.mode = ViewMode::Filtered;
-        tab.line_indices.clear();
+    if tab.source.filter.needs_clear {
+        tab.source.mode = ViewMode::Filtered;
+        tab.source.line_indices.clear();
+        tab.source.filter.needs_clear = false;
+    } else if tab.source.mode == ViewMode::Normal {
+        tab.source.mode = ViewMode::Filtered;
+        tab.source.line_indices.clear();
     }
 
-    if tab.line_indices.is_empty() {
-        tab.line_indices = new_indices;
-        tab.viewport.jump_to_end(&tab.line_indices);
+    if tab.source.line_indices.is_empty() {
+        tab.source.line_indices = new_indices;
+        tab.viewport.jump_to_end(&tab.source.line_indices);
     } else {
-        let first_existing = tab.line_indices[0];
+        let first_existing = tab.source.line_indices[0];
         let prepended_count = new_indices
             .iter()
             .filter(|&&idx| idx < first_existing)
             .count();
 
-        let mut merged = Vec::with_capacity(tab.line_indices.len() + new_indices.len());
+        let mut merged = Vec::with_capacity(tab.source.line_indices.len() + new_indices.len());
         let mut i = 0;
         let mut j = 0;
 
-        while i < tab.line_indices.len() && j < new_indices.len() {
-            if tab.line_indices[i] <= new_indices[j] {
-                merged.push(tab.line_indices[i]);
+        while i < tab.source.line_indices.len() && j < new_indices.len() {
+            if tab.source.line_indices[i] <= new_indices[j] {
+                merged.push(tab.source.line_indices[i]);
                 i += 1;
             } else {
                 merged.push(new_indices[j]);
@@ -1284,149 +1320,12 @@ fn merge_partial_filter_results(
             }
         }
 
-        merged.extend_from_slice(&tab.line_indices[i..]);
+        merged.extend_from_slice(&tab.source.line_indices[i..]);
         merged.extend_from_slice(&new_indices[j..]);
 
-        tab.line_indices = merged;
+        tab.source.line_indices = merged;
         tab.viewport.adjust_scroll_for_prepend(prepended_count);
     }
 
-    tab.filter.state = FilterState::Processing { lines_processed };
-}
-
-fn trigger_filter_for_tab(
-    tab: &mut TabState,
-    pattern: String,
-    mode: FilterMode,
-    start_line: Option<usize>,
-    end_line: Option<usize>,
-) -> std::result::Result<(), String> {
-    if let Some(ref cancel) = tab.filter.cancel_token {
-        cancel.cancel();
-    }
-
-    if query::is_query_syntax(&pattern) {
-        return trigger_query_filter_for_tab(tab, pattern, start_line, end_line);
-    }
-
-    let case_sensitive = mode.is_case_sensitive();
-    let is_regex = mode.is_regex();
-
-    let cancel = CancelToken::new();
-    tab.filter.cancel_token = Some(cancel.clone());
-    tab.filter.pattern = Some(pattern.clone());
-    tab.filter.mode = mode;
-
-    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = true;
-
-        let filter: Arc<dyn Filter> = if is_regex {
-            Arc::new(
-                RegexFilter::new(&pattern, case_sensitive)
-                    .map_err(|err| format!("Invalid regex pattern: {}", err))?,
-            )
-        } else {
-            Arc::new(StringFilter::new(&pattern, case_sensitive))
-        };
-
-        if let Some(path) = &tab.source_path {
-            streaming_filter::run_streaming_filter_range(path.clone(), filter, start, end, cancel)
-                .map_err(|err| err.to_string())?
-        } else {
-            FilterEngine::run_filter_range(
-                tab.reader.clone(),
-                filter,
-                FILTER_PROGRESS_INTERVAL,
-                start,
-                end,
-                cancel,
-            )
-        }
-    } else {
-        tab.filter.needs_clear = true;
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = false;
-
-        if let Some(path) = &tab.source_path {
-            if is_regex {
-                let filter: Arc<dyn Filter> = Arc::new(
-                    RegexFilter::new(&pattern, case_sensitive)
-                        .map_err(|err| format!("Invalid regex pattern: {}", err))?,
-                );
-                streaming_filter::run_streaming_filter(path.clone(), filter, cancel)
-                    .map_err(|err| err.to_string())?
-            } else {
-                streaming_filter::run_streaming_filter_fast(
-                    path.clone(),
-                    pattern.as_bytes(),
-                    case_sensitive,
-                    cancel,
-                )
-                .map_err(|err| err.to_string())?
-            }
-        } else {
-            let filter: Arc<dyn Filter> = if is_regex {
-                Arc::new(
-                    RegexFilter::new(&pattern, case_sensitive)
-                        .map_err(|err| format!("Invalid regex pattern: {}", err))?,
-                )
-            } else {
-                Arc::new(StringFilter::new(&pattern, case_sensitive))
-            };
-
-            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
-        }
-    };
-
-    tab.filter.receiver = Some(receiver);
-    Ok(())
-}
-
-fn trigger_query_filter_for_tab(
-    tab: &mut TabState,
-    pattern: String,
-    start_line: Option<usize>,
-    end_line: Option<usize>,
-) -> std::result::Result<(), String> {
-    let parsed = query::parse_query(&pattern).map_err(|err| err.to_string())?;
-    let query_filter = query::QueryFilter::new(parsed).map_err(|err| err.to_string())?;
-
-    let filter: Arc<dyn Filter> = Arc::new(query_filter);
-    let cancel = CancelToken::new();
-    tab.filter.cancel_token = Some(cancel.clone());
-    tab.filter.pattern = Some(pattern);
-
-    let receiver = if let (Some(start), Some(end)) = (start_line, end_line) {
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = true;
-
-        if let Some(path) = &tab.source_path {
-            streaming_filter::run_streaming_filter_range(path.clone(), filter, start, end, cancel)
-                .map_err(|err| err.to_string())?
-        } else {
-            FilterEngine::run_filter_range(
-                tab.reader.clone(),
-                filter,
-                FILTER_PROGRESS_INTERVAL,
-                start,
-                end,
-                cancel,
-            )
-        }
-    } else {
-        tab.filter.needs_clear = true;
-        tab.filter.state = FilterState::Processing { lines_processed: 0 };
-        tab.filter.is_incremental = false;
-
-        if let Some(path) = &tab.source_path {
-            streaming_filter::run_streaming_filter(path.clone(), filter, cancel)
-                .map_err(|err| err.to_string())?
-        } else {
-            FilterEngine::run_filter(tab.reader.clone(), filter, FILTER_PROGRESS_INTERVAL, cancel)
-        }
-    };
-
-    tab.filter.receiver = Some(receiver);
-    Ok(())
+    tab.source.filter.state = FilterState::Processing { lines_processed };
 }

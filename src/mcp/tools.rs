@@ -17,7 +17,9 @@ use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
 use crate::index::checkpoint::CheckpointReader;
+use crate::index::flags::Severity;
 use crate::index::meta::{ColumnBit, IndexMeta};
+use crate::index::reader::IndexReader;
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
 use memchr::memchr_iter;
@@ -71,6 +73,18 @@ fn collect_filter_results(rx: Receiver<FilterProgress>) -> Result<(Vec<usize>, u
 fn error_response(message: impl std::fmt::Display) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
         .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
+}
+
+fn severity_string(severity: Severity) -> Option<String> {
+    match severity {
+        Severity::Trace => Some("trace".to_string()),
+        Severity::Debug => Some("debug".to_string()),
+        Severity::Info => Some("info".to_string()),
+        Severity::Warn => Some("warn".to_string()),
+        Severity::Error => Some("error".to_string()),
+        Severity::Fatal => Some("fatal".to_string()),
+        Severity::Unknown => None,
+    }
 }
 
 /// Strip ANSI escape codes from all line content in a GetLinesResponse.
@@ -238,6 +252,8 @@ impl LazyTailMcp {
             }
         };
 
+        let index_reader = IndexReader::open(path);
+
         let total = reader.total_lines();
         let mut lines = Vec::new();
         for i in start..(start + count).min(total) {
@@ -245,6 +261,10 @@ impl LazyTailMcp {
                 lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -278,6 +298,8 @@ impl LazyTailMcp {
             }
         };
 
+        let index_reader = IndexReader::open(path);
+
         let total = reader.total_lines();
         let start = total.saturating_sub(count);
 
@@ -287,6 +309,10 @@ impl LazyTailMcp {
                 lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -659,6 +685,8 @@ impl LazyTailMcp {
             }
         };
 
+        let index_reader = IndexReader::open(path);
+
         let total = reader.total_lines();
 
         if line_number >= total {
@@ -676,6 +704,10 @@ impl LazyTailMcp {
                 before_lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -688,6 +720,10 @@ impl LazyTailMcp {
         let target_line = LineInfo {
             line_number,
             content: target_content,
+            severity: index_reader
+                .as_ref()
+                .map(|ir| ir.severity(line_number))
+                .and_then(severity_string),
         };
 
         // Get after lines
@@ -698,6 +734,10 @@ impl LazyTailMcp {
                 after_lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -1188,8 +1228,8 @@ plain line with no escapes\n\
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
         // JSON content should appear verbatim without escaping
-        assert!(result.contains(&format!("0|{json_line}\n")));
-        assert!(result.contains("1|plain log line\n"));
+        assert!(result.contains(&format!("[L0] {json_line}\n")));
+        assert!(result.contains("[L1] plain log line\n"));
         // No backslash escaping
         assert!(!result.contains("\\\""));
     }
@@ -1205,9 +1245,9 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
-        assert!(result.contains("1|line 1\n"));
-        assert!(result.contains("2|line 2\n"));
-        assert!(!result.contains("0|line 0"));
+        assert!(result.contains("[L1] line 1\n"));
+        assert!(result.contains("[L2] line 2\n"));
+        assert!(!result.contains("[L0] line 0"));
     }
 
     #[test]
@@ -1254,11 +1294,11 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 5\n"));
-        assert!(result.contains("  0|line 0\n"));
-        assert!(result.contains("  1|line 1\n"));
-        assert!(result.contains(&format!("> 2|{json_line}\n")));
-        assert!(result.contains("  3|line 3\n"));
-        assert!(result.contains("  4|line 4\n"));
+        assert!(result.contains("  [L0] line 0\n"));
+        assert!(result.contains("  [L1] line 1\n"));
+        assert!(result.contains(&format!("> [L2] {json_line}\n")));
+        assert!(result.contains("  [L3] line 3\n"));
+        assert!(result.contains("  [L4] line 4\n"));
     }
 
     #[test]
@@ -1267,8 +1307,8 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         // ANSI should be stripped
-        assert!(result.contains("0|[INFO] Server started\n"));
-        assert!(result.contains("1|[ERROR] Connection failed\n"));
+        assert!(result.contains("[L0] [INFO] Server started\n"));
+        assert!(result.contains("[L1] [ERROR] Connection failed\n"));
         assert!(!result.contains("\x1b["));
     }
 
