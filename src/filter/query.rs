@@ -501,16 +501,6 @@ impl FilterQuery {
     /// - Format flag (JSON or logfmt) from the parser type
     /// - Empty-line exclusion
     /// - Severity level from `level == "value"` filters (exact match only)
-    /// Build a (mask, want) pair for index pre-filtering.
-    ///
-    /// Returns `None` if the query cannot benefit from index pre-filtering
-    /// (e.g., Raw parser). When `Some((mask, want))` is returned, lines where
-    /// `flags & mask != want` can be skipped without parsing content.
-    ///
-    /// The mask encodes:
-    /// - Format flag (JSON or logfmt) from the parser type
-    /// - Empty-line exclusion
-    /// - Severity level from `level == "value"` filters (exact match only)
     pub fn index_mask(&self) -> Option<(u32, u32)> {
         use lazytail::index::flags::{
             FLAG_FORMAT_JSON, FLAG_FORMAT_LOGFMT, FLAG_IS_EMPTY, SEVERITY_MASK,
