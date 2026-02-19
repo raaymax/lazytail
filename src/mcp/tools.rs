@@ -24,9 +24,15 @@ use memchr::memchr_iter;
 use memmap2::Mmap;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
+use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Maximum characters per line in MCP output. Lines exceeding this are truncated
+/// with a suffix showing the number of hidden characters. Full content is available
+/// via narrower `get_context` or `get_lines` calls.
+const MAX_LINE_LEN: usize = 500;
 
 /// Create a JSON error response string.
 /// Errors are always returned as JSON regardless of the requested output format.
@@ -63,6 +69,63 @@ fn strip_context_response(resp: &mut GetContextResponse) {
     resp.target_line.content = strip_ansi(&resp.target_line.content);
     for line in &mut resp.after_lines {
         line.content = strip_ansi(&line.content);
+    }
+}
+
+/// Truncate a single line to `max_len` characters, appending a suffix if truncated.
+fn truncate_line(line: &str, max_len: usize) -> Cow<'_, str> {
+    if line.len() <= max_len {
+        Cow::Borrowed(line)
+    } else {
+        let end = line.floor_char_boundary(max_len);
+        let excess = line.len() - end;
+        Cow::Owned(format!("{}…[+{} chars]", &line[..end], excess))
+    }
+}
+
+/// Truncate all line content in a GetLinesResponse.
+fn truncate_lines_response(resp: &mut GetLinesResponse) {
+    for line in &mut resp.lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+    }
+}
+
+/// Truncate all content in a SearchResponse.
+fn truncate_search_response(resp: &mut SearchResponse) {
+    for m in &mut resp.matches {
+        if m.content.len() > MAX_LINE_LEN {
+            m.content = truncate_line(&m.content, MAX_LINE_LEN).into_owned();
+        }
+        for line in &mut m.before {
+            if line.len() > MAX_LINE_LEN {
+                *line = truncate_line(line, MAX_LINE_LEN).into_owned();
+            }
+        }
+        for line in &mut m.after {
+            if line.len() > MAX_LINE_LEN {
+                *line = truncate_line(line, MAX_LINE_LEN).into_owned();
+            }
+        }
+    }
+}
+
+/// Truncate all content in a GetContextResponse.
+fn truncate_context_response(resp: &mut GetContextResponse) {
+    for line in &mut resp.before_lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+    }
+    if resp.target_line.content.len() > MAX_LINE_LEN {
+        resp.target_line.content =
+            truncate_line(&resp.target_line.content, MAX_LINE_LEN).into_owned();
+    }
+    for line in &mut resp.after_lines {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
     }
 }
 
@@ -163,6 +226,7 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
+        truncate_lines_response(&mut response);
 
         format_lines(&response, output)
     }
@@ -204,6 +268,7 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
+        truncate_lines_response(&mut response);
 
         format_lines(&response, output)
     }
@@ -296,6 +361,7 @@ impl LazyTailMcp {
         if !raw {
             strip_search_response(&mut response);
         }
+        truncate_search_response(&mut response);
 
         format_search(&response, output)
     }
@@ -411,6 +477,7 @@ impl LazyTailMcp {
         if !raw {
             strip_search_response(&mut response);
         }
+        truncate_search_response(&mut response);
 
         format_search(&response, output)
     }
@@ -653,6 +720,7 @@ impl LazyTailMcp {
         if !raw {
             strip_context_response(&mut response);
         }
+        truncate_context_response(&mut response);
 
         format_context(&response, output)
     }
@@ -1568,5 +1636,93 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_stats_impl(f.path(), "myapp", OutputFormat::Text);
         assert!(result.contains("--- source: myapp"));
         assert!(result.contains("--- has_index: false"));
+    }
+
+    // -- truncation tests --
+
+    #[test]
+    fn truncate_line_short_unchanged() {
+        let line = "short line";
+        let result = truncate_line(line, 500);
+        assert_eq!(&*result, "short line");
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn truncate_line_long_truncated() {
+        let line = "x".repeat(600);
+        let result = truncate_line(&line, 500);
+        assert!(result.len() < line.len());
+        assert!(result.starts_with(&"x".repeat(500)));
+        assert!(result.contains("…[+100 chars]"));
+    }
+
+    #[test]
+    fn truncate_line_multibyte_boundary() {
+        // 'é' is 2 bytes in UTF-8; build a string where byte 500 lands mid-char
+        let mut line = "a".repeat(499);
+        line.push('é'); // bytes 499..501
+        line.push_str(&"b".repeat(100));
+        let result = truncate_line(&line, 500);
+        // Must not panic and must be valid UTF-8
+        assert!(result.contains('…'));
+        // The truncation point should be at or before byte 500
+        let prefix_end = result.find('…').unwrap();
+        assert!(prefix_end <= 500);
+    }
+
+    #[test]
+    fn get_lines_truncates_long_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "short").unwrap();
+        writeln!(f, "{}", "x".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines[0].content, "short");
+        assert!(resp.lines[1].content.len() < 1000);
+        assert!(resp.lines[1].content.contains("…[+"));
+    }
+
+    #[test]
+    fn search_truncates_long_match_and_context() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", "a".repeat(1000)).unwrap();
+        writeln!(f, "error {}", "b".repeat(1000)).unwrap();
+        writeln!(f, "{}", "c".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            1,
+            false,
+            OutputFormat::Json,
+        );
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.total_matches, 1);
+        let m = &resp.matches[0];
+        assert!(m.content.contains("…[+"));
+        assert!(m.before[0].contains("…[+"));
+        assert!(m.after[0].contains("…[+"));
+    }
+
+    #[test]
+    fn get_context_truncates_long_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", "a".repeat(1000)).unwrap();
+        writeln!(f, "{}", "b".repeat(1000)).unwrap();
+        writeln!(f, "{}", "c".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json);
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.before_lines[0].content.contains("…[+"));
+        assert!(resp.target_line.content.contains("…[+"));
+        assert!(resp.after_lines[0].content.contains("…[+"));
     }
 }

@@ -25,6 +25,10 @@ pub fn format_lines_text(resp: &GetLinesResponse) -> String {
     out
 }
 
+/// Maximum total output size for search results in bytes. Once exceeded, remaining
+/// matches are omitted and metadata is appended so the caller knows to narrow the search.
+const SEARCH_MAX_OUTPUT_BYTES: usize = 80_000;
+
 /// Format a SearchResponse as plain text.
 pub fn format_search_text(resp: &SearchResponse) -> String {
     let mut out = String::with_capacity(resp.matches.len() * 160 + 128);
@@ -34,6 +38,12 @@ pub fn format_search_text(resp: &SearchResponse) -> String {
     out.push('\n');
 
     for (i, m) in resp.matches.iter().enumerate() {
+        if out.len() > SEARCH_MAX_OUTPUT_BYTES {
+            writeln!(out, "--- output_truncated_at_bytes: {}", out.len()).unwrap();
+            writeln!(out, "--- matches_shown: {}", i).unwrap();
+            break;
+        }
+
         if i > 0 {
             out.push('\n');
         }
@@ -315,5 +325,61 @@ mod tests {
         let text = format_context_text(&resp);
         assert!(text.contains("--- total_lines: 1\n"));
         assert!(text.contains("> 0|only line\n"));
+    }
+
+    #[test]
+    fn search_text_output_budget_caps_output() {
+        // Build a response with many matches whose lines are ~500 chars each.
+        // 200 matches * ~500 chars = ~100KB, which exceeds the 80KB budget.
+        let matches: Vec<SearchMatch> = (0..200)
+            .map(|i| SearchMatch {
+                line_number: i,
+                content: "x".repeat(490),
+                before: vec![],
+                after: vec![],
+            })
+            .collect();
+        let resp = SearchResponse {
+            total_matches: 200,
+            truncated: false,
+            lines_searched: 10000,
+            matches,
+        };
+        let text = format_search_text(&resp);
+
+        // Output should be capped near 80KB
+        assert!(
+            text.len() < 100_000,
+            "output should be capped, got {} bytes",
+            text.len()
+        );
+        assert!(text.contains("--- output_truncated_at_bytes:"));
+        assert!(text.contains("--- matches_shown:"));
+
+        // Fewer than all 200 matches should be shown
+        let shown: usize = text.matches("=== match").count();
+        assert!(
+            shown < 200,
+            "should show fewer than 200 matches, got {shown}"
+        );
+        assert!(shown > 0, "should show at least some matches");
+    }
+
+    #[test]
+    fn search_text_small_response_not_truncated() {
+        let resp = SearchResponse {
+            matches: vec![SearchMatch {
+                line_number: 0,
+                content: "short".into(),
+                before: vec![],
+                after: vec![],
+            }],
+            total_matches: 1,
+            truncated: false,
+            lines_searched: 100,
+        };
+        let text = format_search_text(&resp);
+        assert!(!text.contains("output_truncated_at_bytes"));
+        assert!(text.contains("=== match"));
     }
 }
