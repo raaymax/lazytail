@@ -1067,15 +1067,16 @@ sources:
   - Detect common timestamp formats
   - Filter by time range
   - Jump to specific timestamp
-- [ ] Self-update (`lazytail update`)
+- [x] Self-update (`lazytail update`) — ✅ v0.7.0
   - Use the `self_update` crate to check GitHub Releases and replace the binary in-place
   - `lazytail update` — check for new version and install if available
   - `lazytail update --check` — check only, don't install (exit code 0 = up to date, 1 = update available)
   - Background update check on TUI startup (non-blocking, cached to `~/.config/lazytail/update_check.json`)
   - Only check once every 24h to avoid API rate limits and startup latency
   - Print subtle notice after TUI exits if update is available (not during — would interfere with ratatui)
-  - `--no-update-check` flag and config option to disable automatic checks
+  - `--no-update-check` flag and config option (`update_check: false`) to disable automatic checks
   - Respect AUR users: detect if installed via package manager and suggest `yay -S lazytail` instead of self-replacing
+  - Feature-gated behind `self-update` cargo feature (included in GitHub release builds, excluded from AUR)
 - [ ] TUI colors configuration / theme customization
   - Configurable colors via `lazytail.yaml` (e.g., `theme:` section)
   - Customizable elements: side panel, selected line, status bar, filter input, borders, active/ended indicators

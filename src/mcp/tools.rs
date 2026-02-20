@@ -16,7 +16,9 @@ use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
-use crate::log_source::LogSource;
+use crate::index::flags::Severity;
+use crate::index::reader::IndexReader;
+use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
 use memchr::memchr_iter;
 use memmap2::Mmap;
@@ -69,6 +71,18 @@ fn collect_filter_results(rx: Receiver<FilterProgress>) -> Result<(Vec<usize>, u
 fn error_response(message: impl std::fmt::Display) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
         .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
+}
+
+fn severity_string(severity: Severity) -> Option<String> {
+    match severity {
+        Severity::Trace => Some("trace".to_string()),
+        Severity::Debug => Some("debug".to_string()),
+        Severity::Info => Some("info".to_string()),
+        Severity::Warn => Some("warn".to_string()),
+        Severity::Error => Some("error".to_string()),
+        Severity::Fatal => Some("fatal".to_string()),
+        Severity::Unknown => None,
+    }
 }
 
 /// Strip ANSI escape codes from all line content in a GetLinesResponse.
@@ -229,20 +243,26 @@ impl LazyTailMcp {
     ) -> String {
         let count = count.min(1000);
 
-        let mut source = match LogSource::open(path) {
-            Ok(s) => s,
+        let mut reader = match FileReader::new(path) {
+            Ok(r) => r,
             Err(e) => {
                 return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
-        let total = source.total_lines();
+        let index_reader = IndexReader::open(path);
+
+        let total = reader.total_lines();
         let mut lines = Vec::new();
         for i in start..(start + count).min(total) {
-            if let Ok(Some(content)) = source.get_line(i) {
+            if let Ok(Some(content)) = reader.get_line(i) {
                 lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -269,22 +289,28 @@ impl LazyTailMcp {
     ) -> String {
         let count = count.min(1000);
 
-        let mut source = match LogSource::open(path) {
-            Ok(s) => s,
+        let mut reader = match FileReader::new(path) {
+            Ok(r) => r,
             Err(e) => {
                 return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
-        let total = source.total_lines();
+        let index_reader = IndexReader::open(path);
+
+        let total = reader.total_lines();
         let start = total.saturating_sub(count);
 
         let mut lines = Vec::new();
         for i in start..total {
-            if let Ok(Some(content)) = source.get_line(i) {
+            if let Ok(Some(content)) = reader.get_line(i) {
                 lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -595,14 +621,16 @@ impl LazyTailMcp {
         let before_count = before.min(50);
         let after_count = after.min(50);
 
-        let mut source = match LogSource::open(path) {
-            Ok(s) => s,
+        let mut reader = match FileReader::new(path) {
+            Ok(r) => r,
             Err(e) => {
                 return error_response(format!("Failed to open file '{}': {}", path.display(), e))
             }
         };
 
-        let total = source.total_lines();
+        let index_reader = IndexReader::open(path);
+
+        let total = reader.total_lines();
 
         if line_number >= total {
             return error_response(format!(
@@ -615,32 +643,44 @@ impl LazyTailMcp {
         let start_before = line_number.saturating_sub(before_count);
         let mut before_lines = Vec::new();
         for i in start_before..line_number {
-            if let Ok(Some(content)) = source.get_line(i) {
+            if let Ok(Some(content)) = reader.get_line(i) {
                 before_lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
 
         // Get target line
-        let target_content = match source.get_line(line_number) {
+        let target_content = match reader.get_line(line_number) {
             Ok(Some(c)) => c,
             _ => return error_response("Failed to read target line"),
         };
         let target_line = LineInfo {
             line_number,
             content: target_content,
+            severity: index_reader
+                .as_ref()
+                .map(|ir| ir.severity(line_number))
+                .and_then(severity_string),
         };
 
         // Get after lines
         let end_after = (line_number + 1 + after_count).min(total);
         let mut after_lines = Vec::new();
         for i in (line_number + 1)..end_after {
-            if let Ok(Some(content)) = source.get_line(i) {
+            if let Ok(Some(content)) = reader.get_line(i) {
                 after_lines.push(LineInfo {
                     line_number: i,
                     content,
+                    severity: index_reader
+                        .as_ref()
+                        .map(|ir| ir.severity(i))
+                        .and_then(severity_string),
                 });
             }
         }
@@ -1131,8 +1171,8 @@ plain line with no escapes\n\
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
         // JSON content should appear verbatim without escaping
-        assert!(result.contains(&format!("0|{json_line}\n")));
-        assert!(result.contains("1|plain log line\n"));
+        assert!(result.contains(&format!("[L0] {json_line}\n")));
+        assert!(result.contains("[L1] plain log line\n"));
         // No backslash escaping
         assert!(!result.contains("\\\""));
     }
@@ -1148,9 +1188,9 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
-        assert!(result.contains("1|line 1\n"));
-        assert!(result.contains("2|line 2\n"));
-        assert!(!result.contains("0|line 0"));
+        assert!(result.contains("[L1] line 1\n"));
+        assert!(result.contains("[L2] line 2\n"));
+        assert!(!result.contains("[L0] line 0"));
     }
 
     #[test]
@@ -1197,11 +1237,11 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 5\n"));
-        assert!(result.contains("  0|line 0\n"));
-        assert!(result.contains("  1|line 1\n"));
-        assert!(result.contains(&format!("> 2|{json_line}\n")));
-        assert!(result.contains("  3|line 3\n"));
-        assert!(result.contains("  4|line 4\n"));
+        assert!(result.contains("  [L0] line 0\n"));
+        assert!(result.contains("  [L1] line 1\n"));
+        assert!(result.contains(&format!("> [L2] {json_line}\n")));
+        assert!(result.contains("  [L3] line 3\n"));
+        assert!(result.contains("  [L4] line 4\n"));
     }
 
     #[test]
@@ -1210,8 +1250,8 @@ plain line with no escapes\n\
         let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         // ANSI should be stripped
-        assert!(result.contains("0|[INFO] Server started\n"));
-        assert!(result.contains("1|[ERROR] Connection failed\n"));
+        assert!(result.contains("[L0] [INFO] Server started\n"));
+        assert!(result.contains("[L1] [ERROR] Connection failed\n"));
         assert!(!result.contains("\x1b["));
     }
 

@@ -147,6 +147,7 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 - **Vim-style navigation** - Familiar keybindings for efficient navigation
 - **Config system** - Project-scoped `lazytail.yaml` config with source definitions
 - **Query language** - Structured field filtering (`json | level == "error"`)
+- **Web UI mode** - Browser interface with virtualized source/log lists (`lazytail web`)
 
 Press `?` in the app to see all keyboard shortcuts.
 
@@ -162,6 +163,13 @@ Open multiple files in tabs:
 
 ```bash
 lazytail app.log error.log access.log
+```
+
+Start the browser UI (single embedded HTML app):
+
+```bash
+lazytail web
+lazytail web app.log worker.log
 ```
 
 Pipe logs from other commands (auto-detected):
@@ -185,13 +193,16 @@ lazytail [OPTIONS] [FILE]... [COMMAND]
 
 Commands:
   init              Initialize a new lazytail.yaml config file
+  web               Start browser-based web UI
   config validate   Validate the config file
   config show       Show effective configuration
+  update            Check for and install updates (GitHub release builds only)
 
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
       --mcp                Run as MCP server for AI assistants
+      --no-update-check    Disable background update check on startup
   -v, --verbose            Verbose output (show config discovery paths)
   -h, --help               Print help
   -V, --version            Print version

@@ -67,7 +67,7 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build
-      run: cargo build --release --target ${{ matrix.target }}
+      run: cargo build --release --target ${{ matrix.target }} --features self-update
 
     - name: Strip binary (Linux)
       if: matrix.os == 'ubuntu-latest'

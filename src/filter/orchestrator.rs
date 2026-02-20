@@ -4,30 +4,30 @@ use crate::filter::search_engine::SearchEngine;
 use crate::filter::{
     query, regex_filter::RegexFilter, string_filter::StringFilter, Filter, FilterMode,
 };
-use crate::tab::TabState;
+use crate::log_source::LogSource;
 use std::sync::Arc;
 
 /// Unified filter orchestration — consolidates all filter trigger paths
 /// (full/incremental, file/stdin, plain/regex/query) into one entry point.
 ///
-/// Owns TabState-specific concerns (cancel, state flags, receiver storage)
+/// Owns LogSource-specific concerns (cancel, state flags, receiver storage)
 /// and delegates actual filter execution to `SearchEngine`.
 pub struct FilterOrchestrator;
 
 impl FilterOrchestrator {
-    /// Trigger a filter on a tab.
+    /// Trigger a filter on a source.
     ///
     /// Handles query detection, filter construction, and delegates execution
     /// to `SearchEngine`. The `range` parameter is `Some((start, end))` for
     /// incremental filtering.
     pub fn trigger(
-        tab: &mut TabState,
+        source: &mut LogSource,
         pattern: String,
         mode: FilterMode,
         range: Option<(usize, usize)>,
     ) {
         // Cancel any previous filter operation
-        if let Some(ref cancel) = tab.filter.cancel_token {
+        if let Some(ref cancel) = source.filter.cancel_token {
             cancel.cancel();
         }
 
@@ -44,7 +44,7 @@ impl FilterOrchestrator {
             };
             let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
-            Self::execute(tab, filter, Some(&filter_query), range);
+            Self::execute(source, filter, Some(&filter_query), range);
             return;
         }
 
@@ -53,17 +53,17 @@ impl FilterOrchestrator {
 
         // For full file + plain text, use the FAST byte-level SIMD path
         if range.is_none() && !is_regex {
-            if let Some(path) = &tab.source_path {
+            if let Some(path) = &source.source_path {
                 let cancel = CancelToken::new();
-                tab.filter.cancel_token = Some(cancel.clone());
-                tab.filter.needs_clear = true;
-                tab.filter.state = FilterState::Processing { lines_processed: 0 };
-                tab.filter.is_incremental = false;
+                source.filter.cancel_token = Some(cancel.clone());
+                source.filter.needs_clear = true;
+                source.filter.state = FilterState::Processing { lines_processed: 0 };
+                source.filter.is_incremental = false;
 
                 if let Ok(rx) =
                     SearchEngine::search_file_fast(path, pattern.as_bytes(), case_sensitive, cancel)
                 {
-                    tab.filter.receiver = Some(rx);
+                    source.filter.receiver = Some(rx);
                 }
                 return;
             }
@@ -79,34 +79,34 @@ impl FilterOrchestrator {
             Arc::new(StringFilter::new(&pattern, case_sensitive))
         };
 
-        Self::execute(tab, filter, None, range);
+        Self::execute(source, filter, None, range);
     }
 
-    /// Set TabState flags and delegate to the appropriate SearchEngine method.
+    /// Set LogSource flags and delegate to the appropriate SearchEngine method.
     fn execute(
-        tab: &mut TabState,
+        source: &mut LogSource,
         filter: Arc<dyn Filter>,
         query: Option<&query::FilterQuery>,
         range: Option<(usize, usize)>,
     ) {
         let cancel = CancelToken::new();
-        tab.filter.cancel_token = Some(cancel.clone());
+        source.filter.cancel_token = Some(cancel.clone());
 
         if range.is_some() {
-            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-            tab.filter.is_incremental = true;
+            source.filter.state = FilterState::Processing { lines_processed: 0 };
+            source.filter.is_incremental = true;
         } else {
-            tab.filter.needs_clear = true;
-            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-            tab.filter.is_incremental = false;
+            source.filter.needs_clear = true;
+            source.filter.state = FilterState::Processing { lines_processed: 0 };
+            source.filter.is_incremental = false;
         }
 
-        let receiver = if let Some(path) = &tab.source_path {
+        let receiver = if let Some(path) = &source.source_path {
             match SearchEngine::search_file(
                 path,
                 filter,
                 query,
-                tab.index_reader.as_ref(),
+                source.index_reader.as_ref(),
                 range,
                 cancel,
             ) {
@@ -114,10 +114,10 @@ impl FilterOrchestrator {
                 Err(_) => return,
             }
         } else {
-            SearchEngine::search_reader(tab.reader.clone(), filter, range, cancel)
+            SearchEngine::search_reader(source.reader.clone(), filter, range, cancel)
         };
 
-        tab.filter.receiver = Some(receiver);
+        source.filter.receiver = Some(receiver);
     }
 
     /// Trigger live filter preview based on current input.
@@ -129,18 +129,18 @@ impl FilterOrchestrator {
 
         if !pattern.is_empty() && app.is_regex_valid() {
             let tab = app.active_tab_mut();
-            tab.filter.pattern = Some(pattern.clone());
-            tab.filter.mode = mode;
-            Self::trigger(tab, pattern, mode, None);
+            tab.source.filter.pattern = Some(pattern.clone());
+            tab.source.filter.mode = mode;
+            Self::trigger(&mut tab.source, pattern, mode, None);
         } else {
             app.clear_filter();
-            app.active_tab_mut().filter.receiver = None;
+            app.active_tab_mut().source.filter.receiver = None;
         }
     }
 
-    /// Cancel any in-progress filter on a tab.
-    pub fn cancel(tab: &mut TabState) {
-        if let Some(ref cancel) = tab.filter.cancel_token {
+    /// Cancel any in-progress filter on a source.
+    pub fn cancel(source: &mut LogSource) {
+        if let Some(ref cancel) = source.filter.cancel_token {
             cancel.cancel();
         }
     }

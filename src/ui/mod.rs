@@ -126,9 +126,10 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 fn render_side_panel(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
     // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
     let tab = app.active_tab();
-    let is_filtered = tab.filter.pattern.is_some();
-    let has_index = tab.index_size.is_some();
+    let is_filtered = tab.source.filter.pattern.is_some();
+    let has_index = tab.source.index_size.is_some();
     let severity_rows = tab
+        .source
         .index_reader
         .as_ref()
         .and_then(|ir| ir.checkpoints().last())
@@ -175,15 +176,15 @@ fn build_source_line(
         line.spans
             .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
     }
-    if tab.filter.pattern.is_some() {
+    if tab.source.filter.pattern.is_some() {
         line.spans
             .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
     }
-    if tab.follow_mode {
+    if tab.source.follow_mode {
         line.spans
             .push(Span::styled(" F", Style::default().fg(Color::Green)));
     }
-    if let Some(status) = tab.source_status {
+    if let Some(status) = tab.source.source_status {
         let (status_ind, color) = match status {
             SourceStatus::Active => ("●", Color::Green),
             SourceStatus::Ended => ("○", Color::DarkGray),
@@ -199,14 +200,14 @@ fn build_source_line(
 
 /// Format metadata string for a source (line count and optional file size)
 fn format_source_meta(tab: &TabState) -> String {
-    if let Some(size) = tab.file_size {
+    if let Some(size) = tab.source.file_size {
         format!(
             " {} \u{00b7} {}",
-            format_count(tab.total_lines),
+            format_count(tab.source.total_lines),
             format_file_size(size)
         )
     } else {
-        format!(" {}", format_count(tab.total_lines))
+        format!(" {}", format_count(tab.source.total_lines))
     }
 }
 
@@ -280,15 +281,15 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
                 // Truncate name to fit in panel width (accounting for indent)
                 let max_len = (area.width as usize).saturating_sub(8); // "  N> " + indicators
-                let name = if tab.name.len() > max_len {
+                let name = if tab.source.name.len() > max_len {
                     let truncate_at = max_len.saturating_sub(3);
-                    let boundary = tab.name.floor_char_boundary(truncate_at);
-                    format!("{}...", &tab.name[..boundary])
+                    let boundary = tab.source.name.floor_char_boundary(truncate_at);
+                    format!("{}...", &tab.source.name[..boundary])
                 } else {
-                    tab.name.clone()
+                    tab.source.name.clone()
                 };
 
-                let item_style = if tab.disabled {
+                let item_style = if tab.source.disabled {
                     // Disabled sources (file doesn't exist) shown grayed out
                     Style::default().fg(Color::DarkGray)
                 } else if is_tree_selected {
@@ -323,7 +324,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                 if is_tree_selected {
                     // Build full untruncated line for overflow overlay
                     let mut full_line =
-                        build_source_line(tab, &number, indicator, &tab.name, item_style);
+                        build_source_line(tab, &number, indicator, &tab.source.name, item_style);
                     full_line
                         .spans
                         .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
@@ -396,9 +397,9 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.active_tab();
 
-    let total_lines = tab.total_lines;
-    let filtered_lines = tab.line_indices.len();
-    let is_filtered = tab.filter.pattern.is_some();
+    let total_lines = tab.source.total_lines;
+    let filtered_lines = tab.source.line_indices.len();
+    let is_filtered = tab.source.filter.pattern.is_some();
     let is_loading = tab.stream_receiver.is_some();
 
     let mut stats_text = Vec::new();
@@ -438,7 +439,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     }
 
     // Show index size if available
-    if let Some(index_size) = tab.index_size {
+    if let Some(index_size) = tab.source.index_size {
         stats_text.push(Line::from(vec![
             Span::raw(" Index: "),
             Span::styled(
@@ -450,6 +451,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
 
     // Show severity bar chart from checkpoint data
     if let Some(counts) = tab
+        .source
         .index_reader
         .as_ref()
         .and_then(|ir| ir.checkpoints().last())
@@ -500,10 +502,10 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
     // During filtering, preserve anchor so selection doesn't jump when partial results arrive
-    let is_filtering = matches!(tab.filter.state, FilterState::Processing { .. });
-    let view = tab
-        .viewport
-        .resolve_with_options(&tab.line_indices, visible_height, is_filtering);
+    let is_filtering = matches!(tab.source.filter.state, FilterState::Processing { .. });
+    let view =
+        tab.viewport
+            .resolve_with_options(&tab.source.line_indices, visible_height, is_filtering);
 
     // Sync old fields from viewport (for backward compatibility during migration)
     tab.scroll_position = view.scroll_position;
@@ -519,14 +521,14 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
     let prefix_width = LINE_PREFIX_WIDTH;
 
     // Get reader access and collect snapshots for rendering
-    let mut reader_guard = tab.reader.lock().unwrap();
+    let mut reader_guard = tab.source.reader.lock().unwrap();
     let expanded_lines = tab.expansion.expanded_lines.clone();
-    let index_reader = tab.index_reader.as_ref();
+    let index_reader = tab.source.index_reader.as_ref();
 
     // Fetch the lines to display
     let mut items = Vec::new();
     for i in start_idx..start_idx + count {
-        if let Some(&line_number) = tab.line_indices.get(i) {
+        if let Some(&line_number) = tab.source.line_indices.get(i) {
             let raw_line = reader_guard.get_line(line_number)?.unwrap_or_default();
             let line_text = expand_tabs(&raw_line);
             let is_selected = i == selected_idx;
@@ -628,18 +630,22 @@ fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
 
 fn build_title(tab: &TabState) -> String {
     let path_suffix = tab
+        .source
         .source_path
         .as_ref()
         .map(|p| format!(" — {}", p.display()))
         .unwrap_or_default();
 
-    match (&tab.mode, &tab.filter.pattern) {
-        (ViewMode::Normal, None) => format!("{}{}", tab.name, path_suffix),
+    match (&tab.source.mode, &tab.source.filter.pattern) {
+        (ViewMode::Normal, None) => format!("{}{}", tab.source.name, path_suffix),
         (ViewMode::Filtered, Some(pattern)) => {
-            format!("{}{} (Filter: \"{}\")", tab.name, path_suffix, pattern)
+            format!(
+                "{}{} (Filter: \"{}\")",
+                tab.source.name, path_suffix, pattern
+            )
         }
-        (ViewMode::Filtered, None) => format!("{}{} (Filtered)", tab.name, path_suffix),
-        (ViewMode::Normal, Some(_)) => format!("{}{}", tab.name, path_suffix),
+        (ViewMode::Filtered, None) => format!("{}{} (Filtered)", tab.source.name, path_suffix),
+        (ViewMode::Normal, Some(_)) => format!("{}{}", tab.source.name, path_suffix),
     }
 }
 
@@ -650,16 +656,16 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         " Line {}/{} | Total: {} | Mode: {} {}{}",
         tab.selected_line + 1,
         tab.visible_line_count(),
-        tab.total_lines,
-        match tab.mode {
+        tab.source.total_lines,
+        match tab.source.mode {
             ViewMode::Normal => "Normal",
             ViewMode::Filtered => "Filtered",
         },
-        match &tab.filter.state {
+        match &tab.source.filter.state {
             FilterState::Inactive => String::new(),
             FilterState::Processing { lines_processed } => {
-                let percent = if tab.total_lines > 0 {
-                    (lines_processed * 100) / tab.total_lines
+                let percent = if tab.source.total_lines > 0 {
+                    (lines_processed * 100) / tab.source.total_lines
                 } else {
                     0
                 };
@@ -667,7 +673,11 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             }
             FilterState::Complete { matches } => format!("| Matches: {}", matches),
         },
-        if tab.follow_mode { " | FOLLOW" } else { "" }
+        if tab.source.follow_mode {
+            " | FOLLOW"
+        } else {
+            ""
+        }
     );
 
     let show_status_msg = app
@@ -1093,14 +1103,15 @@ fn format_count(count: usize) -> String {
 
 fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
     let tab_index = match &app.pending_close_tab {
-        Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].name == *name => *idx,
+        Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].source.name == *name => *idx,
         _ => return,
     };
 
     let tab = &app.tabs[tab_index];
-    let tab_name = &tab.name;
+    let tab_name = &tab.source.name;
     let is_last = app.tabs.len() <= 1;
-    let will_delete = tab.source_status == Some(SourceStatus::Ended) && tab.source_path.is_some();
+    let will_delete =
+        tab.source.source_status == Some(SourceStatus::Ended) && tab.source.source_path.is_some();
 
     // Truncate name to fit in popup
     let max_name_len = 30;

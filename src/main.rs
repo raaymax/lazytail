@@ -16,8 +16,11 @@ mod signal;
 mod source;
 mod tab;
 mod ui;
+#[cfg(feature = "self-update")]
+mod update;
 mod viewport;
 mod watcher;
+mod web;
 
 use anyhow::{Context, Result};
 use app::{App, SourceType};
@@ -93,6 +96,11 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
+    /// Disable background update check on startup
+    #[cfg(feature = "self-update")]
+    #[arg(long = "no-update-check")]
+    no_update_check: bool,
+
     /// Subcommand to run
     #[command(subcommand)]
     command: Option<cmd::Commands>,
@@ -114,6 +122,9 @@ fn main() -> Result<()> {
         return match command {
             cmd::Commands::Init(args) => cmd::init::run(args.force)
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
+            cmd::Commands::Web(args) => {
+                web::run(args).map_err(|code| anyhow::anyhow!("web failed with exit code {}", code))
+            }
             cmd::Commands::Config { action } => match action {
                 cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
                     anyhow::anyhow!("config validate failed with exit code {}", code)
@@ -121,6 +132,9 @@ fn main() -> Result<()> {
                 cmd::ConfigAction::Show => cmd::config::show()
                     .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
             },
+            #[cfg(feature = "self-update")]
+            cmd::Commands::Update(args) => cmd::update::run(args.check)
+                .map_err(|code| anyhow::anyhow!("update failed with exit code {}", code)),
         };
     }
 
@@ -193,6 +207,10 @@ fn main() -> Result<()> {
         }
     }
 
+    // Spawn background update check (if self-update feature is enabled)
+    #[cfg(feature = "self-update")]
+    let update_handle = spawn_update_check(&cli, &cfg);
+
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
     if cli.mcp {
@@ -215,7 +233,7 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if cli.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(
+        let result = run_discovery_mode(
             cli.no_watch,
             cfg,
             config_errors,
@@ -223,6 +241,9 @@ fn main() -> Result<()> {
             startup,
             verbose,
         );
+        #[cfg(feature = "self-update")]
+        print_update_notice(update_handle);
+        return result;
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -344,6 +365,9 @@ fn main() -> Result<()> {
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
+
+    #[cfg(feature = "self-update")]
+    print_update_notice(update_handle);
 
     Ok(())
 }
@@ -526,7 +550,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                         let already_open = app
                             .tabs
                             .iter()
-                            .any(|t| t.source_path.as_ref() == Some(&path));
+                            .any(|t| t.source.source_path.as_ref() == Some(&path));
                         if !already_open {
                             // Extract name from path
                             if let Some(stem) = path.file_stem() {
@@ -620,6 +644,7 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                 match file_event {
                     watcher::FileEvent::Modified => {
                         let mut reader_guard = tab
+                            .source
                             .reader
                             .lock()
                             .expect("Reader lock poisoned - filter thread panicked");
@@ -630,12 +655,12 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                         }
 
                         let new_total = reader_guard.total_lines();
-                        let old_total = tab.total_lines;
+                        let old_total = tab.source.total_lines;
                         drop(reader_guard);
 
                         // Update file size
-                        if let Some(ref path) = tab.source_path {
-                            tab.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                        if let Some(ref path) = tab.source.source_path {
+                            tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
                         }
 
                         if tab_idx == active_tab {
@@ -677,9 +702,9 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
     let active_tab = app.active_tab;
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
-        if let Some(ref rx) = tab.filter.receiver {
+        if let Some(ref rx) = tab.source.filter.receiver {
             if let Ok(progress) = rx.try_recv() {
-                let is_incremental = tab.filter.is_incremental;
+                let is_incremental = tab.source.filter.is_incremental;
                 let filter_events =
                     handlers::filter::handle_filter_progress(progress, is_incremental);
 
@@ -693,13 +718,13 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
                     });
                     events.extend(filter_events);
                     if completed {
-                        tab.filter.receiver = None;
+                        tab.source.filter.receiver = None;
                     }
                 } else {
                     // Inactive tab: apply filter events directly
                     for ev in &filter_events {
                         if tab.apply_filter_event(ev) {
-                            tab.filter.receiver = None;
+                            tab.source.filter.receiver = None;
                         }
                     }
                 }
@@ -859,4 +884,49 @@ fn collect_input_events<B: ratatui::backend::Backend>(
 /// handled inside `App::apply_event()`, so this function is a thin passthrough.
 fn process_event(app: &mut App, event: event::AppEvent) {
     app.apply_event(event);
+}
+
+/// Spawn a background thread to check for updates (if enabled).
+#[cfg(feature = "self-update")]
+fn spawn_update_check(
+    cli: &Cli,
+    cfg: &config::Config,
+) -> Option<std::thread::JoinHandle<Result<update::UpdateInfo, String>>> {
+    // Respect --no-update-check flag
+    if cli.no_update_check {
+        return None;
+    }
+    // Respect config: update_check: false
+    if cfg.update_check == Some(false) {
+        return None;
+    }
+    Some(std::thread::spawn(update::checker::check_with_cache))
+}
+
+/// Print a subtle update notice after TUI exits (if an update is available).
+#[cfg(feature = "self-update")]
+fn print_update_notice(
+    handle: Option<std::thread::JoinHandle<Result<update::UpdateInfo, String>>>,
+) {
+    let Some(handle) = handle else { return };
+    let Ok(Ok(info)) = handle.join() else { return };
+    if !info.is_update_available() {
+        return;
+    }
+
+    let install_method = update::detection::detect_install_method();
+    match install_method {
+        update::InstallMethod::PackageManager { upgrade_cmd, .. } => {
+            eprintln!(
+                "Update available: {} → {}. Update with: {}",
+                info.current_version, info.latest_version, upgrade_cmd
+            );
+        }
+        update::InstallMethod::SelfManaged => {
+            eprintln!(
+                "Update available: {} → {}. Run 'lazytail update' to install.",
+                info.current_version, info.latest_version
+            );
+        }
+    }
 }

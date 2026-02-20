@@ -111,6 +111,7 @@ pub fn load(discovery: &DiscoveryResult) -> Result<Config, ConfigError> {
     if let Some(global_path) = &discovery.global_config {
         let raw = load_file(global_path)?;
         config.global_sources = validate_sources(raw.sources);
+        config.update_check = raw.update_check;
         // Note: global name is ignored, project name takes precedence
     }
 

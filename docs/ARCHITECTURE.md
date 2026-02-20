@@ -2,14 +2,16 @@
 
 ## Overview
 
-LazyTail is a terminal-based log viewer written in Rust. It provides live filtering, multi-tab viewing, source discovery, capture mode, and an MCP server for AI assistant integration.
+LazyTail is a terminal-based log viewer written in Rust. It provides live filtering, multi-tab viewing, source discovery, capture mode, a web UI, and an MCP server for AI assistant integration.
 
-The application operates in four distinct modes:
+The application operates in five distinct modes:
 
 1. **TUI mode** - Interactive terminal UI for viewing log files and stdin
-2. **Discovery mode** - Auto-discovers sources from project/global data directories
-3. **Capture mode** (`-n`) - Tee-like stdin-to-file with source tracking
-4. **MCP server mode** (`--mcp`) - Model Context Protocol server for programmatic log access
+2. **Web mode** (`web`) - HTTP server with browser-based log viewing
+3. **Discovery mode** - Auto-discovers sources from project/global data directories
+4. **Capture mode** (`-n`) - Tee-like stdin-to-file with source tracking
+5. **MCP server mode** (`--mcp`) - Model Context Protocol server for programmatic log access
+6. **Subcommand mode** - CLI subcommands (`init`, `config`, `update`)
 
 ## Module Map
 
@@ -17,7 +19,8 @@ The application operates in four distinct modes:
 src/
   main.rs           Core event loop, mode dispatch, CLI definition
   app.rs            Top-level application state (App struct)
-  tab.rs            Per-tab state (TabState) with reader, watcher, filter
+  tab.rs            Per-tab TUI state (TabState) wrapping LogSourceState
+  source_state.rs   Domain-only source state (LogSourceState, FilterConfig)
   viewport.rs       Vim-style viewport with anchor-based scrolling
   event.rs          AppEvent enum (all possible state transitions)
   signal.rs         Flag-based SIGINT/SIGTERM handling
@@ -33,6 +36,7 @@ src/
 
   filter/
     mod.rs           Filter trait, FilterMode, FilterHistoryEntry
+    orchestrator.rs  FilterOrchestrator - unified filter dispatch entry point
     engine.rs        FilterEngine - background thread coordination
     streaming_filter.rs  mmap + memchr grep-like filtering
     string_filter.rs Plain text substring filter
@@ -49,6 +53,18 @@ src/
 
   ui/
     mod.rs           ratatui rendering (side panel, log view, status bar, help)
+
+  web/
+    mod.rs           HTTP server with embedded SPA for browser-based log viewing
+
+  index/
+    mod.rs           Columnar index module exports
+    builder.rs       Index writer (flags, offsets, checkpoints)
+    reader.rs        IndexReader - read-only access to flags and checkpoints
+    column.rs        ColumnReader/ColumnWriter for typed columnar storage
+    checkpoint.rs    Checkpoint and SeverityCounts types
+    flags.rs         Severity enum, format flags, line classification
+    meta.rs          Index metadata (entry count, column bits)
 
   config/
     mod.rs           Config module exports
@@ -68,15 +84,22 @@ src/
 
   mcp/              (feature-gated: "mcp")
     mod.rs           MCP server entry point (tokio + rmcp)
-    tools.rs         5 MCP tools implementation
+    tools.rs         6 MCP tools implementation
     types.rs         MCP request/response types
     format.rs        Output formatting for MCP responses
     ansi.rs          ANSI stripping for MCP output
+
+  update/            (feature-gated: "self-update")
+    mod.rs           Types, cache I/O, version comparison
+    checker.rs       GitHub release checking with 24h cache
+    installer.rs     Binary download and replacement
+    detection.rs     Package manager detection (pacman/dpkg/brew/path)
 
   cmd/
     mod.rs           Subcommand definitions
     init.rs          `lazytail init` command
     config.rs        `lazytail config validate/show` commands
+    update.rs        `lazytail update` command (feature-gated: self-update)
 ```
 
 ## Core Architecture
@@ -116,33 +139,48 @@ App
   filter_history: Vec<...>    Persistent across sessions
   source_panel: ...           Tree navigation state
 
-TabState
-  reader: Arc<Mutex<dyn LogReader>>   File or stream reader
-  watcher: Option<FileWatcher>        inotify file watcher
+TabState                              TUI adapter state
+  source: LogSourceState              Domain core (shared across adapters)
   viewport: Viewport                  Scroll/selection state
-  filter: FilterTabState              Active filter, cancel token, receiver
+  expansion: ExpansionState           Expanded/collapsed lines
+  watcher: Option<FileWatcher>        inotify file watcher
+  stream_writer: ...                  Stdin background reader handle
+  stream_receiver: ...                Stdin message channel
+
+LogSourceState                        Domain-only state (source_state.rs)
+  reader: Arc<Mutex<dyn LogReader>>   File or stream reader
+  index_reader: Option<IndexReader>   Columnar index (severity, flags)
+  filter: FilterConfig                Active filter, cancel token, receiver
   line_indices: Vec<usize>            Current visible line indices
+  total_lines: usize                  Total lines in source
   mode: ViewMode                      Normal or Filtered
   follow_mode: bool                   Auto-scroll on new content
-  expansion: ExpansionState           Expanded/collapsed lines
+  source_path: Option<PathBuf>        File path (None for stdin)
   source_status: Option<SourceStatus> Active/Ended for discovered sources
 ```
 
-Each tab is fully independent with its own reader, watcher, viewport, and filter state.
+Each tab is fully independent. Domain state lives in `LogSourceState` which is shared by TUI, Web, and MCP adapters. Adapter-specific state (viewport, expansion, watchers) stays on `TabState`.
+
+See [ADR-014: Hexagonal Architecture — LogSourceState Extraction](adr/014-hexagonal-log-source-state.md).
 
 ### Filter Pipeline
 
-Filtering runs in background threads to keep the UI responsive:
+Filtering runs in background threads to keep the UI responsive. All filter dispatch goes through `FilterOrchestrator`, the single entry point shared by TUI, Web, and MCP:
 
 ```
-User types pattern
-  -> debounce (500ms)
+User types pattern (TUI) / POST /api/filter (Web) / MCP search
+  -> FilterOrchestrator::trigger(&mut source, pattern, mode, range)
   -> cancel previous filter (CancelToken)
-  -> choose filter strategy:
-       File + plain text:  streaming_filter_fast (mmap + SIMD memmem)
-       File + regex:       streaming_filter (mmap + per-line regex)
-       File + query:       streaming_filter (mmap + JSON/logfmt parsing)
-       Stdin:              FilterEngine (shared reader with Mutex)
+  -> detect filter type:
+       Query syntax (json | ...):  parse FilterQuery AST, optional index acceleration
+       Plain text:                 StringFilter
+       Regex:                      RegexFilter
+  -> choose execution backend:
+       File + plain text (full):   streaming_filter_fast (mmap + SIMD memmem)
+       File + regex/query (full):  streaming_filter (mmap + per-line matching)
+       File + any (incremental):   streaming_filter_range (byte offset from index)
+       Stdin + any:                FilterEngine (shared reader with Mutex)
+       Index available + query:    candidate_bitmap pre-filter -> streaming_filter_indexed
   -> background thread sends FilterProgress via channel:
        PartialResults { matches, lines_processed }  (batched, every 50k lines)
        Complete { matches, lines_processed }
@@ -210,16 +248,32 @@ Uses `signal-hook::flag` for safe, flag-based signal handling:
 
 See [ADR-008: Flag-Based Signal Handling](adr/008-flag-based-signals.md).
 
+### Web Server
+
+The `lazytail web` subcommand starts an HTTP server with an embedded single-page application. It reuses `LogSourceState` and `FilterOrchestrator` from the core domain, adding only web-specific concerns (HTTP routing, JSON serialization, SSE polling).
+
+Key endpoints:
+- `GET /api/sources` - list sources with severity counts and filter state
+- `GET /api/lines` - paginated line content with per-line severity
+- `POST /api/filter` - trigger filter via `FilterOrchestrator::trigger`
+- `POST /api/filter/clear` - cancel and clear filter
+- `POST /api/follow` - toggle follow mode
+
+The web adapter uses the same `TabState` as TUI for file watching and filter progress polling, but only consumes the `LogSourceState` portion for API responses. Severity data flows from `IndexReader` through to JSON responses automatically.
+
 ### MCP Server
 
 Feature-gated behind `mcp` (enabled by default). Uses `rmcp` crate with tokio runtime and stdio transport.
 
-Provides 5 tools:
+Provides 6 tools:
 - `list_sources` - discover available log sources
 - `search` - pattern search with regex/plain text and structured queries
-- `get_lines` - read specific line ranges
-- `get_tail` - fetch recent lines
-- `get_context` - get lines around a specific line number
+- `get_lines` - read specific line ranges with per-line severity
+- `get_tail` - fetch recent lines with per-line severity
+- `get_context` - get lines around a specific line number with per-line severity
+- `get_stats` - columnar index statistics including severity counts
+
+When a columnar index is available, `LineInfo` responses include a `severity` field (trace/debug/info/warn/error/fatal). Text output format: `[L{n}] [{severity}] {content}`.
 
 See [ADR-010: MCP Server Integration](adr/010-mcp-server.md).
 
@@ -239,8 +293,10 @@ See [ADR-010: MCP Server Integration](adr/010-mcp-server.md).
 | `signal-hook` | Flag-based signal handling |
 | `lru` | LRU cache for line content and ANSI parsing |
 | `rayon` | Parallel iteration (experimental) |
+| `tiny_http` | Lightweight HTTP server for web mode |
 | `tokio` | Async runtime for MCP server (optional) |
 | `rmcp` | MCP protocol implementation (optional) |
+| `self_update` | GitHub release checking and binary replacement (optional) |
 
 ## Data Flow Diagrams
 

@@ -19,7 +19,11 @@ pub fn format_lines_text(resp: &GetLinesResponse) -> String {
     out.push('\n');
 
     for line in &resp.lines {
-        writeln!(out, "{}|{}", line.line_number, line.content).unwrap();
+        if let Some(ref sev) = line.severity {
+            writeln!(out, "[L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+        } else {
+            writeln!(out, "[L{}] {}", line.line_number, line.content).unwrap();
+        }
     }
 
     out
@@ -72,18 +76,35 @@ pub fn format_context_text(resp: &GetContextResponse) -> String {
     out.push('\n');
 
     for line in &resp.before_lines {
-        writeln!(out, "  {}|{}", line.line_number, line.content).unwrap();
+        if let Some(ref sev) = line.severity {
+            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+        } else {
+            writeln!(out, "  [L{}] {}", line.line_number, line.content).unwrap();
+        }
     }
 
-    writeln!(
-        out,
-        "> {}|{}",
-        resp.target_line.line_number, resp.target_line.content
-    )
-    .unwrap();
+    if let Some(ref sev) = resp.target_line.severity {
+        writeln!(
+            out,
+            "> [L{}] [{}] {}",
+            resp.target_line.line_number, sev, resp.target_line.content
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            out,
+            "> [L{}] {}",
+            resp.target_line.line_number, resp.target_line.content
+        )
+        .unwrap();
+    }
 
     for line in &resp.after_lines {
-        writeln!(out, "  {}|{}", line.line_number, line.content).unwrap();
+        if let Some(ref sev) = line.severity {
+            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+        } else {
+            writeln!(out, "  [L{}] {}", line.line_number, line.content).unwrap();
+        }
     }
 
     out
@@ -125,10 +146,12 @@ mod tests {
                 LineInfo {
                     line_number: 0,
                     content: "first line".into(),
+                    severity: None,
                 },
                 LineInfo {
                     line_number: 1,
                     content: "second line".into(),
+                    severity: None,
                 },
             ],
             total_lines: 100,
@@ -137,8 +160,8 @@ mod tests {
         let text = format_lines_text(&resp);
         assert!(text.starts_with("--- total_lines: 100\n"));
         assert!(text.contains("--- has_more: true\n"));
-        assert!(text.contains("0|first line\n"));
-        assert!(text.contains("1|second line\n"));
+        assert!(text.contains("[L0] first line\n"));
+        assert!(text.contains("[L1] second line\n"));
     }
 
     #[test]
@@ -163,13 +186,14 @@ mod tests {
             lines: vec![LineInfo {
                 line_number: 42,
                 content: json_line.into(),
+                severity: None,
             }],
             total_lines: 100,
             has_more: false,
         };
         let text = format_lines_text(&resp);
         // JSON should appear verbatim, no escaping
-        assert!(text.contains(&format!("42|{json_line}\n")));
+        assert!(text.contains(&format!("[L42] {json_line}\n")));
         assert!(!text.contains('\\'));
     }
 
@@ -179,12 +203,13 @@ mod tests {
             lines: vec![LineInfo {
                 line_number: 5,
                 content: "data | more | pipes".into(),
+                severity: None,
             }],
             total_lines: 10,
             has_more: false,
         };
         let text = format_lines_text(&resp);
-        assert!(text.contains("5|data | more | pipes\n"));
+        assert!(text.contains("[L5] data | more | pipes\n"));
     }
 
     #[test]
@@ -280,35 +305,40 @@ mod tests {
                 LineInfo {
                     line_number: 40,
                     content: "before line 1".into(),
+                    severity: None,
                 },
                 LineInfo {
                     line_number: 41,
                     content: "before line 2".into(),
+                    severity: None,
                 },
             ],
             target_line: LineInfo {
                 line_number: 42,
                 content: "target line content".into(),
+                severity: None,
             },
             after_lines: vec![
                 LineInfo {
                     line_number: 43,
                     content: "after line 1".into(),
+                    severity: None,
                 },
                 LineInfo {
                     line_number: 44,
                     content: "after line 2".into(),
+                    severity: None,
                 },
             ],
             total_lines: 1000,
         };
         let text = format_context_text(&resp);
         assert!(text.contains("--- total_lines: 1000\n"));
-        assert!(text.contains("  40|before line 1\n"));
-        assert!(text.contains("  41|before line 2\n"));
-        assert!(text.contains("> 42|target line content\n"));
-        assert!(text.contains("  43|after line 1\n"));
-        assert!(text.contains("  44|after line 2\n"));
+        assert!(text.contains("  [L40] before line 1\n"));
+        assert!(text.contains("  [L41] before line 2\n"));
+        assert!(text.contains("> [L42] target line content\n"));
+        assert!(text.contains("  [L43] after line 1\n"));
+        assert!(text.contains("  [L44] after line 2\n"));
     }
 
     #[test]
@@ -318,13 +348,14 @@ mod tests {
             target_line: LineInfo {
                 line_number: 0,
                 content: "only line".into(),
+                severity: None,
             },
             after_lines: vec![],
             total_lines: 1,
         };
         let text = format_context_text(&resp);
         assert!(text.contains("--- total_lines: 1\n"));
-        assert!(text.contains("> 0|only line\n"));
+        assert!(text.contains("> [L0] only line\n"));
     }
 
     #[test]
