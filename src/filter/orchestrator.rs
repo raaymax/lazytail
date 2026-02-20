@@ -7,7 +7,7 @@ use crate::filter::{
 };
 use crate::index::column::ColumnReader;
 use crate::source::index_dir_for_log;
-use crate::source_state::LogSourceState;
+use crate::log_source::LogSource;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ impl FilterOrchestrator {
     /// Handles query detection, streaming vs generic filter, full vs range (incremental).
     /// The `range` parameter is `Some((start, end))` for incremental filtering.
     pub fn trigger(
-        source: &mut LogSourceState,
+        source: &mut LogSource,
         pattern: String,
         mode: FilterMode,
         range: Option<(usize, usize)>,
@@ -156,7 +156,7 @@ impl FilterOrchestrator {
     /// - Range (incremental) vs full filtering
     /// - File (streaming) vs stdin (generic engine)
     fn dispatch(
-        source: &mut LogSourceState,
+        source: &mut LogSource,
         filter: Arc<dyn Filter>,
         range: Option<(usize, usize)>,
     ) {
@@ -242,7 +242,7 @@ impl FilterOrchestrator {
     }
 
     /// Cancel any in-progress filter on a source.
-    pub fn cancel(source: &mut LogSourceState) {
+    pub fn cancel(source: &mut LogSource) {
         if let Some(ref cancel) = source.filter.cancel_token {
             cancel.cancel();
         }

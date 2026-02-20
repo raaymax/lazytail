@@ -7,7 +7,7 @@ use crate::reader::{
 use crate::source::{
     check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
-use crate::source_state::calculate_index_size;
+use crate::log_source::calculate_index_size;
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 // Re-export FilterConfig so existing `use crate::tab::FilterConfig` still works
-pub use crate::source_state::FilterConfig;
-// Re-export LogSourceState for convenience
-pub use crate::source_state::LogSourceState;
+pub use crate::log_source::FilterConfig;
+// Re-export LogSource for convenience
+pub use crate::log_source::LogSource;
 
 /// Batch size for sending lines from background reader
 const STREAM_BATCH_SIZE: usize = 10_000;
@@ -57,11 +57,11 @@ pub struct ExpansionState {
 
 /// Per-tab state for viewing a single log source.
 ///
-/// Contains a `LogSourceState` (domain core) plus TUI-specific state
+/// Contains a `LogSource` (domain core) plus TUI-specific state
 /// (viewport, expansion, watcher, stream handling).
 pub struct TabState {
     /// Domain core: reader, filter, line indices, source metadata
-    pub source: LogSourceState,
+    pub source: LogSource,
     /// Current scroll position (synced from viewport for compatibility)
     pub scroll_position: usize,
     /// Currently selected line index (synced from viewport for compatibility)
@@ -144,7 +144,7 @@ impl TabState {
                 .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
-                source: LogSourceState {
+                source: LogSource {
                     name,
                     source_path: Some(path),
                     mode: ViewMode::Normal,
@@ -179,7 +179,7 @@ impl TabState {
             spawn_stream_reader(file, tx);
 
             Ok(Self {
-                source: LogSourceState {
+                source: LogSource {
                     name,
                     source_path: None,
                     mode: ViewMode::Normal,
@@ -217,7 +217,7 @@ impl TabState {
         spawn_stream_reader(std::io::stdin(), tx);
 
         Ok(Self {
-            source: LogSourceState {
+            source: LogSource {
                 name: "<stdin>".to_string(),
                 source_path: None,
                 mode: ViewMode::Normal,
@@ -262,7 +262,7 @@ impl TabState {
             .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
-            source: LogSourceState {
+            source: LogSource {
                 name: source.name,
                 source_path: Some(source.log_path),
                 mode: ViewMode::Normal,
@@ -323,7 +323,7 @@ impl TabState {
             .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
-            source: LogSourceState {
+            source: LogSource {
                 name: source.name.clone(),
                 source_path: Some(source.path.clone()),
                 mode: ViewMode::Normal,
@@ -356,7 +356,7 @@ impl TabState {
         let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
         Ok(Self {
-            source: LogSourceState {
+            source: LogSource {
                 name,
                 source_path: Some(path),
                 mode: ViewMode::Normal,

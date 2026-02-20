@@ -13,7 +13,7 @@ mod mcp;
 mod reader;
 mod signal;
 mod source;
-mod source_state;
+mod log_source;
 mod tab;
 mod ui;
 #[cfg(feature = "self-update")]

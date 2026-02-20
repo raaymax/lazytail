@@ -58,7 +58,7 @@ pub struct FilterConfig {
 /// Contains all the core data needed for log viewing: reader, index,
 /// filter state, line indices, and source metadata. Does NOT contain
 /// adapter-specific state like viewport, expansion, or watchers.
-pub struct LogSourceState {
+pub struct LogSource {
     /// Display name (filename or source name)
     pub name: String,
     /// Source file path (None for stdin)
@@ -88,7 +88,7 @@ pub struct LogSourceState {
 }
 
 #[allow(dead_code)]
-impl LogSourceState {
+impl LogSource {
     /// Get the number of visible lines
     pub fn visible_line_count(&self) -> usize {
         self.line_indices.len()
