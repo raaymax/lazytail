@@ -10,3 +10,4 @@ PKGBUILD
 .SRCINFO
 aur/
 .planning/
+.worktrees/
