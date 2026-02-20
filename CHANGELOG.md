@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/raaymax/lazytail/compare/v0.6.0...v0.7.0) (2026-02-20)
+
+
+### Features
+
+* **cli:** add a simple web client ([#30](https://github.com/raaymax/lazytail/issues/30)) ([26afdbe](https://github.com/raaymax/lazytail/commit/26afdbe42c22671ecc877727bbfa161882580dfe))
+* **update:** add self-update with CLI subcommand and background check ([#36](https://github.com/raaymax/lazytail/issues/36)) ([c0d4fd7](https://github.com/raaymax/lazytail/commit/c0d4fd7b653a7a69afbb529010ba7c91e250c137))
+
+
+### Bug Fixes
+
+* **ci:** auto-trigger release builds when release-please creates releases ([97ace90](https://github.com/raaymax/lazytail/commit/97ace90159397db27c0e8f3fad1b74047e5e7824))
+
 ## [0.6.0](https://github.com/raaymax/lazytail/compare/v0.5.3...v0.6.0) (2026-02-19)
 
 
