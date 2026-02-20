@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/raaymax/lazytail/compare/v0.5.3...v0.6.0) (2026-02-19)
+
+
+### Features
+
+* **index:** add columnar index system ([#34](https://github.com/raaymax/lazytail/issues/34)) ([2d1d4e5](https://github.com/raaymax/lazytail/commit/2d1d4e5cd2195d38d54c4b39f2a0fb472135c1ec))
+* **ui:** show line count and file size per source in side panel ([#33](https://github.com/raaymax/lazytail/issues/33)) ([15830dd](https://github.com/raaymax/lazytail/commit/15830ddfb9b46d69f4db3f5ec2b3d4b58ce84cea))
+
+
+### Bug Fixes
+
+* **ci:** trigger release build on tag push instead of workflow dispatch ([#26](https://github.com/raaymax/lazytail/issues/26)) ([a435292](https://github.com/raaymax/lazytail/commit/a43529209fc3a630b869aa32176cbda176b0ba98))
+* **source:** check project-local markers for TUI source status ([#29](https://github.com/raaymax/lazytail/issues/29)) ([08a07bf](https://github.com/raaymax/lazytail/commit/08a07bfc2badbadf8d3f1223bdca9a1bf009d407))
+
 ## [0.5.3](https://github.com/raaymax/lazytail/compare/v0.5.2...v0.5.3) (2026-02-13)
 
 
