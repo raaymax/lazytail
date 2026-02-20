@@ -187,11 +187,13 @@ Commands:
   init              Initialize a new lazytail.yaml config file
   config validate   Validate the config file
   config show       Show effective configuration
+  update            Check for and install updates (GitHub release builds only)
 
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
       --no-watch           Disable file watching
       --mcp                Run as MCP server for AI assistants
+      --no-update-check    Disable background update check on startup
   -v, --verbose            Verbose output (show config discovery paths)
   -h, --help               Print help
   -V, --version            Print version
