@@ -8,6 +8,7 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
+mod log_source;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;

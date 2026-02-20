@@ -4,12 +4,10 @@ use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
 use crate::filter::FilterMode;
 use crate::index::reader::IndexReader;
-use crate::reader::{
-    file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
-};
+use crate::log_source::LogSource;
+use crate::reader::{stream_reader::StreamReader, LogReader, StreamableReader};
 use crate::source::{
-    check_source_status, check_source_status_in_dir, index_dir_for_log, DiscoveredSource,
-    SourceLocation, SourceStatus,
+    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
 };
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
@@ -24,27 +22,6 @@ use std::thread;
 
 /// Batch size for sending lines from background reader
 const STREAM_BATCH_SIZE: usize = 10_000;
-
-/// Calculate the total size of all files in the index directory
-fn calculate_index_size(log_path: &Path) -> Option<u64> {
-    let index_dir = index_dir_for_log(log_path);
-    if !index_dir.exists() || !index_dir.is_dir() {
-        return None;
-    }
-
-    let mut total_size = 0u64;
-    let entries = std::fs::read_dir(&index_dir).ok()?;
-
-    for entry in entries.flatten() {
-        if let Ok(metadata) = entry.metadata() {
-            if metadata.is_file() {
-                total_size += metadata.len();
-            }
-        }
-    }
-
-    Some(total_size)
-}
 
 /// Messages sent from the background stream reader thread
 #[derive(Debug)]
@@ -152,7 +129,7 @@ impl TabState {
     }
 
     /// Get the file path for this tab (None for stdin/pipe tabs).
-    pub fn file_path(&self) -> Option<&std::path::Path> {
+    pub fn file_path(&self) -> Option<&Path> {
         self.source_path.as_deref()
     }
 
@@ -188,10 +165,11 @@ impl TabState {
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
         if is_regular_file {
-            // Regular file - close this handle and use FileReader (which opens its own)
-            let file_size = Some(metadata.len());
+            // Regular file - use LogSource to open reader + index together
             drop(file);
-            let file_reader = FileReader::new(&path)?;
+            let source = LogSource::open(&path)?;
+            let (file_reader, index_reader, file_size, index_size) = source.into_parts();
+
             let watcher = if watch {
                 FileWatcher::new(&path).ok()
             } else {
@@ -201,10 +179,6 @@ impl TabState {
             let total_lines = file_reader.total_lines();
             let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
-            let index_reader = IndexReader::open(&path);
-            let index_size = index_reader
-                .as_ref()
-                .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
                 name,
@@ -225,7 +199,7 @@ impl TabState {
                 source_status: None,
                 config_source_type: None,
                 disabled: false,
-                file_size,
+                file_size: Some(file_size),
                 index_reader,
                 index_size,
             })
@@ -302,8 +276,9 @@ impl TabState {
 
     /// Create a new tab from a discovered source
     pub fn from_discovered_source(source: DiscoveredSource, watch: bool) -> Result<Self> {
-        let file_size = std::fs::metadata(&source.log_path).map(|m| m.len()).ok();
-        let file_reader = FileReader::new(&source.log_path)?;
+        let log_source = LogSource::open(&source.log_path)?;
+        let (file_reader, index_reader, file_size, index_size) = log_source.into_parts();
+
         let watcher = if watch {
             FileWatcher::new(&source.log_path).ok()
         } else {
@@ -313,10 +288,6 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
-        let index_reader = IndexReader::open(&source.log_path);
-        let index_size = index_reader
-            .as_ref()
-            .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
             name: source.name,
@@ -340,7 +311,7 @@ impl TabState {
                 SourceLocation::Global => None,
             },
             disabled: false,
-            file_size,
+            file_size: Some(file_size),
             index_reader,
             index_size,
         })
@@ -361,8 +332,9 @@ impl TabState {
         }
 
         // Create normal file tab
-        let file_size = std::fs::metadata(&source.path).map(|m| m.len()).ok();
-        let file_reader = FileReader::new(&source.path)?;
+        let log_source = LogSource::open(&source.path)?;
+        let (file_reader, index_reader, file_size, index_size) = log_source.into_parts();
+
         let watcher = if watch {
             FileWatcher::new(&source.path).ok()
         } else {
@@ -372,10 +344,6 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
-        let index_reader = IndexReader::open(&source.path);
-        let index_size = index_reader
-            .as_ref()
-            .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
             name: source.name.clone(),
@@ -396,7 +364,7 @@ impl TabState {
             source_status: None,
             config_source_type: Some(source_type),
             disabled: false,
-            file_size,
+            file_size: Some(file_size),
             index_reader,
             index_size,
         })

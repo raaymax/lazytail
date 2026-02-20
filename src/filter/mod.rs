@@ -5,6 +5,7 @@ pub mod orchestrator;
 pub mod parallel_engine;
 pub mod query;
 pub mod regex_filter;
+pub mod search_engine;
 pub mod streaming_filter;
 pub mod string_filter;
 

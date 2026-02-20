@@ -3,4 +3,6 @@
 
 pub mod config;
 pub mod index;
+pub mod log_source;
+pub mod reader;
 pub mod source;

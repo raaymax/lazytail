@@ -1,9 +1,17 @@
-use crate::index::checkpoint::{Checkpoint, CheckpointReader};
+use crate::index::checkpoint::{Checkpoint, CheckpointReader, SeverityCounts};
 use crate::index::column::ColumnReader;
 use crate::index::flags::Severity;
 use crate::index::meta::{ColumnBit, IndexMeta};
 use crate::source::index_dir_for_log;
 use std::path::Path;
+
+/// Aggregated index statistics for a log file.
+pub struct IndexStats {
+    pub indexed_lines: u64,
+    pub log_file_size: u64,
+    pub columns: Vec<String>,
+    pub severity_counts: Option<SeverityCounts>,
+}
 
 /// Read-only access to an index's flags and checkpoint columns.
 ///
@@ -104,6 +112,44 @@ impl IndexReader {
             .iter()
             .map(|&f| f & mask == want)
             .collect()
+    }
+
+    /// Gather aggregated index statistics from the index directory.
+    ///
+    /// Reads meta + checkpoint data to produce a summary. Returns `None`
+    /// if the index directory doesn't exist or meta cannot be read.
+    pub fn stats(log_path: &Path) -> Option<IndexStats> {
+        let idx_dir = index_dir_for_log(log_path);
+        let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
+
+        let column_names = [
+            (ColumnBit::Offsets, "offsets"),
+            (ColumnBit::Lengths, "lengths"),
+            (ColumnBit::Time, "time"),
+            (ColumnBit::Flags, "flags"),
+            (ColumnBit::Checkpoints, "checkpoints"),
+        ];
+        let columns: Vec<String> = column_names
+            .iter()
+            .filter(|(bit, _)| meta.has_column(*bit))
+            .map(|(_, name)| name.to_string())
+            .collect();
+
+        let severity_counts = if meta.has_column(ColumnBit::Checkpoints) {
+            CheckpointReader::open(idx_dir.join("checkpoints"))
+                .ok()
+                .and_then(|cr| cr.last())
+                .map(|cp| cp.severity_counts)
+        } else {
+            None
+        };
+
+        Some(IndexStats {
+            indexed_lines: meta.entry_count,
+            log_file_size: meta.log_file_size,
+            columns,
+            severity_counts,
+        })
     }
 }
 
