@@ -17,6 +17,9 @@ pub struct RawConfig {
     /// List of log sources.
     #[serde(default)]
     pub sources: Vec<RawSource>,
+    /// Whether to check for updates on TUI startup (default: true).
+    #[serde(default)]
+    pub update_check: Option<bool>,
 }
 
 /// Raw source from config file.
@@ -57,6 +60,8 @@ pub struct Config {
     pub project_sources: Vec<Source>,
     /// Sources defined in the global config.
     pub global_sources: Vec<Source>,
+    /// Whether to check for updates on TUI startup (from global config).
+    pub update_check: Option<bool>,
 }
 
 impl Config {

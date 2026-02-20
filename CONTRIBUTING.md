@@ -54,7 +54,8 @@ src/
 ├── cmd/
 │   ├── mod.rs              # CLI subcommand definitions
 │   ├── init.rs             # `lazytail init` command
-│   └── config.rs           # `lazytail config` commands
+│   ├── config.rs           # `lazytail config` commands
+│   └── update.rs           # `lazytail update` command (feature-gated: self-update)
 ├── config/
 │   ├── mod.rs              # Config module
 │   ├── discovery.rs        # Walk parent dirs for lazytail.yaml
@@ -77,10 +78,15 @@ src/
 │   └── file_events.rs      # File change event handling
 ├── mcp/
 │   ├── mod.rs              # MCP server module
-│   ├── tools.rs            # Tool implementations (5 tools)
+│   ├── tools.rs            # Tool implementations (6 tools)
 │   ├── types.rs            # Request/response types
 │   ├── format.rs           # Plain text output formatters
 │   └── ansi.rs             # ANSI escape code stripping
+├── update/                 # Self-update module (feature-gated: self-update)
+│   ├── mod.rs              # Types, cache I/O, version comparison
+│   ├── checker.rs          # GitHub release checking with cache
+│   ├── installer.rs        # Binary download and replacement
+│   └── detection.rs        # Package manager detection
 ├── reader/
 │   ├── mod.rs              # LogReader trait
 │   ├── file_reader.rs      # Lazy file reader with line indexing
@@ -124,6 +130,7 @@ The viewer is designed to handle large log files efficiently:
 - **rmcp** - MCP server framework (optional, feature-gated)
 - **schemars** - JSON Schema generation for MCP (optional)
 - **tokio** - Async runtime for MCP server (optional)
+- **self_update** - GitHub release checking and binary replacement (optional, feature-gated)
 
 ### Development Tools
 

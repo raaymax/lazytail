@@ -24,7 +24,7 @@ default = ["mcp"]
 mcp = ["dep:tokio", "dep:rmcp", "dep:schemars"]
 ```
 
-Activated via `lazytail --mcp`, it runs a stdio transport MCP server providing 5 tools:
+Activated via `lazytail --mcp`, it runs a stdio transport MCP server providing 6 tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -33,6 +33,7 @@ Activated via `lazytail --mcp`, it runs a stdio transport MCP server providing 5
 | `get_lines` | Read specific line ranges from a source |
 | `get_tail` | Fetch the most recent N lines |
 | `get_context` | Get lines around a specific line number |
+| `get_stats` | Index metadata and severity breakdown |
 
 The MCP server reuses the same source discovery, config, and query parsing code as the TUI. It uses the same `DiscoveryResult` context to find sources in both project-local and global directories.
 
