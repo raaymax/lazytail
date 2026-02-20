@@ -1,13 +1,13 @@
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
 use crate::index::reader::IndexReader;
+use crate::log_source::calculate_index_size;
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
     check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
-use crate::log_source::calculate_index_size;
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};

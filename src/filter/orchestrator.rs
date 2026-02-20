@@ -6,8 +6,8 @@ use crate::filter::{
     FilterMode,
 };
 use crate::index::column::ColumnReader;
-use crate::source::index_dir_for_log;
 use crate::log_source::LogSource;
+use crate::source::index_dir_for_log;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
@@ -155,11 +155,7 @@ impl FilterOrchestrator {
     /// Shared by all filter types (plain, regex, query). Handles:
     /// - Range (incremental) vs full filtering
     /// - File (streaming) vs stdin (generic engine)
-    fn dispatch(
-        source: &mut LogSource,
-        filter: Arc<dyn Filter>,
-        range: Option<(usize, usize)>,
-    ) {
+    fn dispatch(source: &mut LogSource, filter: Arc<dyn Filter>, range: Option<(usize, usize)>) {
         let cancel = CancelToken::new();
         source.filter.cancel_token = Some(cancel.clone());
 

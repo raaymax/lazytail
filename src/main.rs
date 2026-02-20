@@ -8,12 +8,12 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
+mod log_source;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
 mod signal;
 mod source;
-mod log_source;
 mod tab;
 mod ui;
 #[cfg(feature = "self-update")]
