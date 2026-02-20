@@ -3,13 +3,14 @@
 //! Fetches the latest release from GitHub and compares with the current version.
 //! Results are cached for 24 hours to avoid repeated API calls.
 
-use super::{save_cache, UpdateCheckCache, UpdateInfo};
+use super::{get_target, save_cache, UpdateCheckCache, UpdateInfo, REPO_NAME, REPO_OWNER};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REPO_OWNER: &str = "raaymax";
-const REPO_NAME: &str = "lazytail";
-
 /// Check the latest version from GitHub releases.
+///
+/// Iterates through releases to find the first one that has downloadable
+/// assets for the current platform. This skips drafts, prereleases, and
+/// releases that lack binaries for this OS/arch.
 pub fn check_latest_version() -> Result<UpdateInfo, String> {
     let releases = self_update::backends::github::ReleaseList::configure()
         .repo_owner(REPO_OWNER)
@@ -19,9 +20,11 @@ pub fn check_latest_version() -> Result<UpdateInfo, String> {
         .fetch()
         .map_err(|e| format!("Failed to fetch releases: {}", e))?;
 
+    let target = get_target();
     let latest = releases
-        .first()
-        .ok_or_else(|| "No releases found".to_string())?;
+        .iter()
+        .find(|r| r.has_target_asset(&target))
+        .ok_or_else(|| format!("No releases found with assets for target '{}'", target))?;
 
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let latest_version = latest.version.clone();

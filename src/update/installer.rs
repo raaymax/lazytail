@@ -2,8 +2,7 @@
 //!
 //! Downloads and replaces the current binary using GitHub releases.
 
-const REPO_OWNER: &str = "raaymax";
-const REPO_NAME: &str = "lazytail";
+use super::{get_target, REPO_NAME, REPO_OWNER};
 
 /// Download and install the latest release, replacing the current binary.
 pub fn install_latest() -> Result<String, String> {
@@ -23,25 +22,4 @@ pub fn install_latest() -> Result<String, String> {
         .map_err(|e| format!("Failed to install update: {}", e))?;
 
     Ok(status.version().to_string())
-}
-
-/// Map the current platform to the asset naming convention used in releases.
-fn get_target() -> String {
-    let os = if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        "unknown"
-    };
-
-    let arch = if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "unknown"
-    };
-
-    format!("{}-{}", os, arch)
 }

@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub const REPO_OWNER: &str = "raaymax";
+pub const REPO_NAME: &str = "lazytail";
+
 /// How long a cached update check remains valid (24 hours).
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 
@@ -93,6 +96,27 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
     let l = parse(latest);
     let c = parse(current);
     l > c
+}
+
+/// Map the current platform to the asset naming convention used in releases.
+pub fn get_target() -> String {
+    let os = if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "unknown"
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    };
+
+    format!("{}-{}", os, arch)
 }
 
 #[cfg(test)]
