@@ -1,15 +1,12 @@
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
-use crate::filter::cancel::CancelToken;
-use crate::filter::engine::FilterProgress;
-use crate::filter::FilterMode;
 use crate::index::reader::IndexReader;
+use crate::log_source::calculate_index_size;
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
-    check_source_status, check_source_status_in_dir, index_dir_for_log, DiscoveredSource,
-    SourceLocation, SourceStatus,
+    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
 use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
@@ -17,34 +14,18 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+// Re-export FilterConfig so existing `use crate::tab::FilterConfig` still works
+pub use crate::log_source::FilterConfig;
+// Re-export LogSource for convenience
+pub use crate::log_source::LogSource;
+
 /// Batch size for sending lines from background reader
 const STREAM_BATCH_SIZE: usize = 10_000;
-
-/// Calculate the total size of all files in the index directory
-fn calculate_index_size(log_path: &Path) -> Option<u64> {
-    let index_dir = index_dir_for_log(log_path);
-    if !index_dir.exists() || !index_dir.is_dir() {
-        return None;
-    }
-
-    let mut total_size = 0u64;
-    let entries = std::fs::read_dir(&index_dir).ok()?;
-
-    for entry in entries.flatten() {
-        if let Ok(metadata) = entry.metadata() {
-            if metadata.is_file() {
-                total_size += metadata.len();
-            }
-        }
-    }
-
-    Some(total_size)
-}
 
 /// Messages sent from the background stream reader thread
 #[derive(Debug)]
@@ -65,29 +46,6 @@ pub enum ExpandMode {
     Single, // Only one expanded at a time
 }
 
-/// Filter-related state for a tab
-#[derive(Default)]
-pub struct FilterConfig {
-    /// Current filter state (Inactive, Processing, Complete)
-    pub state: FilterState,
-    /// Current filter pattern (if any)
-    pub pattern: Option<String>,
-    /// Filter mode (Plain or Regex, with case sensitivity)
-    pub mode: FilterMode,
-    /// Channel receiver for filter progress updates
-    pub receiver: Option<Receiver<FilterProgress>>,
-    /// Cancellation token for the current filter operation
-    pub cancel_token: Option<CancelToken>,
-    /// Whether current filter operation is incremental
-    pub is_incremental: bool,
-    /// Last line number that was filtered (for incremental filtering)
-    pub last_filtered_line: usize,
-    /// Original line when filter started (for restoring on Esc)
-    pub origin_line: Option<usize>,
-    /// Flag to clear results when first partial results arrive (prevents blink)
-    pub needs_clear: bool,
-}
-
 /// Line expansion state for a tab
 #[derive(Default)]
 pub struct ExpansionState {
@@ -97,32 +55,21 @@ pub struct ExpansionState {
     pub mode: ExpandMode,
 }
 
-/// Per-tab state for viewing a single log source
+/// Per-tab state for viewing a single log source.
+///
+/// Contains a `LogSource` (domain core) plus TUI-specific state
+/// (viewport, expansion, watcher, stream handling).
 pub struct TabState {
-    /// Display name (filename)
-    pub name: String,
-    /// Source file path (None for stdin)
-    pub source_path: Option<PathBuf>,
-    /// Current view mode (Normal or Filtered)
-    pub mode: ViewMode,
-    /// Total number of lines in the source
-    pub total_lines: usize,
-    /// Indices of lines to display (all lines or filtered results)
-    pub line_indices: Vec<usize>,
+    /// Domain core: reader, filter, line indices, source metadata
+    pub source: LogSource,
     /// Current scroll position (synced from viewport for compatibility)
     pub scroll_position: usize,
     /// Currently selected line index (synced from viewport for compatibility)
     pub selected_line: usize,
-    /// Follow mode - auto-scroll to latest logs
-    pub follow_mode: bool,
-    /// Per-tab reader
-    pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Per-tab file watcher
     pub watcher: Option<FileWatcher>,
     /// Viewport for anchor-based scroll/selection management
     pub viewport: Viewport,
-    /// Filter configuration and state
-    pub filter: FilterConfig,
     /// Line expansion state
     pub expansion: ExpansionState,
     /// Stream writer handle for stream-specific operations (append, mark_complete).
@@ -130,18 +77,8 @@ pub struct TabState {
     stream_writer: Option<Arc<Mutex<dyn StreamableReader>>>,
     /// Receiver for background stream loading (pipes/stdin)
     pub stream_receiver: Option<Receiver<StreamMessage>>,
-    /// Source status for discovered sources (Active/Ended)
-    pub source_status: Option<SourceStatus>,
     /// Source type from config (ProjectSource or GlobalSource)
     pub config_source_type: Option<SourceType>,
-    /// Whether this source is disabled (file doesn't exist)
-    pub disabled: bool,
-    /// File size in bytes (None for stdin/pipes without a file path)
-    pub file_size: Option<u64>,
-    /// Columnar index reader for severity coloring and stats (None if no index)
-    pub index_reader: Option<IndexReader>,
-    /// Index directory size in bytes (None if no index)
-    pub index_size: Option<u64>,
 }
 
 impl TabState {
@@ -153,7 +90,7 @@ impl TabState {
 
     /// Get the file path for this tab (None for stdin/pipe tabs).
     pub fn file_path(&self) -> Option<&std::path::Path> {
-        self.source_path.as_deref()
+        self.source.source_path.as_deref()
     }
 
     /// Get the source type for this tab (ProjectSource, GlobalSource, Global, File, or Pipe)
@@ -162,9 +99,9 @@ impl TabState {
         if let Some(source_type) = self.config_source_type {
             return source_type;
         }
-        if self.source_status.is_some() {
+        if self.source.source_status.is_some() {
             SourceType::Global
-        } else if self.source_path.is_some() {
+        } else if self.source.source_path.is_some() {
             SourceType::File
         } else {
             SourceType::Pipe
@@ -207,27 +144,29 @@ impl TabState {
                 .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
-                name,
-                source_path: Some(path),
-                mode: ViewMode::Normal,
-                total_lines,
-                line_indices,
+                source: LogSource {
+                    name,
+                    source_path: Some(path),
+                    mode: ViewMode::Normal,
+                    total_lines,
+                    line_indices,
+                    follow_mode: true,
+                    reader: Arc::new(Mutex::new(file_reader)),
+                    filter: FilterConfig::default(),
+                    source_status: None,
+                    disabled: false,
+                    file_size,
+                    index_reader,
+                    index_size,
+                },
                 scroll_position: 0,
                 selected_line,
-                follow_mode: true,
-                reader: Arc::new(Mutex::new(file_reader)),
                 watcher,
                 viewport: Viewport::new(selected_line),
-                filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
                 stream_writer: None,
                 stream_receiver: None,
-                source_status: None,
                 config_source_type: None,
-                disabled: false,
-                file_size,
-                index_reader,
-                index_size,
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -240,27 +179,29 @@ impl TabState {
             spawn_stream_reader(file, tx);
 
             Ok(Self {
-                name,
-                source_path: None,
-                mode: ViewMode::Normal,
-                total_lines: 0,
-                line_indices: Vec::new(),
+                source: LogSource {
+                    name,
+                    source_path: None,
+                    mode: ViewMode::Normal,
+                    total_lines: 0,
+                    line_indices: Vec::new(),
+                    follow_mode: true,
+                    reader,
+                    filter: FilterConfig::default(),
+                    source_status: None,
+                    disabled: false,
+                    file_size: None,
+                    index_reader: None,
+                    index_size: None,
+                },
                 scroll_position: 0,
                 selected_line: 0,
-                follow_mode: true,
-                reader,
                 watcher: None,
                 viewport: Viewport::new(0),
-                filter: FilterConfig::default(),
                 expansion: ExpansionState::default(),
                 stream_writer: Some(stream_writer),
                 stream_receiver: Some(rx),
-                source_status: None,
                 config_source_type: None,
-                disabled: false,
-                file_size: None,
-                index_reader: None,
-                index_size: None,
             })
         }
     }
@@ -276,27 +217,29 @@ impl TabState {
         spawn_stream_reader(std::io::stdin(), tx);
 
         Ok(Self {
-            name: "<stdin>".to_string(),
-            source_path: None,
-            mode: ViewMode::Normal,
-            total_lines: 0,
-            line_indices: Vec::new(),
+            source: LogSource {
+                name: "<stdin>".to_string(),
+                source_path: None,
+                mode: ViewMode::Normal,
+                total_lines: 0,
+                line_indices: Vec::new(),
+                follow_mode: true,
+                reader,
+                filter: FilterConfig::default(),
+                source_status: None,
+                disabled: false,
+                file_size: None,
+                index_reader: None,
+                index_size: None,
+            },
             scroll_position: 0,
             selected_line: 0,
-            follow_mode: true,
-            reader,
             watcher: None,
             viewport: Viewport::new(0),
-            filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
             stream_writer: Some(stream_writer),
             stream_receiver: Some(rx),
-            source_status: None,
             config_source_type: None,
-            disabled: false,
-            file_size: None,
-            index_reader: None,
-            index_size: None,
         })
     }
 
@@ -319,30 +262,32 @@ impl TabState {
             .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
-            name: source.name,
-            source_path: Some(source.log_path),
-            mode: ViewMode::Normal,
-            total_lines,
-            line_indices,
+            source: LogSource {
+                name: source.name,
+                source_path: Some(source.log_path),
+                mode: ViewMode::Normal,
+                total_lines,
+                line_indices,
+                follow_mode: true,
+                reader: Arc::new(Mutex::new(file_reader)),
+                filter: FilterConfig::default(),
+                source_status: Some(source.status),
+                disabled: false,
+                file_size,
+                index_reader,
+                index_size,
+            },
             scroll_position: 0,
             selected_line,
-            follow_mode: true,
-            reader: Arc::new(Mutex::new(file_reader)),
             watcher,
             viewport: Viewport::new(selected_line),
-            filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
             stream_writer: None,
             stream_receiver: None,
-            source_status: Some(source.status),
             config_source_type: match source.location {
                 SourceLocation::Project => Some(SourceType::ProjectSource),
                 SourceLocation::Global => None,
             },
-            disabled: false,
-            file_size,
-            index_reader,
-            index_size,
         })
     }
 
@@ -378,27 +323,29 @@ impl TabState {
             .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
-            name: source.name.clone(),
-            source_path: Some(source.path.clone()),
-            mode: ViewMode::Normal,
-            total_lines,
-            line_indices,
+            source: LogSource {
+                name: source.name.clone(),
+                source_path: Some(source.path.clone()),
+                mode: ViewMode::Normal,
+                total_lines,
+                line_indices,
+                follow_mode: true,
+                reader: Arc::new(Mutex::new(file_reader)),
+                filter: FilterConfig::default(),
+                source_status: None,
+                disabled: false,
+                file_size,
+                index_reader,
+                index_size,
+            },
             scroll_position: 0,
             selected_line,
-            follow_mode: true,
-            reader: Arc::new(Mutex::new(file_reader)),
             watcher,
             viewport: Viewport::new(selected_line),
-            filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
             stream_writer: None,
             stream_receiver: None,
-            source_status: None,
             config_source_type: Some(source_type),
-            disabled: false,
-            file_size,
-            index_reader,
-            index_size,
         })
     }
 
@@ -409,27 +356,29 @@ impl TabState {
         let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
         Ok(Self {
-            name,
-            source_path: Some(path),
-            mode: ViewMode::Normal,
-            total_lines: 0,
-            line_indices: Vec::new(),
+            source: LogSource {
+                name,
+                source_path: Some(path),
+                mode: ViewMode::Normal,
+                total_lines: 0,
+                line_indices: Vec::new(),
+                follow_mode: false,
+                reader,
+                filter: FilterConfig::default(),
+                source_status: None,
+                disabled: true,
+                file_size: None,
+                index_reader: None,
+                index_size: None,
+            },
             scroll_position: 0,
             selected_line: 0,
-            follow_mode: false,
-            reader,
             watcher: None,
             viewport: Viewport::new(0),
-            filter: FilterConfig::default(),
             expansion: ExpansionState::default(),
             stream_writer: None,
             stream_receiver: None,
-            source_status: None,
             config_source_type: Some(source_type),
-            disabled: true,
-            file_size: None,
-            index_reader: None,
-            index_size: None,
         })
     }
 
@@ -439,25 +388,26 @@ impl TabState {
     /// Only affects tabs created from discovered sources (source_status is Some).
     /// Derives the sources directory from the log file path (sibling of data dir).
     pub fn refresh_source_status(&mut self) {
-        if self.source_status.is_some() {
+        if self.source.source_status.is_some() {
             // Derive the sources dir from the log file's data dir:
             // source_path is like .lazytail/data/foo.log → sources dir is .lazytail/sources/
             let status = self
+                .source
                 .source_path
                 .as_ref()
                 .and_then(|p| p.parent()) // .lazytail/data/
                 .and_then(|data_dir| data_dir.parent()) // .lazytail/
                 .map(|base| base.join("sources"))
                 .filter(|sources_dir| sources_dir.exists())
-                .map(|sources_dir| check_source_status_in_dir(&self.name, &sources_dir))
-                .unwrap_or_else(|| check_source_status(&self.name));
-            self.source_status = Some(status);
+                .map(|sources_dir| check_source_status_in_dir(&self.source.name, &sources_dir))
+                .unwrap_or_else(|| check_source_status(&self.source.name));
+            self.source.source_status = Some(status);
         }
     }
 
     /// Append lines from background stream loading
     pub fn append_stream_lines(&mut self, lines: Vec<String>) {
-        let old_total = self.total_lines;
+        let old_total = self.source.total_lines;
         let new_lines_count = lines.len();
 
         // Add lines via the StreamableReader handle
@@ -467,16 +417,17 @@ impl TabState {
         }
 
         // Update total lines
-        self.total_lines = old_total + new_lines_count;
+        self.source.total_lines = old_total + new_lines_count;
 
         // In normal mode, add new line indices
-        if self.mode == ViewMode::Normal {
-            self.line_indices
+        if self.source.mode == ViewMode::Normal {
+            self.source
+                .line_indices
                 .extend(old_total..old_total + new_lines_count);
         }
 
         // If in follow mode, jump to end
-        if self.follow_mode && new_lines_count > 0 {
+        if self.source.follow_mode && new_lines_count > 0 {
             self.jump_to_end();
         }
     }
@@ -493,34 +444,35 @@ impl TabState {
 
     /// Get the number of visible lines
     pub fn visible_line_count(&self) -> usize {
-        self.line_indices.len()
+        self.source.line_indices.len()
     }
 
     /// Sync old fields from viewport (for backward compatibility during migration)
     fn sync_from_viewport(&mut self) {
         // Find the index of viewport's anchor_line in line_indices
         let anchor_line = self.viewport.selected_line();
-        if let Ok(idx) = self.line_indices.binary_search(&anchor_line) {
+        if let Ok(idx) = self.source.line_indices.binary_search(&anchor_line) {
             self.selected_line = idx;
         } else {
             // If not found exactly, find nearest
             self.selected_line = self
+                .source
                 .line_indices
                 .iter()
                 .position(|&l| l >= anchor_line)
-                .unwrap_or(self.line_indices.len().saturating_sub(1));
+                .unwrap_or(self.source.line_indices.len().saturating_sub(1));
         }
     }
 
     /// Scroll down by one line
     pub fn scroll_down(&mut self) {
-        self.viewport.move_selection(1, &self.line_indices);
+        self.viewport.move_selection(1, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Scroll up by one line
     pub fn scroll_up(&mut self) {
-        self.viewport.move_selection(-1, &self.line_indices);
+        self.viewport.move_selection(-1, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
@@ -528,7 +480,8 @@ impl TabState {
     pub fn page_down(&mut self, page_size: usize) {
         // Clamp to i32::MAX to prevent overflow (page_size > 2^31 is unrealistic anyway)
         let delta = page_size.min(i32::MAX as usize) as i32;
-        self.viewport.move_selection(delta, &self.line_indices);
+        self.viewport
+            .move_selection(delta, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
@@ -536,70 +489,71 @@ impl TabState {
     pub fn page_up(&mut self, page_size: usize) {
         // Clamp to i32::MAX to prevent overflow (page_size > 2^31 is unrealistic anyway)
         let delta = page_size.min(i32::MAX as usize) as i32;
-        self.viewport.move_selection(-delta, &self.line_indices);
+        self.viewport
+            .move_selection(-delta, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Mouse scroll down - moves viewport and selection together
     pub fn mouse_scroll_down(&mut self, lines: usize) {
         self.viewport
-            .scroll_with_selection(lines as i32, &self.line_indices);
+            .scroll_with_selection(lines as i32, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Mouse scroll up - moves viewport and selection together
     pub fn mouse_scroll_up(&mut self, lines: usize) {
         self.viewport
-            .scroll_with_selection(-(lines as i32), &self.line_indices);
+            .scroll_with_selection(-(lines as i32), &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Viewport scroll down (Ctrl+E) - scroll viewport without moving selection
     pub fn viewport_down(&mut self) {
-        self.viewport.move_viewport(1, &self.line_indices);
+        self.viewport.move_viewport(1, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Viewport scroll up (Ctrl+Y) - scroll viewport without moving selection
     pub fn viewport_up(&mut self) {
-        self.viewport.move_viewport(-1, &self.line_indices);
+        self.viewport.move_viewport(-1, &self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Apply filter results (for full filtering)
     pub fn apply_filter(&mut self, matching_indices: Vec<usize>, pattern: String) {
         // Capture screen offset BEFORE changing line_indices
-        let screen_offset = self.viewport.get_screen_offset(&self.line_indices);
+        let screen_offset = self.viewport.get_screen_offset(&self.source.line_indices);
 
-        if self.filter.needs_clear {
+        if self.source.filter.needs_clear {
             // Orchestrator set needs_clear but no partials arrived — Complete has all matches
-            self.line_indices = matching_indices;
-            self.filter.needs_clear = false;
-        } else if matches!(self.filter.state, FilterState::Processing { .. }) {
+            self.source.line_indices = matching_indices;
+            self.source.filter.needs_clear = false;
+        } else if matches!(self.source.filter.state, FilterState::Processing { .. }) {
             // Partials were received (they consumed needs_clear) — extend with final batch
-            self.line_indices.extend(matching_indices);
+            self.source.line_indices.extend(matching_indices);
         } else {
             // Direct call (no orchestrator, no partials) — replace
-            self.line_indices = matching_indices;
+            self.source.line_indices = matching_indices;
         }
-        self.mode = ViewMode::Filtered;
-        self.filter.pattern = Some(pattern);
-        self.filter.state = FilterState::Complete {
-            matches: self.line_indices.len(),
+        self.source.mode = ViewMode::Filtered;
+        self.source.filter.pattern = Some(pattern);
+        self.source.filter.state = FilterState::Complete {
+            matches: self.source.line_indices.len(),
         };
-        self.filter.last_filtered_line = self.total_lines;
+        self.source.filter.last_filtered_line = self.source.total_lines;
 
         // If we have an origin line (from when filtering started), select nearest match
         // while preserving screen position
-        if let Some(origin) = self.filter.origin_line {
-            if !self.line_indices.is_empty() {
+        if let Some(origin) = self.source.filter.origin_line {
+            if !self.source.line_indices.is_empty() {
                 // Find the match nearest to origin
                 let nearest_line = self.find_nearest_line(origin);
                 // Jump to it while keeping same screen offset
                 self.viewport.jump_to_line_at_offset(
                     nearest_line,
                     screen_offset,
-                    &self.line_indices,
+                    &self.source.line_indices,
                 );
             }
         }
@@ -611,22 +565,22 @@ impl TabState {
 
     /// Find the line in line_indices nearest to target
     fn find_nearest_line(&self, target: usize) -> usize {
-        if self.line_indices.is_empty() {
+        if self.source.line_indices.is_empty() {
             return target;
         }
 
         // Binary search to find insertion point
-        match self.line_indices.binary_search(&target) {
+        match self.source.line_indices.binary_search(&target) {
             Ok(_) => target, // Exact match
             Err(pos) => {
                 // Find closest between pos-1 and pos
                 if pos == 0 {
-                    self.line_indices[0]
-                } else if pos >= self.line_indices.len() {
-                    self.line_indices[self.line_indices.len() - 1]
+                    self.source.line_indices[0]
+                } else if pos >= self.source.line_indices.len() {
+                    self.source.line_indices[self.source.line_indices.len() - 1]
                 } else {
-                    let before = self.line_indices[pos - 1];
-                    let after = self.line_indices[pos];
+                    let before = self.source.line_indices[pos - 1];
+                    let after = self.source.line_indices[pos];
                     if target - before <= after - target {
                         before
                     } else {
@@ -639,34 +593,35 @@ impl TabState {
 
     /// Append incremental filter results (for new logs only)
     pub fn append_filter_results(&mut self, new_matching_indices: Vec<usize>) {
-        self.line_indices.extend(new_matching_indices);
-        self.filter.state = FilterState::Complete {
-            matches: self.line_indices.len(),
+        self.source.line_indices.extend(new_matching_indices);
+        self.source.filter.state = FilterState::Complete {
+            matches: self.source.line_indices.len(),
         };
-        self.filter.last_filtered_line = self.total_lines;
+        self.source.filter.last_filtered_line = self.source.total_lines;
         // Don't change selection - let follow mode or user control it
     }
 
     /// Clear filter and return to normal view
     pub fn clear_filter(&mut self) {
-        self.line_indices = (0..self.total_lines).collect();
-        self.mode = ViewMode::Normal;
-        self.filter.pattern = None;
-        self.filter.state = FilterState::Inactive;
+        self.source.line_indices = (0..self.source.total_lines).collect();
+        self.source.mode = ViewMode::Normal;
+        self.source.filter.pattern = None;
+        self.source.filter.state = FilterState::Inactive;
 
         // Restore to origin line if set (where user was before filtering)
-        if let Some(origin) = self.filter.origin_line.take() {
+        if let Some(origin) = self.source.filter.origin_line.take() {
             self.viewport.jump_to_line(origin);
         } else {
             // Preserve screen offset - keep selection at same position on screen
-            self.viewport.preserve_screen_offset(&self.line_indices);
+            self.viewport
+                .preserve_screen_offset(&self.source.line_indices);
         }
         self.sync_from_viewport();
     }
 
     /// Jump to a specific line number (1-indexed)
     pub fn jump_to_line(&mut self, line_number: usize) {
-        if line_number == 0 || self.line_indices.is_empty() {
+        if line_number == 0 || self.source.line_indices.is_empty() {
             return;
         }
 
@@ -680,50 +635,50 @@ impl TabState {
 
     /// Toggle follow mode
     pub fn toggle_follow_mode(&mut self) {
-        self.follow_mode = !self.follow_mode;
-        if self.follow_mode {
+        self.source.follow_mode = !self.source.follow_mode;
+        if self.source.follow_mode {
             self.jump_to_end();
         }
     }
 
     /// Jump to the end of the log
     pub fn jump_to_end(&mut self) {
-        self.viewport.jump_to_end(&self.line_indices);
+        self.viewport.jump_to_end(&self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Jump to the beginning of the log
     pub fn jump_to_start(&mut self) {
-        self.viewport.jump_to_start(&self.line_indices);
+        self.viewport.jump_to_start(&self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Center the current selection on screen (zz)
     pub fn center_view(&mut self) {
-        self.viewport.center(&self.line_indices);
+        self.viewport.center(&self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Move current selection to top of viewport (zt)
     pub fn view_to_top(&mut self) {
-        self.viewport.anchor_to_top(&self.line_indices);
+        self.viewport.anchor_to_top(&self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Move current selection to bottom of viewport (zb)
     pub fn view_to_bottom(&mut self) {
-        self.viewport.anchor_to_bottom(&self.line_indices);
+        self.viewport.anchor_to_bottom(&self.source.line_indices);
         self.sync_from_viewport();
     }
 
     /// Toggle expansion state of the currently selected line
     pub fn toggle_expansion(&mut self) {
-        if self.line_indices.is_empty() {
+        if self.source.line_indices.is_empty() {
             return;
         }
 
         // Get the actual file line number (not the index into line_indices)
-        let file_line_number = self.line_indices[self.selected_line];
+        let file_line_number = self.source.line_indices[self.selected_line];
 
         if self.expansion.expanded_lines.contains(&file_line_number) {
             // Collapse this line
@@ -747,19 +702,22 @@ impl TabState {
     ///
     /// Updates total_lines, line_indices, and triggers incremental filtering if needed.
     pub fn apply_file_modification(&mut self, new_total: usize) {
-        self.total_lines = new_total;
+        self.source.total_lines = new_total;
 
-        if self.mode == ViewMode::Normal {
-            self.line_indices = (0..new_total).collect();
+        if self.source.mode == ViewMode::Normal {
+            self.source.line_indices = (0..new_total).collect();
         }
 
         // If tab has an active filter, trigger incremental filtering
-        if let Some(pattern) = self.filter.pattern.clone() {
-            if new_total > self.filter.last_filtered_line {
-                let mode = self.filter.mode;
-                let range = Some((self.filter.last_filtered_line, new_total));
+        if let Some(pattern) = self.source.filter.pattern.clone() {
+            if new_total > self.source.filter.last_filtered_line {
+                let mode = self.source.filter.mode;
+                let range = Some((self.source.filter.last_filtered_line, new_total));
                 crate::filter::orchestrator::FilterOrchestrator::trigger(
-                    self, pattern, mode, range,
+                    &mut self.source,
+                    pattern,
+                    mode,
+                    range,
                 );
             }
         }
@@ -773,7 +731,7 @@ impl TabState {
 
         match event {
             AppEvent::FilterProgress(lines_processed) => {
-                self.filter.state = FilterState::Processing {
+                self.source.filter.state = FilterState::Processing {
                     lines_processed: *lines_processed,
                 };
                 false
@@ -785,17 +743,17 @@ impl TabState {
                 if *incremental {
                     self.append_filter_results(indices.clone());
                 } else {
-                    let pattern = self.filter.pattern.clone().unwrap_or_default();
+                    let pattern = self.source.filter.pattern.clone().unwrap_or_default();
                     self.apply_filter(indices.clone(), pattern);
                 }
-                if self.follow_mode {
+                if self.source.follow_mode {
                     self.jump_to_end();
                 }
                 true
             }
             AppEvent::FilterError(err) => {
                 eprintln!("Filter error: {}", err);
-                self.filter.state = FilterState::Inactive;
+                self.source.filter.state = FilterState::Inactive;
                 true
             }
             _ => false,
@@ -863,10 +821,10 @@ mod tests {
         let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
         let tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
-        assert_eq!(tab.total_lines, 3);
+        assert_eq!(tab.source.total_lines, 3);
         assert_eq!(tab.selected_line, 2); // Starts at end in follow mode
-        assert_eq!(tab.mode, ViewMode::Normal);
-        assert!(tab.follow_mode); // Follow mode enabled by default
+        assert_eq!(tab.source.mode, ViewMode::Normal);
+        assert!(tab.source.follow_mode); // Follow mode enabled by default
     }
 
     #[test]
@@ -875,7 +833,7 @@ mod tests {
         let tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
         // Name should be extracted from the filename
-        assert!(!tab.name.is_empty());
+        assert!(!tab.source.name.is_empty());
     }
 
     #[test]
@@ -914,9 +872,9 @@ mod tests {
 
         tab.apply_filter(vec![0, 2], "error".to_string());
 
-        assert_eq!(tab.mode, ViewMode::Filtered);
-        assert_eq!(tab.line_indices, vec![0, 2]);
-        assert_eq!(tab.filter.pattern, Some("error".to_string()));
+        assert_eq!(tab.source.mode, ViewMode::Filtered);
+        assert_eq!(tab.source.line_indices, vec![0, 2]);
+        assert_eq!(tab.source.filter.pattern, Some("error".to_string()));
     }
 
     #[test]
@@ -927,9 +885,9 @@ mod tests {
         tab.apply_filter(vec![0, 2], "error".to_string());
         tab.clear_filter();
 
-        assert_eq!(tab.mode, ViewMode::Normal);
-        assert_eq!(tab.line_indices.len(), 4);
-        assert!(tab.filter.pattern.is_none());
+        assert_eq!(tab.source.mode, ViewMode::Normal);
+        assert_eq!(tab.source.line_indices.len(), 4);
+        assert!(tab.source.filter.pattern.is_none());
     }
 
     #[test]
@@ -938,16 +896,16 @@ mod tests {
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
         // Follow mode is now enabled by default
-        assert!(tab.follow_mode);
+        assert!(tab.source.follow_mode);
         assert_eq!(tab.selected_line, 2); // Starts at end
 
         // Toggle off
         tab.toggle_follow_mode();
-        assert!(!tab.follow_mode);
+        assert!(!tab.source.follow_mode);
 
         // Toggle back on - should jump to end
         tab.toggle_follow_mode();
-        assert!(tab.follow_mode);
+        assert!(tab.source.follow_mode);
         assert_eq!(tab.selected_line, 2);
     }
 

@@ -8,6 +8,7 @@ mod event;
 mod filter;
 mod handlers;
 mod history;
+mod log_source;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
@@ -19,6 +20,7 @@ mod ui;
 mod update;
 mod viewport;
 mod watcher;
+mod web;
 
 use anyhow::{Context, Result};
 use app::{App, SourceType};
@@ -120,6 +122,9 @@ fn main() -> Result<()> {
         return match command {
             cmd::Commands::Init(args) => cmd::init::run(args.force)
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
+            cmd::Commands::Web(args) => {
+                web::run(args).map_err(|code| anyhow::anyhow!("web failed with exit code {}", code))
+            }
             cmd::Commands::Config { action } => match action {
                 cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
                     anyhow::anyhow!("config validate failed with exit code {}", code)
@@ -545,7 +550,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                         let already_open = app
                             .tabs
                             .iter()
-                            .any(|t| t.source_path.as_ref() == Some(&path));
+                            .any(|t| t.source.source_path.as_ref() == Some(&path));
                         if !already_open {
                             // Extract name from path
                             if let Some(stem) = path.file_stem() {
@@ -639,6 +644,7 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                 match file_event {
                     watcher::FileEvent::Modified => {
                         let mut reader_guard = tab
+                            .source
                             .reader
                             .lock()
                             .expect("Reader lock poisoned - filter thread panicked");
@@ -649,12 +655,12 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
                         }
 
                         let new_total = reader_guard.total_lines();
-                        let old_total = tab.total_lines;
+                        let old_total = tab.source.total_lines;
                         drop(reader_guard);
 
                         // Update file size
-                        if let Some(ref path) = tab.source_path {
-                            tab.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                        if let Some(ref path) = tab.source.source_path {
+                            tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
                         }
 
                         if tab_idx == active_tab {
@@ -696,9 +702,9 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
     let active_tab = app.active_tab;
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
-        if let Some(ref rx) = tab.filter.receiver {
+        if let Some(ref rx) = tab.source.filter.receiver {
             if let Ok(progress) = rx.try_recv() {
-                let is_incremental = tab.filter.is_incremental;
+                let is_incremental = tab.source.filter.is_incremental;
                 let filter_events =
                     handlers::filter::handle_filter_progress(progress, is_incremental);
 
@@ -712,13 +718,13 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
                     });
                     events.extend(filter_events);
                     if completed {
-                        tab.filter.receiver = None;
+                        tab.source.filter.receiver = None;
                     }
                 } else {
                     // Inactive tab: apply filter events directly
                     for ev in &filter_events {
                         if tab.apply_filter_event(ev) {
-                            tab.filter.receiver = None;
+                            tab.source.filter.receiver = None;
                         }
                     }
                 }

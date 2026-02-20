@@ -253,9 +253,9 @@ impl App {
             let tab = &self.tabs[index];
 
             // If this is an ended discovered source, delete it
-            if tab.source_status == Some(SourceStatus::Ended) {
-                if let Some(ref path) = tab.source_path {
-                    let _ = source::delete_source(&tab.name, path);
+            if tab.source.source_status == Some(SourceStatus::Ended) {
+                if let Some(ref path) = tab.source.source_path {
+                    let _ = source::delete_source(&tab.source.name, path);
                 }
             }
 
@@ -387,7 +387,7 @@ impl App {
         };
 
         if let Some(tab_idx) = tab_idx {
-            if let Some(path) = &self.tabs[tab_idx].source_path {
+            if let Some(path) = &self.tabs[tab_idx].source.source_path {
                 let path_str = path.display().to_string();
                 let encoded = base64_encode(path_str.as_bytes());
                 // OSC 52: set clipboard contents
@@ -402,7 +402,7 @@ impl App {
     /// Request closing a tab with confirmation dialog
     fn request_close_tab(&mut self, tab_index: usize) {
         if tab_index < self.tabs.len() {
-            let tab_name = self.tabs[tab_index].name.clone();
+            let tab_name = self.tabs[tab_index].source.name.clone();
             self.pending_close_tab = Some((tab_index, tab_name));
             self.confirm_return_mode = self.input_mode;
             self.input_mode = InputMode::ConfirmClose;
@@ -416,7 +416,7 @@ impl App {
             self.input_mode = return_mode;
 
             // Verify the tab at this index still matches (guards against tab reordering)
-            if tab_index < self.tabs.len() && self.tabs[tab_index].name == expected_name {
+            if tab_index < self.tabs.len() && self.tabs[tab_index].source.name == expected_name {
                 self.close_tab(tab_index);
             }
 
@@ -509,41 +509,41 @@ impl App {
 
         // Check if we need to clear old results (new filter started)
         // This is deferred from trigger_filter to prevent blink
-        if tab.filter.needs_clear {
-            tab.mode = ViewMode::Filtered;
-            tab.line_indices.clear();
-            tab.filter.needs_clear = false;
-        } else if tab.mode == ViewMode::Normal {
+        if tab.source.filter.needs_clear {
+            tab.source.mode = ViewMode::Filtered;
+            tab.source.line_indices.clear();
+            tab.source.filter.needs_clear = false;
+        } else if tab.source.mode == ViewMode::Normal {
             // Switch to filtered mode if this is the first partial result
-            tab.mode = ViewMode::Filtered;
-            tab.line_indices.clear();
+            tab.source.mode = ViewMode::Filtered;
+            tab.source.line_indices.clear();
         }
 
         // Merge new indices (they should already be sorted)
         // Since we process from end to start, new indices may need to be inserted at the beginning
-        let is_first_result = tab.line_indices.is_empty();
+        let is_first_result = tab.source.line_indices.is_empty();
         if is_first_result {
-            tab.line_indices = new_indices;
+            tab.source.line_indices = new_indices;
             // Jump to end to show newest results first (we process from end of file)
-            tab.viewport.jump_to_end(&tab.line_indices);
+            tab.viewport.jump_to_end(&tab.source.line_indices);
         } else {
             // Count items that will be prepended (items smaller than current first item)
             // This is needed to adjust scroll_position since it's an index that becomes
             // stale when items are inserted before it
-            let first_existing = tab.line_indices[0];
+            let first_existing = tab.source.line_indices[0];
             let prepended_count = new_indices
                 .iter()
                 .filter(|&&idx| idx < first_existing)
                 .count();
 
             // Merge sorted arrays
-            let mut merged = Vec::with_capacity(tab.line_indices.len() + new_indices.len());
+            let mut merged = Vec::with_capacity(tab.source.line_indices.len() + new_indices.len());
             let mut i = 0;
             let mut j = 0;
 
-            while i < tab.line_indices.len() && j < new_indices.len() {
-                if tab.line_indices[i] <= new_indices[j] {
-                    merged.push(tab.line_indices[i]);
+            while i < tab.source.line_indices.len() && j < new_indices.len() {
+                if tab.source.line_indices[i] <= new_indices[j] {
+                    merged.push(tab.source.line_indices[i]);
                     i += 1;
                 } else {
                     merged.push(new_indices[j]);
@@ -552,10 +552,10 @@ impl App {
             }
 
             // Add remaining elements
-            merged.extend_from_slice(&tab.line_indices[i..]);
+            merged.extend_from_slice(&tab.source.line_indices[i..]);
             merged.extend_from_slice(&new_indices[j..]);
 
-            tab.line_indices = merged;
+            tab.source.line_indices = merged;
 
             // Adjust scroll_position to account for prepended items
             // This keeps the view stable - the same content stays visible
@@ -563,7 +563,7 @@ impl App {
         }
 
         // Update filter state with lines processed for progress display
-        tab.filter.state = FilterState::Processing { lines_processed };
+        tab.source.filter.state = FilterState::Processing { lines_processed };
     }
 
     /// Clear filter
@@ -580,7 +580,7 @@ impl App {
         // Save current line as filter origin (for restoring on Esc)
         let tab = self.active_tab_mut();
         let current_line = tab.viewport.selected_line();
-        tab.filter.origin_line = Some(current_line);
+        tab.source.filter.origin_line = Some(current_line);
     }
 
     /// Cancel filter input and return to normal mode
@@ -902,13 +902,13 @@ impl App {
             AppEvent::StartFilterInput => self.start_filter_input(),
             AppEvent::FilterInputChar(c) => {
                 self.input_char(c);
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
             AppEvent::FilterInputBackspace => {
                 self.input_backspace();
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
@@ -919,36 +919,36 @@ impl App {
                 let mode = self.current_filter_mode;
                 if !pattern.is_empty() && self.is_regex_valid() {
                     let tab = self.active_tab_mut();
-                    tab.filter.pattern = Some(pattern.clone());
-                    tab.filter.mode = mode;
-                    FilterOrchestrator::trigger(tab, pattern.clone(), mode, None);
+                    tab.source.filter.pattern = Some(pattern.clone());
+                    tab.source.filter.mode = mode;
+                    FilterOrchestrator::trigger(&mut tab.source, pattern.clone(), mode, None);
                 }
                 // Save to history and clear input
                 self.add_to_history(pattern, mode);
-                self.active_tab_mut().filter.origin_line = None;
+                self.active_tab_mut().source.filter.origin_line = None;
                 self.cancel_filter_input();
             }
             AppEvent::FilterInputCancel => {
                 self.pending_filter_at = None;
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.cancel_filter_input();
             }
             AppEvent::ClearFilter => {
                 self.pending_filter_at = None;
-                FilterOrchestrator::cancel(self.active_tab_mut());
-                self.active_tab_mut().filter.receiver = None;
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
+                self.active_tab_mut().source.filter.receiver = None;
                 self.clear_filter();
             }
             AppEvent::ToggleFilterMode => {
                 self.current_filter_mode.toggle_mode();
                 self.validate_regex();
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
             AppEvent::ToggleCaseSensitivity => {
                 self.current_filter_mode.toggle_case_sensitivity();
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
@@ -959,7 +959,8 @@ impl App {
 
             // Filter progress events
             AppEvent::FilterProgress(lines_processed) => {
-                self.active_tab_mut().filter.state = FilterState::Processing { lines_processed };
+                self.active_tab_mut().source.filter.state =
+                    FilterState::Processing { lines_processed };
             }
             AppEvent::FilterPartialResults {
                 matches,
@@ -975,16 +976,22 @@ impl App {
                 if incremental {
                     self.append_filter_results(indices);
                 } else {
-                    let pattern = self.active_tab().filter.pattern.clone().unwrap_or_default();
+                    let pattern = self
+                        .active_tab()
+                        .source
+                        .filter
+                        .pattern
+                        .clone()
+                        .unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
-                if self.active_tab().follow_mode {
+                if self.active_tab().source.follow_mode {
                     self.jump_to_end();
                 }
             }
             AppEvent::FilterError(err) => {
                 eprintln!("Filter error: {}", err);
-                self.active_tab_mut().filter.state = FilterState::Inactive;
+                self.active_tab_mut().source.filter.state = FilterState::Inactive;
             }
 
             // File events
@@ -993,13 +1000,13 @@ impl App {
                 old_total: _,
             } => {
                 let tab = self.active_tab_mut();
-                tab.total_lines = new_total;
-                if tab.mode == ViewMode::Normal {
-                    tab.line_indices = (0..new_total).collect();
+                tab.source.total_lines = new_total;
+                if tab.source.mode == ViewMode::Normal {
+                    tab.source.line_indices = (0..new_total).collect();
                 }
                 // Follow mode jump (suppress if a StartFilter is in the same batch)
-                let should_jump = self.active_tab().follow_mode
-                    && self.active_tab().mode == ViewMode::Normal
+                let should_jump = self.active_tab().source.follow_mode
+                    && self.active_tab().source.mode == ViewMode::Normal
                     && !self.has_start_filter_in_batch;
                 if should_jump {
                     self.jump_to_end();
@@ -1007,24 +1014,27 @@ impl App {
             }
             AppEvent::FileTruncated { new_total } => {
                 let tab = self.active_tab_mut();
-                eprintln!("File truncated: {} -> {} lines", tab.total_lines, new_total);
+                eprintln!(
+                    "File truncated: {} -> {} lines",
+                    tab.source.total_lines, new_total
+                );
 
                 // Cancel any in-progress filter
-                FilterOrchestrator::cancel(tab);
-                tab.filter.receiver = None;
-                tab.filter.is_incremental = false;
+                FilterOrchestrator::cancel(&mut tab.source);
+                tab.source.filter.receiver = None;
+                tab.source.filter.is_incremental = false;
 
                 // Reset state on truncation
-                tab.total_lines = new_total;
-                tab.line_indices = (0..new_total).collect();
-                tab.mode = ViewMode::Normal;
+                tab.source.total_lines = new_total;
+                tab.source.line_indices = (0..new_total).collect();
+                tab.source.mode = ViewMode::Normal;
 
                 // Fully reset filter state
-                tab.filter.pattern = None;
-                tab.filter.state = FilterState::Inactive;
-                tab.filter.last_filtered_line = 0;
-                tab.filter.cancel_token = None;
-                tab.filter.needs_clear = false;
+                tab.source.filter.pattern = None;
+                tab.source.filter.state = FilterState::Inactive;
+                tab.source.filter.last_filtered_line = 0;
+                tab.source.filter.cancel_token = None;
+                tab.source.filter.needs_clear = false;
 
                 // Reset viewport to valid position
                 let new_anchor = if new_total > 0 { new_total - 1 } else { 0 };
@@ -1038,7 +1048,7 @@ impl App {
             // Mode toggles
             AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
             AppEvent::DisableFollowMode => {
-                self.active_tab_mut().follow_mode = false;
+                self.active_tab_mut().source.follow_mode = false;
             }
 
             // System events
@@ -1068,7 +1078,7 @@ impl App {
                 if let Ok(line_num) = self.input_buffer.parse::<usize>() {
                     self.jump_to_line(line_num);
                     // Disable follow mode when explicitly jumping to a line
-                    self.active_tab_mut().follow_mode = false;
+                    self.active_tab_mut().source.follow_mode = false;
                 }
                 self.cancel_line_jump_input();
             }
@@ -1077,13 +1087,13 @@ impl App {
             // Filter history navigation
             AppEvent::HistoryUp => {
                 self.history_up();
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
             AppEvent::HistoryDown => {
                 self.history_down();
-                FilterOrchestrator::cancel(self.active_tab_mut());
+                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
                     Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
             }
@@ -1117,9 +1127,9 @@ impl App {
             AppEvent::StartFilter { pattern, range, .. } => {
                 let mode = self.current_filter_mode;
                 let tab = self.active_tab_mut();
-                tab.filter.pattern = Some(pattern.clone());
-                tab.filter.mode = mode;
-                FilterOrchestrator::trigger(tab, pattern, mode, range);
+                tab.source.filter.pattern = Some(pattern.clone());
+                tab.source.filter.mode = mode;
+                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
             }
 
             // Stream events are handled directly in main loop, not here
@@ -1176,7 +1186,7 @@ mod tests {
 
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active_tab, 0);
-        assert_eq!(app.active_tab().total_lines, 3);
+        assert_eq!(app.active_tab().source.total_lines, 3);
         assert!(!app.should_quit);
         assert!(!app.show_help);
     }
@@ -1198,9 +1208,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(app.tabs.len(), 3);
-        assert_eq!(app.tabs[0].total_lines, 2);
-        assert_eq!(app.tabs[1].total_lines, 3);
-        assert_eq!(app.tabs[2].total_lines, 1);
+        assert_eq!(app.tabs[0].source.total_lines, 2);
+        assert_eq!(app.tabs[1].source.total_lines, 3);
+        assert_eq!(app.tabs[2].source.total_lines, 1);
     }
 
     #[test]
@@ -1249,16 +1259,16 @@ mod tests {
 
         // Apply filter to tab 0
         app.apply_filter(vec![0, 2], "error".to_string());
-        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
+        assert_eq!(app.active_tab().source.mode, ViewMode::Filtered);
 
         // Switch to tab 1
         app.select_tab(1);
-        assert_eq!(app.active_tab().mode, ViewMode::Normal);
-        assert!(app.active_tab().filter.pattern.is_none());
+        assert_eq!(app.active_tab().source.mode, ViewMode::Normal);
+        assert!(app.active_tab().source.filter.pattern.is_none());
 
         // Tab 0 should still be filtered
         app.select_tab(0);
-        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
+        assert_eq!(app.active_tab().source.mode, ViewMode::Filtered);
     }
 
     #[test]
@@ -1316,9 +1326,12 @@ mod tests {
 
         app.apply_filter(matching_indices.clone(), "error".to_string());
 
-        assert_eq!(app.active_tab().mode, ViewMode::Filtered);
-        assert_eq!(app.active_tab().line_indices, matching_indices);
-        assert_eq!(app.active_tab().filter.pattern, Some("error".to_string()));
+        assert_eq!(app.active_tab().source.mode, ViewMode::Filtered);
+        assert_eq!(app.active_tab().source.line_indices, matching_indices);
+        assert_eq!(
+            app.active_tab().source.filter.pattern,
+            Some("error".to_string())
+        );
     }
 
     #[test]
@@ -1329,8 +1342,8 @@ mod tests {
         app.apply_filter(vec![0, 2], "error".to_string());
         app.clear_filter();
 
-        assert_eq!(app.active_tab().mode, ViewMode::Normal);
-        assert!(app.active_tab().filter.pattern.is_none());
+        assert_eq!(app.active_tab().source.mode, ViewMode::Normal);
+        assert!(app.active_tab().source.filter.pattern.is_none());
     }
 
     #[test]
@@ -1339,15 +1352,15 @@ mod tests {
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         // Follow mode enabled by default
-        assert!(app.active_tab().follow_mode);
+        assert!(app.active_tab().source.follow_mode);
 
         // Toggle off
         app.toggle_follow_mode();
-        assert!(!app.active_tab().follow_mode);
+        assert!(!app.active_tab().source.follow_mode);
 
         // Toggle back on
         app.toggle_follow_mode();
-        assert!(app.active_tab().follow_mode);
+        assert!(app.active_tab().source.follow_mode);
     }
 
     #[test]
@@ -1968,7 +1981,7 @@ mod tests {
         assert!(app.pending_close_tab.is_some());
         let (idx, name) = app.pending_close_tab.as_ref().unwrap();
         assert_eq!(*idx, 0);
-        assert_eq!(*name, app.tabs[0].name);
+        assert_eq!(*name, app.tabs[0].source.name);
     }
 
     #[test]
@@ -2027,12 +2040,12 @@ mod tests {
 
         // Request close on tab 1
         app.active_tab = 1;
-        let original_name = app.tabs[1].name.clone();
+        let original_name = app.tabs[1].source.name.clone();
         app.apply_event(AppEvent::CloseCurrentTab);
         assert_eq!(app.pending_close_tab.as_ref().unwrap().1, original_name);
 
         // Simulate the tab at index 1 being replaced (name mismatch)
-        app.tabs[1].name = "different_name".to_string();
+        app.tabs[1].source.name = "different_name".to_string();
 
         // Confirm should NOT close because name doesn't match
         app.apply_event(AppEvent::ConfirmCloseTab);

@@ -22,9 +22,9 @@ pub fn process_file_modification(new_total: usize, old_total: usize, app: &App) 
     let tab = app.active_tab();
 
     // If in filtered mode and file grew, trigger incremental filter
-    if tab.mode == ViewMode::Filtered && new_total > old_total {
-        if let Some(ref pattern) = tab.filter.pattern {
-            let start_line = tab.filter.last_filtered_line;
+    if tab.source.mode == ViewMode::Filtered && new_total > old_total {
+        if let Some(ref pattern) = tab.source.filter.pattern {
+            let start_line = tab.source.filter.last_filtered_line;
             if start_line < new_total {
                 events.push(AppEvent::StartFilter {
                     pattern: pattern.clone(),
@@ -87,7 +87,7 @@ mod tests {
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
 
         app.apply_filter(vec![0, 5, 10], "test".to_string());
-        app.active_tab_mut().filter.last_filtered_line = 100;
+        app.active_tab_mut().source.filter.last_filtered_line = 100;
 
         let events = process_file_modification(150, 100, &app);
 

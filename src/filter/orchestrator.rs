@@ -6,8 +6,8 @@ use crate::filter::{
     FilterMode,
 };
 use crate::index::column::ColumnReader;
+use crate::log_source::LogSource;
 use crate::source::index_dir_for_log;
-use crate::tab::TabState;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
@@ -23,18 +23,18 @@ const FILTER_PROGRESS_INTERVAL: usize = 1000;
 pub struct FilterOrchestrator;
 
 impl FilterOrchestrator {
-    /// Trigger a filter on a tab.
+    /// Trigger a filter on a source.
     ///
     /// Handles query detection, streaming vs generic filter, full vs range (incremental).
     /// The `range` parameter is `Some((start, end))` for incremental filtering.
     pub fn trigger(
-        tab: &mut TabState,
+        source: &mut LogSource,
         pattern: String,
         mode: FilterMode,
         range: Option<(usize, usize)>,
     ) {
         // Cancel any previous filter operation
-        if let Some(ref cancel) = tab.filter.cancel_token {
+        if let Some(ref cancel) = source.filter.cancel_token {
             cancel.cancel();
         }
 
@@ -46,9 +46,9 @@ impl FilterOrchestrator {
             };
 
             // Try index-accelerated path: file source + index available
-            if let Some(path) = &tab.source_path {
+            if let Some(path) = &source.source_path {
                 if let Some((mask, want)) = filter_query.index_mask() {
-                    if let Some(ref index_reader) = tab.index_reader {
+                    if let Some(ref index_reader) = source.index_reader {
                         let bitmap = index_reader.candidate_bitmap(mask, want, index_reader.len());
 
                         let query_filter = match query::QueryFilter::new(filter_query) {
@@ -58,12 +58,12 @@ impl FilterOrchestrator {
                         let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
                         let cancel = CancelToken::new();
-                        tab.filter.cancel_token = Some(cancel.clone());
+                        source.filter.cancel_token = Some(cancel.clone());
 
                         if let Some((start, end)) = range {
                             // Index-accelerated incremental filter
-                            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-                            tab.filter.is_incremental = true;
+                            source.filter.state = FilterState::Processing { lines_processed: 0 };
+                            source.filter.is_incremental = true;
 
                             let start_byte_offset = {
                                 let idx_dir = index_dir_for_log(path);
@@ -81,13 +81,13 @@ impl FilterOrchestrator {
                                 Some(bitmap),
                                 cancel,
                             ) {
-                                tab.filter.receiver = Some(rx);
+                                source.filter.receiver = Some(rx);
                             }
                         } else {
                             // Index-accelerated full filter
-                            tab.filter.needs_clear = true;
-                            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-                            tab.filter.is_incremental = false;
+                            source.filter.needs_clear = true;
+                            source.filter.state = FilterState::Processing { lines_processed: 0 };
+                            source.filter.is_incremental = false;
 
                             if let Ok(rx) = streaming_filter::run_streaming_filter_indexed(
                                 path.clone(),
@@ -95,7 +95,7 @@ impl FilterOrchestrator {
                                 bitmap,
                                 cancel,
                             ) {
-                                tab.filter.receiver = Some(rx);
+                                source.filter.receiver = Some(rx);
                             }
                         }
                         return;
@@ -109,7 +109,7 @@ impl FilterOrchestrator {
                 Err(_) => return,
             };
             let filter: Arc<dyn Filter> = Arc::new(query_filter);
-            Self::dispatch(tab, filter, range);
+            Self::dispatch(source, filter, range);
             return;
         }
 
@@ -118,12 +118,12 @@ impl FilterOrchestrator {
 
         // For full file + plain text, use the FAST byte-level SIMD path
         if range.is_none() && !is_regex {
-            if let Some(path) = &tab.source_path {
+            if let Some(path) = &source.source_path {
                 let cancel = CancelToken::new();
-                tab.filter.cancel_token = Some(cancel.clone());
-                tab.filter.needs_clear = true;
-                tab.filter.state = FilterState::Processing { lines_processed: 0 };
-                tab.filter.is_incremental = false;
+                source.filter.cancel_token = Some(cancel.clone());
+                source.filter.needs_clear = true;
+                source.filter.state = FilterState::Processing { lines_processed: 0 };
+                source.filter.is_incremental = false;
 
                 if let Ok(rx) = streaming_filter::run_streaming_filter_fast(
                     path.clone(),
@@ -131,7 +131,7 @@ impl FilterOrchestrator {
                     case_sensitive,
                     cancel,
                 ) {
-                    tab.filter.receiver = Some(rx);
+                    source.filter.receiver = Some(rx);
                 }
                 return;
             }
@@ -147,7 +147,7 @@ impl FilterOrchestrator {
             Arc::new(StringFilter::new(&pattern, case_sensitive))
         };
 
-        Self::dispatch(tab, filter, range);
+        Self::dispatch(source, filter, range);
     }
 
     /// Dispatch a filter to the appropriate execution backend.
@@ -155,16 +155,16 @@ impl FilterOrchestrator {
     /// Shared by all filter types (plain, regex, query). Handles:
     /// - Range (incremental) vs full filtering
     /// - File (streaming) vs stdin (generic engine)
-    fn dispatch(tab: &mut TabState, filter: Arc<dyn Filter>, range: Option<(usize, usize)>) {
+    fn dispatch(source: &mut LogSource, filter: Arc<dyn Filter>, range: Option<(usize, usize)>) {
         let cancel = CancelToken::new();
-        tab.filter.cancel_token = Some(cancel.clone());
+        source.filter.cancel_token = Some(cancel.clone());
 
         let receiver: Receiver<FilterProgress> = if let Some((start, end)) = range {
             // Incremental filtering (new lines only)
-            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-            tab.filter.is_incremental = true;
+            source.filter.state = FilterState::Processing { lines_processed: 0 };
+            source.filter.is_incremental = true;
 
-            if let Some(path) = &tab.source_path {
+            if let Some(path) = &source.source_path {
                 // Look up byte offset for start_line from columnar index
                 let start_byte_offset = {
                     let idx_dir = index_dir_for_log(path);
@@ -187,7 +187,7 @@ impl FilterOrchestrator {
                 }
             } else {
                 FilterEngine::run_filter_range(
-                    tab.reader.clone(),
+                    source.reader.clone(),
                     filter,
                     FILTER_PROGRESS_INTERVAL,
                     start,
@@ -197,18 +197,18 @@ impl FilterOrchestrator {
             }
         } else {
             // Full filtering
-            tab.filter.needs_clear = true;
-            tab.filter.state = FilterState::Processing { lines_processed: 0 };
-            tab.filter.is_incremental = false;
+            source.filter.needs_clear = true;
+            source.filter.state = FilterState::Processing { lines_processed: 0 };
+            source.filter.is_incremental = false;
 
-            if let Some(path) = &tab.source_path {
+            if let Some(path) = &source.source_path {
                 match streaming_filter::run_streaming_filter(path.clone(), filter, cancel) {
                     Ok(rx) => rx,
                     Err(_) => return,
                 }
             } else {
                 FilterEngine::run_filter(
-                    tab.reader.clone(),
+                    source.reader.clone(),
                     filter,
                     FILTER_PROGRESS_INTERVAL,
                     cancel,
@@ -216,7 +216,7 @@ impl FilterOrchestrator {
             }
         };
 
-        tab.filter.receiver = Some(receiver);
+        source.filter.receiver = Some(receiver);
     }
 
     /// Trigger live filter preview based on current input.
@@ -228,18 +228,18 @@ impl FilterOrchestrator {
 
         if !pattern.is_empty() && app.is_regex_valid() {
             let tab = app.active_tab_mut();
-            tab.filter.pattern = Some(pattern.clone());
-            tab.filter.mode = mode;
-            Self::trigger(tab, pattern, mode, None);
+            tab.source.filter.pattern = Some(pattern.clone());
+            tab.source.filter.mode = mode;
+            Self::trigger(&mut tab.source, pattern, mode, None);
         } else {
             app.clear_filter();
-            app.active_tab_mut().filter.receiver = None;
+            app.active_tab_mut().source.filter.receiver = None;
         }
     }
 
-    /// Cancel any in-progress filter on a tab.
-    pub fn cancel(tab: &mut TabState) {
-        if let Some(ref cancel) = tab.filter.cancel_token {
+    /// Cancel any in-progress filter on a source.
+    pub fn cancel(source: &mut LogSource) {
+        if let Some(ref cancel) = source.filter.cancel_token {
             cancel.cancel();
         }
     }

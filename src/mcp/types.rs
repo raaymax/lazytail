@@ -67,6 +67,9 @@ pub struct LineInfo {
     pub line_number: usize,
     /// Line content
     pub content: String,
+    /// Severity level (from columnar index, if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
 }
 
 /// Search mode for pattern matching.
