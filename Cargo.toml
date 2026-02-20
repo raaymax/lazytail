@@ -1,6 +1,6 @@
 [package]
 name = "lazytail"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2021"
 authors = ["raaymax"]
 license = "MIT"
@@ -33,6 +33,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 colored = "3.1"
 tiny_http = "0.12"
 
+# Self-update dependencies (optional)
+self_update = { version = "0.42", default-features = false, features = ["archive-tar", "compression-flate2", "rustls"], optional = true }
+
 # MCP server dependencies (optional)
 tokio = { version = "1", features = ["full"], optional = true }
 rmcp = { version = "0.1", features = ["server", "transport-io"], optional = true }
@@ -42,6 +45,7 @@ lz4_flex = { version = "0.12.0", optional = true }
 [features]
 default = ["mcp"]
 mcp = ["dep:tokio", "dep:rmcp", "dep:schemars"]
+self-update = ["dep:self_update"]
 lz4_flex = ["dep:lz4_flex"]
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]

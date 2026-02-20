@@ -34,3 +34,12 @@ jobs:
             gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --notes "$PR_BODY"
           fi
 
+      - name: Trigger release build workflow
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          echo "Triggering release build for $TAG_NAME"
+          gh workflow run release.yml --ref master --field tag="$TAG_NAME" --repo "$GITHUB_REPOSITORY"
+

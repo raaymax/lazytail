@@ -4,7 +4,7 @@ This is a local planning document for upcoming features and improvements.
 
 ---
 
-## Current Status (v0.4.0)
+## Current Status (v0.6.0)
 
 **Core Features Complete:**
 - Lazy file reading with indexed line positions
@@ -46,12 +46,27 @@ This is a local planning document for upcoming features and improvements.
 - Close tab with confirmation dialog (`x` / `Ctrl+W`)
 - MCP server support (`lazytail --mcp`)
 - MCP tools: `list_sources`, `get_lines`, `get_tail`, `search`, `get_context`
-- MCP plain text output format (default) to reduce JSON escaping overhead
 - Streaming filter optimization for MCP (grep-like performance on 5GB+ files)
+
+**v0.5.0 Features:**
 - Config system with `lazytail.yaml` discovery (walk parent directories)
 - `lazytail init` and `lazytail config {validate,show}` subcommands
 - Project-scoped and global source definitions in config
-- Query language basics: `json | field == "value"` syntax in filter input
+- Query language: `json | field == "value"` syntax in filter input
+- MCP query language integration (JSON and text syntax converge on shared AST)
+- MCP plain text output format (default) to reduce JSON escaping overhead
+- Display file path in header and `y` to copy source path
+- Project-local data directories (`.lazytail/`)
+
+**v0.6.0 Features:**
+- Columnar index system with severity detection
+- Index-accelerated filtering with bitmap pre-filtering
+- Severity-based line coloring (ERROR/WARN/INFO/DEBUG)
+- Severity histogram in stats panel
+- Line count and file size per source in side panel
+- MCP `get_stats` tool with index metadata and severity breakdown
+- Incremental index building during capture mode
+- O(1) line access via mmap-backed columnar offsets
 
 ---
 
@@ -135,7 +150,7 @@ Two-panel layout:
 - [x] Add tests for multi-tab behavior
 
 **Future Side Panel Enhancements:**
-- [ ] Show total line count and file size per source in side panel (live-updating as file grows)
+- [x] Show total line count and file size per source in side panel (live-updating as file grows) — ✅ v0.6.0
 - [ ] Tree structure with collapsible groups
 - [ ] Drag-and-drop reordering
 - [ ] Bookmarks section (per UI instance / project scope)
@@ -383,19 +398,19 @@ struct Aggregation {
 ```
 
 **Implementation Order (MCP-first):**
-1. **Define AST structs** with serde derives
-2. **Build executor** that processes FilterQuery
-3. **JSON deserialization** → MCP tools work immediately
-4. **Text parser** → UI gets query language later
+1. **Define AST structs** with serde derives — ✅ v0.5.0
+2. **Build executor** that processes FilterQuery — ✅ v0.5.0
+3. **JSON deserialization** → MCP tools work immediately — ✅ v0.5.0
+4. **Text parser** → UI gets query language later — ✅ v0.5.0
 
 **Tasks:**
-- [x] Phase 1: Core AST & JSON Interface (MCP)
+- [x] Phase 1: Core AST & JSON Interface (MCP) — ✅ v0.5.0
   - [x] Define `FilterQuery` and related structs with `#[derive(Deserialize)]`
   - [x] Implement executor for basic filters (`==`, `!=`, `=~`, `!~`)
   - [x] JSON parser support (serde_json field extraction)
   - [x] Wire up to MCP `search` tool as `query` parameter
   - [x] Tests with JSON input
-- [x] Phase 2: Exclusion & Time Filtering
+- [x] Phase 2: Exclusion & Time Filtering — ✅ v0.5.0 (partial)
   - [x] Implement exclude patterns (critical for noisy logs!)
   - [ ] Timestamp field detection (common field names)
   - [ ] Time range filtering (after/before)
@@ -408,12 +423,12 @@ struct Aggregation {
   - [ ] Wire into MCP: either extend `search` response or add dedicated `aggregate` tool
   - [ ] Wire into text query parser (already has AST slots for aggregation)
   - Real-world motivation: currently requires multiple manual queries to answer "which service has the most errors?" or "what's the error distribution by field?" — a single `count by` would replace N manual queries
-- [x] Phase 4: Text Parser (UI)
+- [x] Phase 4: Text Parser (UI) — ✅ v0.5.0
   - [x] Lexer for text query syntax
   - [x] Recursive descent parser → AST
   - [x] Error messages with position info
   - [x] UI integration (filter input mode)
-- [x] Phase 5: Advanced Parsers
+- [x] Phase 5: Advanced Parsers — ✅ v0.5.0
   - [x] `logfmt` parser (key=value)
   - [ ] `pattern` parser (extract fields via template)
   - [x] Nested field access (`user.id`, `request.headers.host`)
@@ -666,19 +681,19 @@ Raw expanded view (for non-JSON long lines):
   - [x] Line counts per tab
   - [x] Update on file reload
   - [x] Update on filter change
-- [ ] Severity stats (after severity detection is implemented)
-  - [ ] Count per severity level
-  - [ ] Color-coded display
+- [x] Severity stats — ✅ v0.6.0
+  - [x] Count per severity level
+  - [x] Color-coded display
   - [ ] Click to filter by severity
 
-**Current Status:** Basic stats (line counts) implemented. Severity stats pending.
-
-**Dependencies:** Severity stats require Log Format Detection feature
+**Current Status:** ✅ Complete (v0.6.0) — stats panel shows line counts and severity histogram with color-coded display
 
 ---
 
-#### Log Format Detection & Severity Parsing
+#### Log Format Detection & Severity Parsing ✅
 **Goal:** Automatically detect log format and extract severity for highlighting and filtering
+
+**Status:** ✅ Complete (v0.6.0) — columnar index system with byte-level severity detection
 
 **Severity Levels (standardized):**
 ```
@@ -687,14 +702,14 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 **Detection Sources:**
 
-| Format | Example | Severity Extraction |
-|--------|---------|---------------------|
-| JSON | `{"level":"error","msg":"..."}` | Parse `level`, `severity`, `lvl` fields |
-| Bracket | `[ERROR] Failed to connect` | Match `[LEVEL]` pattern |
-| Prefix | `ERROR: Connection refused` | Match `LEVEL:` pattern |
-| Syslog | `<3>Jan 20 10:00:01 app[123]: msg` | Parse priority code |
-| Log4j | `2024-01-20 ERROR com.app - msg` | Match known patterns |
-| Kubernetes | `E0120 10:00:01.123 file.go:42]` | First char: I/W/E/F |
+| Format | Example | Severity Extraction | Status |
+|--------|---------|---------------------|--------|
+| JSON | `{"level":"error","msg":"..."}` | Parse `level`, `severity`, `lvl` fields | ✅ v0.6.0 |
+| Bracket | `[ERROR] Failed to connect` | Match `[LEVEL]` pattern | ✅ v0.6.0 |
+| Prefix | `ERROR: Connection refused` | Match `LEVEL:` pattern | ✅ v0.6.0 |
+| Syslog | `<3>Jan 20 10:00:01 app[123]: msg` | Parse priority code | ✅ v0.6.0 |
+| Log4j | `2024-01-20 ERROR com.app - msg` | Match known patterns | ✅ v0.6.0 |
+| Kubernetes | `E0120 10:00:01.123 file.go:42]` | First char: I/W/E/F | ✅ v0.6.0 |
 
 **UI Integration (Left Panel):**
 ```
@@ -726,36 +741,38 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Keybinding to cycle severity filter (e.g., `s` to cycle through levels)
 
 **Tasks:**
-- [ ] Format detection
-  - [ ] Detect JSON lines (starts with `{`, valid JSON)
-  - [ ] Detect common text patterns (bracket, prefix, syslog)
-  - [ ] Cache detected format per source (don't re-detect every line)
-  - [ ] Allow manual override per source
-- [ ] Severity parsing
-  - [ ] JSON: check common fields (`level`, `severity`, `lvl`, `log.level`)
-  - [ ] Text: regex patterns for common formats
-  - [ ] Normalize to standard levels (TRACE/DEBUG/INFO/WARN/ERROR/FATAL)
-  - [ ] Handle case variations (error, ERROR, Error)
-- [ ] Severity highlighting
-  - [ ] Color-code by severity (configurable colors)
-  - [ ] ERROR/FATAL: red
-  - [ ] WARN: yellow
-  - [ ] INFO: default
-  - [ ] DEBUG/TRACE: dim/gray
+- [x] Format detection — ✅ v0.6.0
+  - [x] Detect JSON lines (starts with `{`, valid JSON)
+  - [x] Detect common text patterns (bracket, prefix, syslog)
+  - [x] Per-line flag detection cached in columnar index
+  - [ ] Allow manual override per source (config hints)
+- [x] Severity parsing — ✅ v0.6.0
+  - [x] JSON: check common fields (`level`, `severity`, `lvl`, `log.level`)
+  - [x] Text: byte-level patterns for common formats
+  - [x] Normalize to standard levels (TRACE/DEBUG/INFO/WARN/ERROR/FATAL)
+  - [x] Handle case variations (error, ERROR, Error)
+- [x] Severity highlighting — ✅ v0.6.0
+  - [x] Color-code by severity (configurable colors)
+  - [x] ERROR/FATAL: red
+  - [x] WARN: yellow
+  - [x] INFO: default
+  - [x] DEBUG/TRACE: dim/gray
 - [ ] Severity filtering
   - [ ] Quick filter: show ERROR and above
   - [ ] Keybinding to cycle minimum severity level
-  - [ ] Combine with text filter (e.g., filter "database" + ERROR)
-- [ ] Severity statistics
-  - [ ] Count per severity level
-  - [ ] Show in side panel per source
+  - [x] Combine with text filter via query language
+- [x] Severity statistics — ✅ v0.6.0
+  - [x] Count per severity level
+  - [x] Show in side panel per source
   - [ ] Click to filter by severity
-- [ ] Add tests for format detection and parsing
+- [x] Add tests for format detection and parsing — ✅ v0.6.0
 
 **Future:**
-- [ ] Custom format definitions (regex-based)
+- [ ] Custom format definitions (regex-based) in config
 - [ ] Timestamp parsing from detected format
 - [ ] Auto-detect field names for structured logs
+- [x] Columnar index with flags, offsets, checkpoints — ✅ v0.6.0
+- [x] Index-accelerated filtering with bitmap pre-filtering — ✅ v0.6.0
 
 ---
 
@@ -942,6 +959,13 @@ fn apply_filter(reader: &dyn LogReader, filter: Arc<dyn Filter>) {
 - [x] Grep-style lazy line counting for case-sensitive search
 - [x] MCP search optimized with streaming filter (tested on 5GB+ files)
 - [x] FilterProgress::Complete includes lines_processed for accurate tracking
+- [x] Columnar index system — ✅ v0.6.0
+  - [x] Per-line flags (severity, ANSI, JSON, logfmt, timestamp markers)
+  - [x] O(1) line access via mmap-backed offset column
+  - [x] Index-accelerated filtering with bitmap pre-filtering
+  - [x] Incremental index building during capture mode
+  - [x] ~2.5s to index 60M lines (9GB file)
+  - [x] ANSI-aware severity detection with memchr-assisted scanning
 - [ ] Performance profiling on very large files (100GB+)
 - [ ] Optimize ANSI parsing (cache parsed lines?)
 - [ ] Benchmark filtering performance
@@ -1043,15 +1067,16 @@ sources:
   - Detect common timestamp formats
   - Filter by time range
   - Jump to specific timestamp
-- [ ] Self-update (`lazytail update`)
+- [x] Self-update (`lazytail update`) — ✅ v0.7.0
   - Use the `self_update` crate to check GitHub Releases and replace the binary in-place
   - `lazytail update` — check for new version and install if available
   - `lazytail update --check` — check only, don't install (exit code 0 = up to date, 1 = update available)
   - Background update check on TUI startup (non-blocking, cached to `~/.config/lazytail/update_check.json`)
   - Only check once every 24h to avoid API rate limits and startup latency
   - Print subtle notice after TUI exits if update is available (not during — would interfere with ratatui)
-  - `--no-update-check` flag and config option to disable automatic checks
+  - `--no-update-check` flag and config option (`update_check: false`) to disable automatic checks
   - Respect AUR users: detect if installed via package manager and suggest `yay -S lazytail` instead of self-replacing
+  - Feature-gated behind `self-update` cargo feature (included in GitHub release builds, excluded from AUR)
 - [ ] TUI colors configuration / theme customization
   - Configurable colors via `lazytail.yaml` (e.g., `theme:` section)
   - Customizable elements: side panel, selected line, status bar, filter input, borders, active/ended indicators
@@ -1084,21 +1109,24 @@ sources:
 - [ ] Integration tests for full app behavior
 - [ ] UI snapshot testing
 - [ ] Performance benchmarks in CI
-- [ ] Release automation improvements
+- [x] Release automation improvements — ✅ 2026-02-20
+  - [x] Auto-trigger release builds when release-please creates releases
+  - [x] Binaries automatically attached to GitHub releases
 - [ ] Pre-built binaries for Windows
 
 ---
 
 ## MCP Tools Roadmap
 
-**Current Tools (v0.4.0):**
+**Current Tools (v0.6.0):**
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `list_sources` | Discover available log sources | ✅ Complete (missing: total lines) |
+| `list_sources` | Discover available log sources | ✅ Complete |
 | `get_lines` | Read lines from position | ✅ Complete |
 | `get_tail` | Read last N lines | ✅ Complete |
 | `search` | Find pattern matches + structured queries | ✅ Complete |
 | `get_context` | Get lines around a match | ✅ Complete |
+| `get_stats` | Index metadata and severity breakdown | ✅ Complete (v0.6.0) |
 
 **Common Parameters (all tools except `list_sources`):**
 | Parameter | Type | Default | Description |
@@ -1124,10 +1152,10 @@ sources:
 | `time_range` param | Filter by timestamp range | 🟡 Medium |
 | Search pagination / cursor | When results exceed `max_results` (capped at 1000), there's no cursor or offset to fetch the next page. Currently the only workaround is adding more filters to narrow results. A cursor/offset mechanism would allow iterating through large result sets. | 🟡 Medium |
 
-**Planned `list_sources` Enhancements:**
-| Feature | Purpose | Priority |
-|---------|---------|----------|
-| Include total line count per source | Callers shouldn't need a separate call to know source size. Useful for calculating offsets, gauging search scope, etc. | 🔴 High |
+**Completed `list_sources` Enhancements:**
+| Feature | Purpose | Version |
+|---------|---------|---------|
+| Include total line count per source | Callers shouldn't need a separate call to know source size. Useful for calculating offsets, gauging search scope, etc. | ✅ v0.6.0 (via get_stats) |
 
 **Planned `get_tail` Enhancements:**
 | Feature | Purpose | Priority |
@@ -1139,13 +1167,17 @@ sources:
 |---------|---------|----------|
 | Negative indexing / "from end" shorthand | Reading last N lines without knowing total_lines first (`get_tail` covers most cases, but minor friction when you need a specific offset from end) | 🟢 Low |
 
+**Completed Tools:**
+| Tool | Purpose | Version |
+|------|---------|---------|
+| `get_stats` | Index metadata, severity breakdown, total lines, file size. Lightweight — reads index metadata only, no content scanning. Helps decide whether to tail or search, and whether a source is healthy. | ✅ v0.6.0 |
+
 **Planned New Tools:**
 | Tool | Purpose | Priority |
 |------|---------|----------|
 | `aggregate` | Count by field, top N results. Answers "which service has the most errors?", "what's the error distribution?" in a single call instead of N manual queries. Should integrate with the query language AST (Phase 3 aggregation) so both text queries and MCP JSON work. | 🔴 High |
 | `search_sources` | Search multiple sources at once, grouped results by source name. Essential for cross-service correlation (e.g., "find this request ID across all services"). Doesn't require timestamps or merging — just run the same query across all sources. | 🔴 High |
 | `fields` | Sample N lines from a source and return discovered field names, types, and example values. Makes structured queries far more usable — currently consumers must `get_tail` a few lines and visually parse JSON to discover field names before constructing a query. Critical for LLM consumers that can't eyeball the data. | 🔴 High |
-| `stats` | Per-source metadata: total lines, file size, first/last timestamp (once time parsing lands), line growth rate for active sources (e.g., "~500 lines/sec"), time since last line. Lightweight — reads metadata only, no content scanning. Helps decide whether to tail or search, and whether a source is healthy. Distinct from `summarize` which analyzes content. | 🟡 Medium |
 | `summarize` | Log overview: time range, top patterns, top services, error rate. Content-analysis based summary. | 🟡 Medium |
 | `add_source` | Register an existing log file as a named source. Lets AI agents dynamically add sources without editing config or piping data. CLI equivalent: `lazytail add <name> --path <path>`. | 🟡 Medium |
 | `export` | Dump filtered results to a file or return in bulk. Supports query filters, time range, and output format. Useful for "save me all errors from the last hour" workflows. TUI has export in backlog but MCP needs its own path since results are capped at 1000. | 🟢 Low |

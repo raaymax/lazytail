@@ -16,6 +16,8 @@ mod source;
 mod source_state;
 mod tab;
 mod ui;
+#[cfg(feature = "self-update")]
+mod update;
 mod viewport;
 mod watcher;
 mod web;
@@ -94,6 +96,11 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
+    /// Disable background update check on startup
+    #[cfg(feature = "self-update")]
+    #[arg(long = "no-update-check")]
+    no_update_check: bool,
+
     /// Subcommand to run
     #[command(subcommand)]
     command: Option<cmd::Commands>,
@@ -125,6 +132,9 @@ fn main() -> Result<()> {
                 cmd::ConfigAction::Show => cmd::config::show()
                     .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
             },
+            #[cfg(feature = "self-update")]
+            cmd::Commands::Update(args) => cmd::update::run(args.check)
+                .map_err(|code| anyhow::anyhow!("update failed with exit code {}", code)),
         };
     }
 
@@ -197,6 +207,10 @@ fn main() -> Result<()> {
         }
     }
 
+    // Spawn background update check (if self-update feature is enabled)
+    #[cfg(feature = "self-update")]
+    let update_handle = spawn_update_check(&cli, &cfg);
+
     // Mode 0: MCP server mode (--mcp flag)
     #[cfg(feature = "mcp")]
     if cli.mcp {
@@ -219,7 +233,7 @@ fn main() -> Result<()> {
 
     // Mode 2: Discovery mode (no files, no stdin)
     if cli.files.is_empty() && !has_piped_input {
-        return run_discovery_mode(
+        let result = run_discovery_mode(
             cli.no_watch,
             cfg,
             config_errors,
@@ -227,6 +241,9 @@ fn main() -> Result<()> {
             startup,
             verbose,
         );
+        #[cfg(feature = "self-update")]
+        print_update_notice(update_handle);
+        return result;
     }
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
@@ -348,6 +365,9 @@ fn main() -> Result<()> {
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
+
+    #[cfg(feature = "self-update")]
+    print_update_notice(update_handle);
 
     Ok(())
 }
@@ -864,4 +884,49 @@ fn collect_input_events<B: ratatui::backend::Backend>(
 /// handled inside `App::apply_event()`, so this function is a thin passthrough.
 fn process_event(app: &mut App, event: event::AppEvent) {
     app.apply_event(event);
+}
+
+/// Spawn a background thread to check for updates (if enabled).
+#[cfg(feature = "self-update")]
+fn spawn_update_check(
+    cli: &Cli,
+    cfg: &config::Config,
+) -> Option<std::thread::JoinHandle<Result<update::UpdateInfo, String>>> {
+    // Respect --no-update-check flag
+    if cli.no_update_check {
+        return None;
+    }
+    // Respect config: update_check: false
+    if cfg.update_check == Some(false) {
+        return None;
+    }
+    Some(std::thread::spawn(update::checker::check_with_cache))
+}
+
+/// Print a subtle update notice after TUI exits (if an update is available).
+#[cfg(feature = "self-update")]
+fn print_update_notice(
+    handle: Option<std::thread::JoinHandle<Result<update::UpdateInfo, String>>>,
+) {
+    let Some(handle) = handle else { return };
+    let Ok(Ok(info)) = handle.join() else { return };
+    if !info.is_update_available() {
+        return;
+    }
+
+    let install_method = update::detection::detect_install_method();
+    match install_method {
+        update::InstallMethod::PackageManager { upgrade_cmd, .. } => {
+            eprintln!(
+                "Update available: {} → {}. Update with: {}",
+                info.current_version, info.latest_version, upgrade_cmd
+            );
+        }
+        update::InstallMethod::SelfManaged => {
+            eprintln!(
+                "Update available: {} → {}. Run 'lazytail update' to install.",
+                info.current_version, info.latest_version
+            );
+        }
+    }
 }

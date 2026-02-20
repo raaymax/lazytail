@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -13,7 +15,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
 
 permissions:
   contents: write
@@ -65,7 +67,7 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build
-      run: cargo build --release --target ${{ matrix.target }}
+      run: cargo build --release --target ${{ matrix.target }} --features self-update
 
     - name: Strip binary (Linux)
       if: matrix.os == 'ubuntu-latest'

@@ -11,6 +11,7 @@ The application operates in five distinct modes:
 3. **Discovery mode** - Auto-discovers sources from project/global data directories
 4. **Capture mode** (`-n`) - Tee-like stdin-to-file with source tracking
 5. **MCP server mode** (`--mcp`) - Model Context Protocol server for programmatic log access
+6. **Subcommand mode** - CLI subcommands (`init`, `config`, `update`)
 
 ## Module Map
 
@@ -83,15 +84,22 @@ src/
 
   mcp/              (feature-gated: "mcp")
     mod.rs           MCP server entry point (tokio + rmcp)
-    tools.rs         5 MCP tools implementation
+    tools.rs         6 MCP tools implementation
     types.rs         MCP request/response types
     format.rs        Output formatting for MCP responses
     ansi.rs          ANSI stripping for MCP output
+
+  update/            (feature-gated: "self-update")
+    mod.rs           Types, cache I/O, version comparison
+    checker.rs       GitHub release checking with 24h cache
+    installer.rs     Binary download and replacement
+    detection.rs     Package manager detection (pacman/dpkg/brew/path)
 
   cmd/
     mod.rs           Subcommand definitions
     init.rs          `lazytail init` command
     config.rs        `lazytail config validate/show` commands
+    update.rs        `lazytail update` command (feature-gated: self-update)
 ```
 
 ## Core Architecture
@@ -257,7 +265,7 @@ The web adapter uses the same `TabState` as TUI for file watching and filter pro
 
 Feature-gated behind `mcp` (enabled by default). Uses `rmcp` crate with tokio runtime and stdio transport.
 
-Provides 5 tools:
+Provides 6 tools:
 - `list_sources` - discover available log sources
 - `search` - pattern search with regex/plain text and structured queries
 - `get_lines` - read specific line ranges with per-line severity
@@ -288,6 +296,7 @@ See [ADR-010: MCP Server Integration](adr/010-mcp-server.md).
 | `tiny_http` | Lightweight HTTP server for web mode |
 | `tokio` | Async runtime for MCP server (optional) |
 | `rmcp` | MCP protocol implementation (optional) |
+| `self_update` | GitHub release checking and binary replacement (optional) |
 
 ## Data Flow Diagrams
 
