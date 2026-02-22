@@ -523,6 +523,124 @@ Wire indexes into the TUI for severity highlighting, severity filtering in side 
 
 ---
 
+## Search Result Bitmap Cache
+
+A persistent cache of filter results stored as [Roaring Bitmaps](https://roaringbitmap.org/) — one file per search term, co-located with the columnar index.
+
+### Motivation
+
+Plain-text search (`/connection timeout`) runs mmap+memchr at ~2–4 GB/s — already fast. But for the same query run repeatedly (TUI re-filter, MCP repeated calls, compound queries), re-scanning 52M lines every time wastes cycles. A Roaring Bitmap makes repeat lookups sub-millisecond and enables bitwise compound queries for free.
+
+For a 52M-line file a raw bitset would be 6.5 MB. A Roaring Bitmap is much smaller when matches are sparse (e.g. 1 000 hits → ~10 KB) and falls back to dense chunks automatically when matches are dense.
+
+### Directory Layout
+
+```
+.lazytail/idx/{source_name}/
+  meta
+  checkpoints
+  offsets
+  lengths
+  time
+  flags
+  templates
+  search/                          ← new sub-directory
+    {term_hash}.rbm                  Roaring Bitmap file (roaring crate serialization)
+    {term_hash}.meta                 64-byte sidecar: canonical term + line_count_at_build
+```
+
+`search/` lives inside the existing index directory — same lifecycle, same gitignore, same deletion on source cleanup.
+
+### Cache Key
+
+`{term_hash}` = `xxhash64(canonical_term)` formatted as 16 hex chars.
+
+**Canonical form rules:**
+- Plain text: the raw search string as-is
+- Regex: the source string of the compiled regex (not flags — anchoring, case are part of the string)
+- Query (`json | level == "error"`): serialised `FilterQuery` AST (deterministic, not the raw input string)
+
+The `.meta` sidecar stores the original human-readable term for debug/introspection and `line_count_at_build` for append detection.
+
+### Sidecar Format (64 bytes)
+
+```
+offset  size  field
+0       4     magic: [u8; 4] = b"LTSB"
+4       2     version: u16 = 1
+6       2     term_len: u16
+8       8     line_count_at_build: u64    — meta.entry_count when bitmap was written
+16      8     file_size_at_build: u64     — log file size when bitmap was written
+24      8     built_at: u64              — epoch millis
+32      32    term: [u8; 32]             — canonical term, truncated/zero-padded
+```
+
+### Cache Lookup Logic
+
+```
+FilterOrchestrator::trigger()
+  → check search/{term_hash}.meta
+      missing?            → cache miss, run streaming_filter, write bitmap
+      line_count matches meta.entry_count AND file_size matches?
+                          → cache hit, deserialize .rbm, return line numbers instantly
+      file_size > at_build (append only)?
+                          → partial hit: load bitmap, run streaming_filter on new lines only,
+                            extend bitmap, update sidecar
+      file_size changed in other way?
+                          → stale, delete .rbm + .meta, run full streaming_filter, write new bitmap
+```
+
+### Append Extension
+
+Because log files are append-only in the common case, the existing bitmap stays valid for lines `0..line_count_at_build`. Only new lines need scanning:
+
+```rust
+// Pseudocode
+let old_bitmap = load_rbm(term_hash);              // valid for 0..old_count
+let new_matches = streaming_filter(term, old_count..new_count);  // scan only tail
+old_bitmap.extend(new_matches);                    // O(new_lines) not O(all_lines)
+save_rbm(term_hash, &old_bitmap);
+update_meta(term_hash, new_count, new_file_size);
+```
+
+For a 52M-line file where 1M new lines arrived since last search: scan 1M lines instead of 52M — **52× faster**.
+
+### Compound Queries
+
+With multiple bitmaps already on disk:
+
+```
+"error" bitmap  AND  "timeout" bitmap  →  bitwise AND, no file scan
+"error" bitmap  OR   "warn" bitmap     →  bitwise OR,  no file scan
+NOT "debug" bitmap                     →  bitwise NOT, no file scan
+```
+
+The `roaring` crate implements `BitAnd`, `BitOr`, `BitXor`, `Sub` directly on `RoaringBitmap`.
+
+### columns_present Bitmask Update
+
+```
+bit 6: search_cache_dir    — search/ subdirectory exists with at least one .rbm
+```
+
+### Rust Crate
+
+```toml
+[dependencies]
+roaring = "0.10"
+```
+
+Serialization: `bitmap.serialize_into(&mut file)` / `RoaringBitmap::deserialize_from(&file)` — the native roaring format, portable across platforms.
+
+### Scope
+
+- **In scope:** plain-text and regex searches on file sources
+- **In scope:** query-syntax searches after the flags pre-filter stage
+- **Out of scope:** stdin/stream sources (no file to cache alongside)
+- **Out of scope:** case-insensitive variants (treated as separate cache entries via canonical form)
+
+---
+
 ## Open Questions
 
 1. **Labels / extracted field values:** Variable-length data doesn't fit the fixed-size column model. Options: separate auxiliary file with offset column, dictionary encoding, or defer to content parsing with flags pre-filtering. Needs design.
@@ -536,3 +654,5 @@ Wire indexes into the TUI for severity highlighting, severity filtering in side 
 5. **Concurrent access:** TUI and MCP server may both read the index simultaneously while capture appends to it. Mmap handles concurrent read safely. Append + read needs care — reader must not read past `meta.entry_count`. Does `entry_count` need to be atomic / memory-mapped itself?
 
 6. **Checkpoint interval tuning:** 100K lines is a guess. Smaller intervals = finer stale detection and faster partial rebuild, but more checkpoint entries and more frequent hashing during build. Profile to find the sweet spot.
+
+7. **Flag bitmaps: migrate or layer?** The `flags` dense array and Roaring Bitmaps serve opposite query directions and should coexist rather than one replacing the other. The dense `[u32; N]` array is optimal for per-line lookup (O(1) direct indexing, used for display/rendering) and SIMD multi-flag checks in a single op. Roaring Bitmaps are optimal for "give me all line numbers with property X" queries. The decision: keep the dense flags column as source of truth, and add pre-built flag bitmaps as a derived layer in `search/` using reserved names (`flags:severity_error.rbm`, `flags:format_json.rbm`, etc.). Key difference from text search bitmaps: flag bitmaps can be written **during capture** at zero marginal cost since flag values are known at write time, rather than being built lazily on first query. The template ID field (bits 16–31, up to 65 535 values) is unsuitable for per-value bitmaps and stays in the dense column regardless.

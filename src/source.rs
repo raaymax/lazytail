@@ -264,12 +264,10 @@ pub fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatu
 /// Scans both the project-local `.lazytail/data/` (if in a project) and the
 /// global `~/.config/lazytail/data/` directories for log sources.
 ///
-/// Project sources appear first in the result and shadow global sources
-/// with the same name (i.e., if a source exists in both locations, only
-/// the project-local version is returned).
+/// Project sources appear first in the result. Sources with the same name in
+/// both locations are both returned — `SourceLocation` distinguishes them.
 pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<DiscoveredSource>> {
     let mut all_sources = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
 
     // First, scan project data directory if in a project
     if discovery.project_root.is_some() {
@@ -280,11 +278,7 @@ pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<D
                 project_sources.as_deref(),
                 SourceLocation::Project,
             )?;
-
-            for source in sources {
-                seen_names.insert(source.name.clone());
-                all_sources.push(source);
-            }
+            all_sources.extend(sources);
         }
     }
 
@@ -296,13 +290,7 @@ pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<D
             global_sources_path.as_deref(),
             SourceLocation::Global,
         )?;
-
-        // Only add global sources that aren't shadowed by project sources
-        for source in sources {
-            if !seen_names.contains(&source.name) {
-                all_sources.push(source);
-            }
-        }
+        all_sources.extend(sources);
     }
 
     Ok(all_sources)
@@ -1012,10 +1000,12 @@ mod tests {
 
         let sources = discover_sources_for_context(&discovery).unwrap();
 
-        // Should only have 1 source (project shadows global)
-        assert_eq!(sources.len(), 1);
+        // Should have 2 sources — same name in both locations, both visible
+        assert_eq!(sources.len(), 2);
         assert_eq!(sources[0].name, "shared");
         assert_eq!(sources[0].location, SourceLocation::Project);
+        assert_eq!(sources[1].name, "shared");
+        assert_eq!(sources[1].location, SourceLocation::Global);
 
         if let Some(home) = old_home {
             env::set_var("HOME", home);
