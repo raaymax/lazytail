@@ -1,5 +1,5 @@
+use crate::app::AppEvent;
 use crate::app::{App, InputMode};
-use crate::event::AppEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle keyboard input and return corresponding events

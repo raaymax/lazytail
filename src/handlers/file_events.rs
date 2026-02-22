@@ -1,5 +1,5 @@
+use crate::app::AppEvent;
 use crate::app::{App, ViewMode};
-use crate::event::AppEvent;
 
 /// Process file modification after reload has occurred
 /// This is called from main.rs after the file has been reloaded

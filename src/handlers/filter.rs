@@ -1,4 +1,4 @@
-use crate::event::AppEvent;
+use crate::app::AppEvent;
 use crate::filter::engine::FilterProgress;
 
 /// Handle filter progress messages and return corresponding app events

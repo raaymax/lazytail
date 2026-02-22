@@ -1,3 +1,4 @@
+use super::viewport::Viewport;
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
 use crate::index::reader::IndexReader;
@@ -8,7 +9,6 @@ use crate::reader::{
 use crate::source::{
     check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
-use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -729,8 +729,8 @@ impl TabState {
     /// Apply a filter event directly to this tab (works for both active and inactive tabs).
     ///
     /// Returns `true` if the filter operation completed (receiver should be cleared).
-    pub fn apply_filter_event(&mut self, event: &crate::event::AppEvent) -> bool {
-        use crate::event::AppEvent;
+    pub fn apply_filter_event(&mut self, event: &super::event::AppEvent) -> bool {
+        use super::event::AppEvent;
 
         match event {
             AppEvent::FilterProgress(lines_processed) => {
