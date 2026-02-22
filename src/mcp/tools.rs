@@ -14,6 +14,7 @@ use super::format;
 use super::types::*;
 use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
+use crate::filter::search_engine::SearchEngine;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
 use crate::index::flags::Severity;
@@ -340,8 +341,6 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
     ) -> String {
-        use crate::filter::search_engine::SearchEngine;
-
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
@@ -423,9 +422,6 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
     ) -> String {
-        use crate::filter::search_engine::SearchEngine;
-        use lazytail::index::reader::IndexReader;
-
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
@@ -469,8 +465,6 @@ impl LazyTailMcp {
     }
 
     pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
-        use lazytail::index::reader::IndexReader;
-
         let stats = IndexReader::stats(path);
 
         let (indexed_lines, log_file_size, has_index, severity_counts, columns) =
