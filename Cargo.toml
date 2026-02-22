@@ -52,4 +52,5 @@ lz4_flex = ["dep:lz4_flex"]
 libc = "0.2"
 
 [dev-dependencies]
+lz4_flex = "0.12.0"
 tempfile = "3.0"
