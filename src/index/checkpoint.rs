@@ -85,6 +85,22 @@ impl CheckpointWriter {
         })
     }
 
+    /// Truncate checkpoint file to entries valid for `entry_count` log lines, then open for appending.
+    pub fn truncate_and_open(path: impl AsRef<Path>, entry_count: u64) -> Result<Self> {
+        let reader = CheckpointReader::open(path.as_ref())?;
+        let valid_count = reader
+            .iter()
+            .take_while(|cp| cp.line_number <= entry_count)
+            .count();
+        let target_len = (valid_count * CHECKPOINT_SIZE) as u64;
+        OpenOptions::new()
+            .write(true)
+            .open(path.as_ref())
+            .with_context(|| format!("truncating checkpoint file: {}", path.as_ref().display()))?
+            .set_len(target_len)?;
+        Self::open(path)
+    }
+
     /// Open an existing checkpoint file for appending.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let file = OpenOptions::new()

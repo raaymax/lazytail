@@ -48,7 +48,7 @@ mcp = ["dep:tokio", "dep:rmcp", "dep:schemars"]
 self-update = ["dep:self_update"]
 lz4_flex = ["dep:lz4_flex"]
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

@@ -490,7 +490,10 @@ pub fn build_missing_indexes(sources: &[DiscoveredSource]) {
 
     let missing: Vec<_> = sources
         .iter()
-        .filter(|s| !index_dir_for_log(&s.log_path).join("meta").exists())
+        .filter(|s| {
+            !index_dir_for_log(&s.log_path).join("meta").exists()
+                && s.status != SourceStatus::Active
+        })
         .collect();
 
     if missing.is_empty() {

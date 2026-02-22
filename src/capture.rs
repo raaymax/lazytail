@@ -71,10 +71,15 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
         location
     );
 
-    // 8. Create indexer for columnar index
+    // 8. Create or resume indexer for columnar index
     let idx_dir = index_dir_for_log(&log_path);
-    let mut indexer = LineIndexer::create(&idx_dir)
-        .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?;
+    let mut indexer = if idx_dir.join("meta").exists() {
+        LineIndexer::resume(&idx_dir)
+            .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
+    } else {
+        LineIndexer::create(&idx_dir)
+            .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?
+    };
 
     // 9. Tee loop: read stdin, write to file AND stdout
     let stdin = io::stdin();
