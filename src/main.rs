@@ -1,3 +1,4 @@
+mod ansi;
 mod app;
 mod cache;
 mod capture;

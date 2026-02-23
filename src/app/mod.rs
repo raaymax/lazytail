@@ -447,6 +447,39 @@ impl App {
         }
     }
 
+    /// Copy the selected line's content (ANSI-stripped) to clipboard via OSC 52
+    fn copy_selected_line(&mut self) {
+        let tab = self.active_tab_mut();
+        if tab.source.line_indices.is_empty() {
+            return;
+        }
+
+        let file_line_number = match tab.source.line_indices.get(tab.selected_line) {
+            Some(&n) => n,
+            None => return,
+        };
+
+        let content = {
+            let mut reader = tab.source.reader.lock().unwrap();
+            reader.get_line(file_line_number).ok().flatten()
+        };
+
+        if let Some(raw) = content {
+            let clean = crate::ansi::strip_ansi(&raw);
+            let encoded = base64_encode(clean.as_bytes());
+            print!("\x1b]52;c;{}\x07", encoded);
+
+            let display = if clean.is_empty() {
+                "Copied: (empty line)".to_string()
+            } else if clean.len() > 60 {
+                format!("Copied: {}...", &clean[..clean.floor_char_boundary(57)])
+            } else {
+                format!("Copied: {}", clean)
+            };
+            self.status_message = Some((display, Instant::now()));
+        }
+    }
+
     // === Close Confirmation Methods ===
 
     /// Request closing a tab with confirmation dialog
@@ -947,6 +980,7 @@ impl App {
             AppEvent::ToggleCategoryExpand => self.toggle_category_expand(),
             AppEvent::SelectSource => self.select_source_from_panel(),
             AppEvent::CopySourcePath => self.copy_source_path(),
+            AppEvent::CopySelectedLine => self.copy_selected_line(),
 
             // Filter input events
             AppEvent::StartFilterInput => self.start_filter_input(),
@@ -2098,6 +2132,44 @@ mod tests {
         // Collapse all
         app.apply_event(AppEvent::CollapseAll);
         assert!(app.active_tab().expansion.expanded_lines.is_empty());
+    }
+
+    #[test]
+    fn test_copy_selected_line_sets_status_message() {
+        let temp_file = create_temp_log_file(&["hello world", "second line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Jump to start (starts at end in follow mode)
+        app.apply_event(AppEvent::JumpToStart);
+        assert_eq!(app.active_tab().selected_line, 0);
+
+        app.apply_event(AppEvent::CopySelectedLine);
+        assert!(app.status_message.is_some());
+        let (msg, _) = app.status_message.as_ref().unwrap();
+        assert!(msg.contains("Copied:"));
+        assert!(msg.contains("hello world"));
+    }
+
+    #[test]
+    fn test_copy_selected_line_noop_on_empty() {
+        let temp_file = create_temp_log_file(&[]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.apply_event(AppEvent::CopySelectedLine);
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn test_copy_selected_line_strips_ansi() {
+        let temp_file = create_temp_log_file(&["\x1b[31mred text\x1b[0m"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.apply_event(AppEvent::CopySelectedLine);
+        assert!(app.status_message.is_some());
+        let (msg, _) = app.status_message.as_ref().unwrap();
+        assert!(msg.contains("red text"));
+        // Should not contain ANSI escape codes
+        assert!(!msg.contains("\x1b"));
     }
 
     #[test]
