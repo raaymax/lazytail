@@ -285,6 +285,7 @@ impl LazyTailMcp {
     pub(crate) fn get_tail_impl(
         path: &Path,
         count: usize,
+        since_line: Option<usize>,
         raw: bool,
         output: OutputFormat,
     ) -> String {
@@ -300,10 +301,19 @@ impl LazyTailMcp {
         let index_reader = IndexReader::open(path);
 
         let total = reader.total_lines();
-        let start = total.saturating_sub(count);
+
+        let (start, end, has_more) = if let Some(since) = since_line {
+            let start = since + 1;
+            let end = (start + count).min(total);
+            let has_more = end < total;
+            (start, end, has_more)
+        } else {
+            let start = total.saturating_sub(count);
+            (start, total, start > 0)
+        };
 
         let mut lines = Vec::new();
-        for i in start..total {
+        for i in start..end {
             if let Ok(Some(content)) = reader.get_line(i) {
                 lines.push(LineInfo {
                     line_number: i,
@@ -319,7 +329,7 @@ impl LazyTailMcp {
         let mut response = GetLinesResponse {
             lines,
             total_lines: total,
-            has_more: start > 0,
+            has_more,
         };
 
         if !raw {
@@ -713,14 +723,14 @@ impl LazyTailMcp {
 
     /// Fetch the last N lines from a lazytail source.
     #[tool(
-        description = "Fetch the last N lines from a lazytail-captured log source. Useful for checking recent activity. Pass a source name from list_sources. Returns up to 1000 lines from the end of the file."
+        description = "Fetch the last N lines from a lazytail-captured log source. Useful for checking recent activity. Pass a source name from list_sources. Returns up to 1000 lines from the end of the file. Supports incremental polling via since_line — pass the last line_number you received to get only new lines added after that point."
     )]
     fn get_tail(&self, #[tool(aggr)] req: GetTailRequest) -> String {
         let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        Self::get_tail_impl(&path, req.count, req.raw, req.output)
+        Self::get_tail_impl(&path, req.count, req.since_line, req.raw, req.output)
     }
 
     /// Search for patterns in a lazytail source using plain text, regex, or structured query.
@@ -925,7 +935,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Json);
+        let result = LazyTailMcp::get_tail_impl(f.path(), 2, None, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines.len(), 2);
         assert_eq!(resp.lines[0].content, "plain line with no escapes");
@@ -935,9 +945,81 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_tail_impl(f.path(), 5, true, OutputFormat::Json);
+        let result = LazyTailMcp::get_tail_impl(f.path(), 5, None, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b["));
+    }
+
+    #[test]
+    fn get_tail_since_line_returns_new_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        for i in 0..5 {
+            writeln!(f, "line {i}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_tail_impl(f.path(), 100, Some(2), false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.lines.len(), 2);
+        assert_eq!(resp.lines[0].line_number, 3);
+        assert_eq!(resp.lines[0].content, "line 3");
+        assert_eq!(resp.lines[1].line_number, 4);
+        assert_eq!(resp.lines[1].content, "line 4");
+        assert_eq!(resp.total_lines, 5);
+        assert!(!resp.has_more);
+    }
+
+    #[test]
+    fn get_tail_since_line_with_count() {
+        let mut f = NamedTempFile::new().unwrap();
+        for i in 0..10 {
+            writeln!(f, "line {i}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_tail_impl(f.path(), 2, Some(5), false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(resp.lines.len(), 2);
+        assert_eq!(resp.lines[0].line_number, 6);
+        assert_eq!(resp.lines[0].content, "line 6");
+        assert_eq!(resp.lines[1].line_number, 7);
+        assert_eq!(resp.lines[1].content, "line 7");
+        assert!(resp.has_more);
+    }
+
+    #[test]
+    fn get_tail_since_line_at_end() {
+        let mut f = NamedTempFile::new().unwrap();
+        for i in 0..5 {
+            writeln!(f, "line {i}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::get_tail_impl(f.path(), 100, Some(4), false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        assert!(resp.lines.is_empty());
+        assert!(!resp.has_more);
+        assert_eq!(resp.total_lines, 5);
+    }
+
+    #[test]
+    fn get_tail_since_line_beyond_end() {
+        let mut f = NamedTempFile::new().unwrap();
+        for i in 0..5 {
+            writeln!(f, "line {i}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let result =
+            LazyTailMcp::get_tail_impl(f.path(), 100, Some(100), false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        assert!(resp.lines.is_empty());
+        assert!(!resp.has_more);
+        assert_eq!(resp.total_lines, 5);
     }
 
     // -- search tests --
@@ -1181,7 +1263,7 @@ plain line with no escapes\n\
         writeln!(f, "line 2").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_tail_impl(f.path(), 2, false, OutputFormat::Text);
+        let result = LazyTailMcp::get_tail_impl(f.path(), 2, None, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
         assert!(result.contains("[L1] line 1\n"));
