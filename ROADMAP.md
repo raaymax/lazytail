@@ -567,6 +567,45 @@ FilterHistoryEntry {
 
 ---
 
+#### Explicit Query Filter Mode
+**Goal:** Add Query as a first-class filter mode alongside Plain and Regex, instead of auto-detecting query syntax
+
+**Problem:** Query mode is currently triggered by heuristic (`is_query_syntax`) — if the input looks like `json | ...`, it's silently treated as a query. This means:
+- Searching for a literal string like `json | something` is impossible in Plain mode
+- The mode switch is invisible to the user (no explicit trigger)
+- No way to force query mode for edge-case inputs that don't pass the heuristic
+
+**Proposed UX:**
+```
+Plain → Regex → Query  (Tab cycles through all three)
+
+┌─────────────────────────────────────────────────────────────┐
+│ Query mode:                                                  │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ Query: json | level == "error"          [Tab: Plain]    │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│ Frame color: magenta (already used for query today)         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Behavior:**
+- `Tab` cycles: Plain → Regex → Query → Plain
+- In Plain and Regex modes, input is never interpreted as a query — `json | something` is a literal search
+- Query mode always routes through `QueryFilter`, no heuristic needed
+- Auto-detect (`is_query_syntax`) can be removed or kept only as an optional hint (e.g. auto-switch offer)
+- History entries store mode, so query history restores Query mode
+
+**Tasks:**
+- [ ] Add `Query` variant to `FilterMode` enum
+- [ ] Update `Tab` key to cycle Plain → Regex → Query
+- [ ] Remove heuristic auto-detection from filter dispatch path
+- [ ] Update filter prompt label and frame color for Query mode
+- [ ] Update help text and help overlay
+- [ ] Update filter history serialization for new mode variant
+- [ ] Add tests for mode cycling and query mode dispatch
+
+---
+
 ### 🟡 MEDIUM PRIORITY
 
 #### Expandable Log Entries ✅
