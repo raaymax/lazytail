@@ -1216,10 +1216,13 @@ impl App {
         let sp = self.layout.side_panel_sources;
         let lv = self.layout.log_view;
 
-        // Hit test: side panel sources area
-        if column >= sp.x && column < sp.x + sp.width && row >= sp.y && row < sp.y + sp.height {
-            // Account for 1px top border
-            let inner_row = row.saturating_sub(sp.y + 1) as usize;
+        // Hit test: side panel sources area (inner content, excluding borders)
+        if column > sp.x
+            && column < sp.x + sp.width.saturating_sub(1)
+            && row > sp.y
+            && row < sp.y + sp.height.saturating_sub(1)
+        {
+            let inner_row = (row - sp.y - 1) as usize;
             let items = self.build_source_tree_items();
 
             if inner_row < items.len() {
@@ -1239,10 +1242,13 @@ impl App {
             return;
         }
 
-        // Hit test: log view area
-        if column >= lv.x && column < lv.x + lv.width && row >= lv.y && row < lv.y + lv.height {
-            // Account for 1px top border
-            let inner_row = row.saturating_sub(lv.y + 1) as usize;
+        // Hit test: log view area (inner content, excluding borders)
+        if column > lv.x
+            && column < lv.x + lv.width.saturating_sub(1)
+            && row > lv.y
+            && row < lv.y + lv.height.saturating_sub(1)
+        {
+            let inner_row = (row - lv.y - 1) as usize;
             let tab = self.active_tab_mut();
             let scroll_pos = tab.viewport.scroll_position();
             let target_index = scroll_pos + inner_row;
