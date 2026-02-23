@@ -55,6 +55,15 @@ pub struct ExpansionState {
     pub mode: ExpandMode,
 }
 
+/// View state for navigating the aggregation table.
+#[derive(Debug, Default)]
+pub struct AggregationViewState {
+    /// Currently selected row in the aggregation table.
+    pub selected_row: usize,
+    /// Scroll offset for the aggregation table.
+    pub scroll_offset: usize,
+}
+
 /// Per-tab state for viewing a single log source.
 ///
 /// Contains a `LogSource` (domain core) plus TUI-specific state
@@ -79,6 +88,8 @@ pub struct TabState {
     pub stream_receiver: Option<Receiver<StreamMessage>>,
     /// Source type from config (ProjectSource or GlobalSource)
     pub config_source_type: Option<SourceType>,
+    /// Aggregation table navigation state
+    pub aggregation_view: AggregationViewState,
 }
 
 impl TabState {
@@ -160,6 +171,7 @@ impl TabState {
                     index_reader,
                     index_size,
                     rate_tracker: LineRateTracker::new(total_lines),
+                    aggregation_result: None,
                 },
                 scroll_position: 0,
                 selected_line,
@@ -169,6 +181,7 @@ impl TabState {
                 stream_writer: None,
                 stream_receiver: None,
                 config_source_type: None,
+                aggregation_view: AggregationViewState::default(),
             })
         } else {
             // Pipe/FIFO - use background loading for immediate UI
@@ -196,6 +209,7 @@ impl TabState {
                     index_reader: None,
                     index_size: None,
                     rate_tracker: LineRateTracker::new(0),
+                    aggregation_result: None,
                 },
                 scroll_position: 0,
                 selected_line: 0,
@@ -205,6 +219,7 @@ impl TabState {
                 stream_writer: Some(stream_writer),
                 stream_receiver: Some(rx),
                 config_source_type: None,
+                aggregation_view: AggregationViewState::default(),
             })
         }
     }
@@ -235,6 +250,7 @@ impl TabState {
                 index_reader: None,
                 index_size: None,
                 rate_tracker: LineRateTracker::new(0),
+                aggregation_result: None,
             },
             scroll_position: 0,
             selected_line: 0,
@@ -244,6 +260,7 @@ impl TabState {
             stream_writer: Some(stream_writer),
             stream_receiver: Some(rx),
             config_source_type: None,
+            aggregation_view: AggregationViewState::default(),
         })
     }
 
@@ -282,6 +299,7 @@ impl TabState {
                 index_reader,
                 index_size,
                 rate_tracker: LineRateTracker::new(total_lines),
+                aggregation_result: None,
             },
             scroll_position: 0,
             selected_line,
@@ -294,6 +312,7 @@ impl TabState {
                 SourceLocation::Project => Some(SourceType::ProjectSource),
                 SourceLocation::Global => None,
             },
+            aggregation_view: AggregationViewState::default(),
         })
     }
 
@@ -345,6 +364,7 @@ impl TabState {
                 index_reader,
                 index_size,
                 rate_tracker: LineRateTracker::new(total_lines),
+                aggregation_result: None,
             },
             scroll_position: 0,
             selected_line,
@@ -354,6 +374,7 @@ impl TabState {
             stream_writer: None,
             stream_receiver: None,
             config_source_type: Some(source_type),
+            aggregation_view: AggregationViewState::default(),
         })
     }
 
@@ -379,6 +400,7 @@ impl TabState {
                 index_reader: None,
                 index_size: None,
                 rate_tracker: LineRateTracker::new(0),
+                aggregation_result: None,
             },
             scroll_position: 0,
             selected_line: 0,
@@ -388,6 +410,7 @@ impl TabState {
             stream_writer: None,
             stream_receiver: None,
             config_source_type: Some(source_type),
+            aggregation_view: AggregationViewState::default(),
         })
     }
 
@@ -617,6 +640,13 @@ impl TabState {
         self.source.mode = ViewMode::Normal;
         self.source.filter.pattern = None;
         self.source.filter.state = FilterState::Inactive;
+
+        // Reset aggregation state
+        self.source.aggregation_result = None;
+        self.source.filter.pending_aggregation = None;
+        self.source.filter.drill_down_aggregation = None;
+        self.source.filter.drill_down_pattern = None;
+        self.aggregation_view = AggregationViewState::default();
 
         // Restore to origin line if set (where user was before filtering)
         if let Some(origin) = self.source.filter.origin_line.take() {

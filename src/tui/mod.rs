@@ -1,9 +1,10 @@
+mod aggregation_view;
 mod help;
 mod log_view;
 mod side_panel;
 mod status_bar;
 
-use crate::app::{App, InputMode, LayoutRect};
+use crate::app::{App, InputMode, LayoutRect, ViewMode};
 use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -39,7 +40,11 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     app.layout.side_panel_sources = rect_to_layout(sources_area);
     app.layout.log_view = rect_to_layout(content_chunks[0]);
 
-    log_view::render_log_view(f, content_chunks[0], app)?;
+    if app.active_tab().source.mode == ViewMode::Aggregation {
+        aggregation_view::render_aggregation_view(f, content_chunks[0], app.active_tab());
+    } else {
+        log_view::render_log_view(f, content_chunks[0], app)?;
+    }
     status_bar::render_status_bar(f, content_chunks[1], app);
 
     if app.is_entering_filter() {

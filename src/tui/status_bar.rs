@@ -18,6 +18,7 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         match tab.source.mode {
             ViewMode::Normal => "Normal",
             ViewMode::Filtered => "Filtered",
+            ViewMode::Aggregation => "Aggregation",
         },
         match &tab.source.filter.state {
             FilterState::Inactive => String::new(),
@@ -43,7 +44,23 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         .as_ref()
         .is_some_and(|(_, t)| t.elapsed().as_secs() < 3);
 
-    let bottom_line = if show_status_msg {
+    let bottom_line = if tab.source.mode == ViewMode::Aggregation {
+        if let Some(ref result) = tab.source.aggregation_result {
+            Line::from(vec![Span::styled(
+                format!(
+                    " Row {}/{} | Enter: drill down | Esc: back | / - re-filter",
+                    tab.aggregation_view.selected_row + 1,
+                    result.groups.len()
+                ),
+                Style::default().fg(Color::Magenta),
+            )])
+        } else {
+            Line::from(vec![Span::styled(
+                " Computing aggregation...",
+                Style::default().fg(Color::DarkGray),
+            )])
+        }
+    } else if show_status_msg {
         let msg = &app.status_message.as_ref().unwrap().0;
         Line::from(vec![Span::styled(
             format!(" {}", msg),

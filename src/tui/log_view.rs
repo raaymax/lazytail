@@ -246,6 +246,15 @@ fn build_title(tab: &TabState) -> String {
             )
         }
         (ViewMode::Filtered, None) => format!("{}{} (Filtered)", tab.source.name, path_suffix),
+        (ViewMode::Aggregation, Some(pattern)) => {
+            format!(
+                "{}{} (Aggregation: \"{}\")",
+                tab.source.name, path_suffix, pattern
+            )
+        }
+        (ViewMode::Aggregation, None) => {
+            format!("{}{} (Aggregation)", tab.source.name, path_suffix)
+        }
         (ViewMode::Normal, Some(_)) => format!("{}{}", tab.source.name, path_suffix),
     }
 }
