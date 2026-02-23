@@ -33,10 +33,17 @@ impl FilterOrchestrator {
 
         // Check for query syntax (json | ... or logfmt | ...)
         if query::is_query_syntax(&pattern) {
-            let filter_query = match query::parse_query(&pattern) {
+            let mut filter_query = match query::parse_query(&pattern) {
                 Ok(q) => q,
                 Err(_) => return,
             };
+
+            // Extract aggregation clause before building the filter
+            if let Some(agg) = filter_query.aggregate.take() {
+                source.filter.pending_aggregation = Some((agg, filter_query.parser.clone()));
+            } else {
+                source.filter.pending_aggregation = None;
+            }
 
             let query_filter = match query::QueryFilter::new(filter_query.clone()) {
                 Ok(f) => f,
@@ -47,6 +54,9 @@ impl FilterOrchestrator {
             Self::execute(source, filter, Some(&filter_query), range);
             return;
         }
+
+        // Non-query filters clear any pending aggregation
+        source.filter.pending_aggregation = None;
 
         let case_sensitive = mode.is_case_sensitive();
         let is_regex = mode.is_regex();

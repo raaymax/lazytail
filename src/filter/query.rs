@@ -98,6 +98,7 @@ impl<'a> QueryTextParser<'a> {
 
         // Parse filter expressions separated by |
         let mut filters = Vec::new();
+        let mut aggregate = None;
 
         self.skip_whitespace();
         while self.pos < self.input.len() {
@@ -117,6 +118,36 @@ impl<'a> QueryTextParser<'a> {
 
             self.skip_whitespace();
 
+            // Check for aggregation clause before filter
+            if self.peek_word("count") {
+                let fields = self.parse_count_by()?;
+                self.skip_whitespace();
+
+                // Optionally consume `| top N`
+                let limit = if self.peek_char() == Some('|') {
+                    let saved_pos = self.pos;
+                    self.consume_char('|');
+                    self.skip_whitespace();
+                    match self.parse_top_clause() {
+                        Some(n) => Some(n),
+                        None => {
+                            // Not a top clause, rewind
+                            self.pos = saved_pos;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                aggregate = Some(Aggregation {
+                    agg_type: AggregationType::CountBy,
+                    fields,
+                    limit,
+                });
+                break;
+            }
+
             // Parse filter expression
             if self.pos < self.input.len() {
                 let filter = self.parse_filter()?;
@@ -129,7 +160,8 @@ impl<'a> QueryTextParser<'a> {
         Ok(FilterQuery {
             parser,
             filters,
-            exclude: Vec::new(),
+            exclude: vec![],
+            aggregate,
         })
     }
 
@@ -340,6 +372,103 @@ impl<'a> QueryTextParser<'a> {
         }
         false
     }
+
+    /// Peek whether the next word matches without consuming.
+    fn peek_word(&self, word: &str) -> bool {
+        let rest = &self.input[self.pos..];
+        if rest.starts_with(word) {
+            let after_pos = word.len();
+            if after_pos >= rest.len() {
+                return true;
+            }
+            let next_char = rest[after_pos..].chars().next().unwrap();
+            return next_char.is_whitespace() || next_char == '|' || next_char == '(';
+        }
+        false
+    }
+
+    /// Parse `count by (field1, field2, ...)`.
+    fn parse_count_by(&mut self) -> Result<Vec<String>, QueryParseError> {
+        if !self.consume_word("count") {
+            return Err(QueryParseError {
+                message: "Expected 'count'".to_string(),
+                position: self.pos,
+            });
+        }
+        self.skip_whitespace();
+
+        if !self.consume_word("by") {
+            return Err(QueryParseError {
+                message: "Expected 'by' after 'count'".to_string(),
+                position: self.pos,
+            });
+        }
+        self.skip_whitespace();
+
+        self.parse_field_list()
+    }
+
+    /// Parse a parenthesized, comma-separated list of field names.
+    fn parse_field_list(&mut self) -> Result<Vec<String>, QueryParseError> {
+        if !self.consume_char('(') {
+            return Err(QueryParseError {
+                message: "Expected '(' after 'by'".to_string(),
+                position: self.pos,
+            });
+        }
+
+        let mut fields = Vec::new();
+        loop {
+            self.skip_whitespace();
+            let field = self.parse_field()?;
+            fields.push(field);
+            self.skip_whitespace();
+
+            if self.consume_char(')') {
+                break;
+            }
+            if !self.consume_char(',') {
+                return Err(QueryParseError {
+                    message: "Expected ',' or ')' in field list".to_string(),
+                    position: self.pos,
+                });
+            }
+        }
+
+        if fields.is_empty() {
+            return Err(QueryParseError {
+                message: "Expected at least one field in 'count by'".to_string(),
+                position: self.pos,
+            });
+        }
+
+        Ok(fields)
+    }
+
+    /// Try to parse `top N`, returning Some(N) on success.
+    fn parse_top_clause(&mut self) -> Option<usize> {
+        if !self.peek_word("top") {
+            return None;
+        }
+        self.consume_word("top");
+        self.skip_whitespace();
+
+        let start = self.pos;
+        while self.pos < self.input.len() {
+            let ch = self.input[self.pos..].chars().next().unwrap();
+            if ch.is_ascii_digit() {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+
+        if self.pos == start {
+            return None;
+        }
+
+        self.input[start..self.pos].parse::<usize>().ok()
+    }
 }
 
 // ============================================================================
@@ -349,7 +478,7 @@ impl<'a> QueryTextParser<'a> {
 /// Parse a logfmt line into key-value pairs.
 ///
 /// Logfmt format: `key=value key2="quoted value" key3=unquoted`
-fn parse_logfmt(line: &str) -> HashMap<String, String> {
+pub(crate) fn parse_logfmt(line: &str) -> HashMap<String, String> {
     let mut result = HashMap::new();
     let mut chars = line.char_indices().peekable();
 
@@ -474,6 +603,28 @@ pub struct ExcludePattern {
     pub pattern: String,
 }
 
+/// Aggregation type for grouped results.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregationType {
+    /// Count lines grouped by field values.
+    CountBy,
+}
+
+/// Aggregation clause for grouped query results.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct Aggregation {
+    /// Type of aggregation to perform (used by serde for deserialization dispatch).
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    pub agg_type: AggregationType,
+    /// Fields to group by.
+    pub fields: Vec<String>,
+    /// Optional limit on number of groups returned (top N).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
 /// Complete query definition for structured log filtering.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct FilterQuery {
@@ -488,6 +639,10 @@ pub struct FilterQuery {
     /// Exclusion patterns (any match excludes the line).
     #[serde(default)]
     pub exclude: Vec<ExcludePattern>,
+
+    /// Optional aggregation clause for grouped results.
+    #[serde(default)]
+    pub aggregate: Option<Aggregation>,
 }
 
 impl FilterQuery {
@@ -564,6 +719,25 @@ pub struct QueryFilter {
     not_regex_patterns: Vec<Option<Regex>>,
 }
 
+/// Extract a field value from a JSON object.
+///
+/// Supports dot notation for nested field access: "user.id" -> json["user"]["id"]
+pub(crate) fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<String> {
+    let mut current = json;
+
+    for part in field.split('.') {
+        current = current.get(part)?;
+    }
+
+    Some(match current {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => current.to_string(),
+    })
+}
+
 impl QueryFilter {
     /// Create a new QueryFilter from a FilterQuery.
     ///
@@ -598,27 +772,6 @@ impl QueryFilter {
             query,
             filter_regexes,
             not_regex_patterns,
-        })
-    }
-
-    /// Extract a field value from a JSON object.
-    ///
-    /// Supports dot notation for nested field access: "user.id" -> json["user"]["id"]
-    fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<String> {
-        let mut current = json;
-
-        // Handle nested field access via dot notation
-        for part in field.split('.') {
-            current = current.get(part)?;
-        }
-
-        Some(match current {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::Bool(b) => b.to_string(),
-            serde_json::Value::Null => "null".to_string(),
-            // For arrays and objects, use JSON representation
-            _ => current.to_string(),
         })
     }
 
@@ -663,7 +816,7 @@ impl QueryFilter {
     /// Check if a line matches all exclusion patterns.
     fn matches_exclude(&self, json: &serde_json::Value) -> bool {
         for exclude in &self.query.exclude {
-            if let Some(field_value) = Self::extract_json_field(json, &exclude.field) {
+            if let Some(field_value) = extract_json_field(json, &exclude.field) {
                 if field_value.contains(&exclude.pattern) {
                     return true;
                 }
@@ -695,7 +848,7 @@ impl Filter for QueryFilter {
 
                 // All filters must match (AND logic)
                 for (i, filter) in self.query.filters.iter().enumerate() {
-                    let field_value = match Self::extract_json_field(&json, &filter.field) {
+                    let field_value = match extract_json_field(&json, &filter.field) {
                         Some(v) => v,
                         None => return false, // Missing field = no match
                     };
@@ -844,6 +997,7 @@ mod tests {
                 value: "error".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -863,6 +1017,7 @@ mod tests {
                 value: "debug".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -882,6 +1037,7 @@ mod tests {
                 value: "fail".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -901,6 +1057,7 @@ mod tests {
                 value: "^api-.*".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -920,6 +1077,7 @@ mod tests {
                 value: "^test-.*".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -938,6 +1096,7 @@ mod tests {
                 value: "400".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -957,6 +1116,7 @@ mod tests {
                 value: "10".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -977,6 +1137,7 @@ mod tests {
                 value: "1000".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -996,6 +1157,7 @@ mod tests {
                 value: "5".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1022,6 +1184,7 @@ mod tests {
                 },
             ],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1045,6 +1208,7 @@ mod tests {
                 field: "msg".to_string(),
                 pattern: "ignore".to_string(),
             }],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1059,6 +1223,7 @@ mod tests {
             parser: Parser::Raw,
             filters: vec![],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1078,6 +1243,7 @@ mod tests {
                 value: "error".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1097,6 +1263,7 @@ mod tests {
                 value: "error".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1116,6 +1283,7 @@ mod tests {
                 value: "[invalid".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let result = QueryFilter::new(query);
@@ -1133,6 +1301,7 @@ mod tests {
                 value: "true".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1151,6 +1320,7 @@ mod tests {
                 value: "null".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1169,6 +1339,7 @@ mod tests {
                 value: "alice".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1395,6 +1566,7 @@ mod tests {
                 value: "123".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1414,6 +1586,7 @@ mod tests {
                 value: "Bearer token".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1450,6 +1623,7 @@ mod tests {
                 value: "error".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
 
         let filter = QueryFilter::new(query).unwrap();
@@ -1541,6 +1715,7 @@ mod tests {
             parser: Parser::Raw,
             filters: vec![],
             exclude: vec![],
+            aggregate: None,
         };
         assert!(query.index_mask().is_none());
     }
@@ -1571,6 +1746,7 @@ mod tests {
                 value: "err".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
         let (_, want) = query.index_mask().unwrap();
         assert_eq!(want & SEVERITY_MASK, SEVERITY_ERROR);
@@ -1584,6 +1760,7 @@ mod tests {
                 value: "WARNING".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
         let (_, want) = query.index_mask().unwrap();
         assert_eq!(want & SEVERITY_MASK, SEVERITY_WARN);
@@ -1597,6 +1774,7 @@ mod tests {
                 value: "critical".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
         let (_, want) = query.index_mask().unwrap();
         assert_eq!(want & SEVERITY_MASK, SEVERITY_FATAL);
@@ -1615,9 +1793,108 @@ mod tests {
                 value: "notice".to_string(),
             }],
             exclude: vec![],
+            aggregate: None,
         };
         let (mask, _want) = query.index_mask().unwrap();
         // No severity constraint since we can't map "notice"
         assert_eq!(mask & SEVERITY_MASK, 0);
+    }
+
+    // ========================================================================
+    // Aggregation Parser Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_count_by_single_field() {
+        let query = parse_query("json | level == \"error\" | count by (service)").unwrap();
+        assert_eq!(query.parser, Parser::Json);
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.agg_type, AggregationType::CountBy);
+        assert_eq!(agg.fields, vec!["service"]);
+        assert!(agg.limit.is_none());
+    }
+
+    #[test]
+    fn test_parse_count_by_multiple_fields() {
+        let query = parse_query("json | count by (service, level)").unwrap();
+        assert_eq!(query.parser, Parser::Json);
+        assert!(query.filters.is_empty());
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.fields, vec!["service", "level"]);
+    }
+
+    #[test]
+    fn test_parse_count_by_with_top() {
+        let query = parse_query("json | count by (level) | top 5").unwrap();
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.fields, vec!["level"]);
+        assert_eq!(agg.limit, Some(5));
+    }
+
+    #[test]
+    fn test_parse_count_by_no_filters() {
+        let query = parse_query("json | count by (service)").unwrap();
+        assert!(query.filters.is_empty());
+        assert!(query.aggregate.is_some());
+    }
+
+    #[test]
+    fn test_parse_count_by_logfmt() {
+        let query = parse_query("logfmt | level == error | count by (service)").unwrap();
+        assert_eq!(query.parser, Parser::Logfmt);
+        assert_eq!(query.filters.len(), 1);
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.fields, vec!["service"]);
+    }
+
+    #[test]
+    fn test_has_aggregation() {
+        let query = parse_query("json | count by (service)").unwrap();
+        assert!(query.aggregate.is_some());
+
+        let query = parse_query("json | level == \"error\"").unwrap();
+        assert!(query.aggregate.is_none());
+    }
+
+    #[test]
+    fn test_aggregation_json_deserialize() {
+        let json = r#"{
+            "parser": "json",
+            "filters": [],
+            "aggregate": {
+                "type": "count_by",
+                "fields": ["service"],
+                "limit": 10
+            }
+        }"#;
+        let query: FilterQuery = serde_json::from_str(json).unwrap();
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.agg_type, AggregationType::CountBy);
+        assert_eq!(agg.fields, vec!["service"]);
+        assert_eq!(agg.limit, Some(10));
+    }
+
+    #[test]
+    fn test_aggregation_json_deserialize_no_limit() {
+        let json = r#"{
+            "parser": "json",
+            "aggregate": {
+                "type": "count_by",
+                "fields": ["service", "level"]
+            }
+        }"#;
+        let query: FilterQuery = serde_json::from_str(json).unwrap();
+        let agg = query.aggregate.unwrap();
+        assert_eq!(agg.fields, vec!["service", "level"]);
+        assert!(agg.limit.is_none());
+    }
+
+    #[test]
+    fn test_aggregation_json_deserialize_absent() {
+        let json = r#"{"parser": "json"}"#;
+        let query: FilterQuery = serde_json::from_str(json).unwrap();
+        assert!(query.aggregate.is_none());
     }
 }

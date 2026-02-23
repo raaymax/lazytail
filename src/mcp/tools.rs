@@ -424,6 +424,43 @@ impl LazyTailMcp {
         format_search(&response, output)
     }
 
+    /// Build an aggregation response from matching indices.
+    fn build_aggregation_response(
+        path: &Path,
+        matching_indices: &[usize],
+        lines_searched: usize,
+        aggregation: &crate::filter::query::Aggregation,
+        parser: &crate::filter::query::Parser,
+        output: OutputFormat,
+    ) -> String {
+        let mut reader = match FileReader::new(path) {
+            Ok(r) => r,
+            Err(e) => return error_response(format!("Failed to open file: {}", e)),
+        };
+
+        let result = crate::filter::aggregation::AggregationResult::compute(
+            &mut reader,
+            matching_indices,
+            aggregation,
+            parser,
+        );
+
+        let response = AggregationResponse {
+            groups: result
+                .groups
+                .iter()
+                .map(|g| AggregationGroupInfo {
+                    key: g.key.iter().cloned().collect(),
+                    count: g.count,
+                })
+                .collect(),
+            total_matches: result.total_matches,
+            lines_searched,
+        };
+
+        format::format_aggregation(&response, output)
+    }
+
     pub(crate) fn query_impl(
         path: &Path,
         query: crate::filter::query::FilterQuery,
@@ -435,9 +472,15 @@ impl LazyTailMcp {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
+        // Extract aggregation before filtering (filter operates without aggregate clause)
+        let aggregate = query.aggregate.clone();
+        let parser = query.parser.clone();
+        let mut filter_query = query;
+        filter_query.aggregate = None;
+
         let index = IndexReader::open(path);
 
-        let query_filter = match QueryFilter::new(query.clone()) {
+        let query_filter = match QueryFilter::new(filter_query.clone()) {
             Ok(f) => f,
             Err(e) => return error_response(format!("Invalid query: {}", e)),
         };
@@ -447,7 +490,7 @@ impl LazyTailMcp {
         let rx = match SearchEngine::search_file(
             path,
             filter,
-            Some(&query),
+            Some(&filter_query),
             index.as_ref(),
             None,
             CancelToken::new(),
@@ -462,6 +505,18 @@ impl LazyTailMcp {
             Ok(r) => r,
             Err(e) => return error_response(format!("Query error: {}", e)),
         };
+
+        // If aggregation is requested, compute and return aggregation response
+        if let Some(agg) = aggregate {
+            return Self::build_aggregation_response(
+                path,
+                &matching_indices,
+                lines_searched,
+                &agg,
+                &parser,
+                output,
+            );
+        }
 
         Self::build_search_response(
             path,
@@ -735,7 +790,7 @@ impl LazyTailMcp {
 
     /// Search for patterns in a lazytail source using plain text, regex, or structured query.
     #[tool(
-        description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000). Also supports structured queries via the `query` parameter for field-based filtering on JSON/logfmt logs (LogQL-style). When `query` is provided, pattern/mode/case_sensitive are ignored. Query example: {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. Operators: eq, ne, regex, not_regex, contains, gt, lt, gte, lte. Parsers: json, logfmt. Supports nested fields via dot notation (e.g. \"user.id\") and exclusion patterns."
+        description = "Search for patterns in a lazytail-captured log source. Supports plain text (default) or regex mode. Returns matching lines with optional context lines before/after each match. Pass a source name from list_sources. Use context_lines parameter to see surrounding log entries. Returns up to max_results matches (default 100, max 1000). Also supports structured queries via the `query` parameter for field-based filtering on JSON/logfmt logs (LogQL-style). When `query` is provided, pattern/mode/case_sensitive are ignored. Query example: {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. Operators: eq, ne, regex, not_regex, contains, gt, lt, gte, lte. Parsers: json, logfmt. Supports nested fields via dot notation (e.g. \"user.id\") and exclusion patterns. Aggregation: add an \"aggregate\" field to the query to group and count results. Example: {\"parser\": \"json\", \"aggregate\": {\"type\": \"count_by\", \"fields\": [\"level\"], \"limit\": 10}}. Returns groups sorted by count descending."
     )]
     fn search(&self, #[tool(aggr)] req: SearchRequest) -> String {
         let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
@@ -876,7 +931,9 @@ impl ServerHandler for LazyTailMcp {
                  and global (~/.config/lazytail/data/) directories. Project sources shadow global ones with the same name. \
                  The search tool also supports structured queries via the `query` parameter for \
                  field-based filtering on JSON/logfmt logs (LogQL-style). Example query: \
-                 {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}."
+                 {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. \
+                 Queries support aggregation via the `aggregate` field for grouping and counting results. \
+                 Example: {\"parser\": \"json\", \"aggregate\": {\"type\": \"count_by\", \"fields\": [\"level\"]}}."
                     .into(),
             ),
             ..Default::default()

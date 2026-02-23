@@ -1,6 +1,8 @@
 use crate::app::{FilterState, ViewMode};
+use crate::filter::aggregation::AggregationResult;
 use crate::filter::cancel::CancelToken;
 use crate::filter::engine::FilterProgress;
+use crate::filter::query::{Aggregation, Parser};
 use crate::filter::FilterMode;
 use crate::index::reader::IndexReader;
 use crate::reader::LogReader;
@@ -107,6 +109,12 @@ pub struct FilterConfig {
     pub origin_line: Option<usize>,
     /// Flag to clear results when first partial results arrive (prevents blink)
     pub needs_clear: bool,
+    /// Pending aggregation to compute when filter completes
+    pub pending_aggregation: Option<(Aggregation, Parser)>,
+    /// Saved aggregation result for drill-down return
+    pub drill_down_aggregation: Option<AggregationResult>,
+    /// Saved filter pattern during drill-down
+    pub drill_down_pattern: Option<String>,
 }
 
 /// Domain-only state for a log source, shared across TUI/Web/MCP adapters.
@@ -143,6 +151,8 @@ pub struct LogSource {
     pub index_size: Option<u64>,
     /// Tracks line ingestion rate
     pub rate_tracker: LineRateTracker,
+    /// Aggregation result for grouped query views
+    pub aggregation_result: Option<AggregationResult>,
 }
 
 #[allow(dead_code)]

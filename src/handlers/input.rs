@@ -16,7 +16,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         InputMode::ZPending => handle_z_pending_mode(key),
         InputMode::SourcePanel => handle_source_panel_mode(key),
         InputMode::ConfirmClose => handle_confirm_close_mode(key),
-        InputMode::Normal => handle_normal_mode(key),
+        InputMode::Normal => handle_normal_mode(key, app),
     }
 }
 
@@ -137,7 +137,36 @@ fn handle_confirm_close_mode(key: KeyEvent) -> Vec<AppEvent> {
     }
 }
 
-fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
+/// Handle keyboard input in aggregation view mode
+fn handle_aggregation_mode(key: KeyEvent) -> Vec<AppEvent> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => vec![AppEvent::AggregationDown],
+        KeyCode::Char('k') | KeyCode::Up => vec![AppEvent::AggregationUp],
+        KeyCode::Enter => vec![AppEvent::AggregationDrillDown],
+        KeyCode::Esc => vec![AppEvent::AggregationBack],
+        KeyCode::Char('g') => vec![AppEvent::AggregationJumpToStart],
+        KeyCode::Char('G') => vec![AppEvent::AggregationJumpToEnd],
+        KeyCode::Char('/') => vec![AppEvent::StartFilterInput],
+        KeyCode::Char('q') => vec![AppEvent::Quit],
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::Quit]
+        }
+        KeyCode::Char('?') => vec![AppEvent::ShowHelp],
+        KeyCode::Tab => vec![AppEvent::FocusSourcePanel],
+        KeyCode::Char(c @ '1'..='9') => {
+            let index = (c as usize) - ('1' as usize);
+            vec![AppEvent::SelectTab(index)]
+        }
+        _ => vec![],
+    }
+}
+
+fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
+    // In aggregation mode, use aggregation-specific keybindings
+    if app.active_tab().source.mode == crate::app::ViewMode::Aggregation {
+        return handle_aggregation_mode(key);
+    }
+
     match key.code {
         KeyCode::Char('q') => vec![AppEvent::Quit],
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -251,6 +251,28 @@ pub enum SourceLocation {
     Global,
 }
 
+/// Information about a single aggregation group.
+#[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct AggregationGroupInfo {
+    /// Field name-value pairs forming the group key.
+    pub key: std::collections::HashMap<String, String>,
+    /// Number of matching lines in this group.
+    pub count: usize,
+}
+
+/// Response containing aggregation results.
+#[derive(Debug, Serialize, JsonSchema)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct AggregationResponse {
+    /// Groups sorted by count descending.
+    pub groups: Vec<AggregationGroupInfo>,
+    /// Total number of matching lines across all groups.
+    pub total_matches: usize,
+    /// Total lines searched in the file.
+    pub lines_searched: usize,
+}
+
 /// Request to get index stats for a lazytail source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetStatsRequest {

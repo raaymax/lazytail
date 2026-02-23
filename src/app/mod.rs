@@ -59,6 +59,7 @@ const MAX_HISTORY_ENTRIES: usize = 50;
 pub enum ViewMode {
     Normal,
     Filtered,
+    Aggregation,
 }
 
 /// Source type for categorizing tabs in the tree view
@@ -649,6 +650,82 @@ impl App {
         tab.source.filter.state = FilterState::Processing { lines_processed };
     }
 
+    /// Drill down into the selected aggregation group, showing its lines.
+    fn aggregation_drill_down(&mut self) {
+        let tab = self.active_tab_mut();
+        let selected = tab.aggregation_view.selected_row;
+
+        if let Some(result) = tab.source.aggregation_result.take() {
+            if let Some(group) = result.groups.get(selected) {
+                // Build display pattern from group key
+                let drill_pattern = group
+                    .key
+                    .iter()
+                    .map(|(name, value)| format!("{} == \"{}\"", name, value))
+                    .collect::<Vec<_>>()
+                    .join(" & ");
+
+                // Save current state for returning
+                tab.source.filter.drill_down_pattern = tab.source.filter.pattern.clone();
+
+                // Set the group's line indices as the visible lines
+                tab.source.line_indices = group.line_indices.clone();
+                tab.source.mode = ViewMode::Filtered;
+                tab.source.filter.pattern = Some(drill_pattern);
+                tab.source.filter.state = FilterState::Complete {
+                    matches: tab.source.line_indices.len(),
+                };
+
+                // Save aggregation for back navigation
+                tab.source.filter.drill_down_aggregation = Some(result);
+
+                // Reset viewport to start
+                let indices = tab.source.line_indices.clone();
+                tab.viewport.jump_to_start(&indices);
+            } else {
+                // Put it back if no valid group
+                tab.source.aggregation_result = Some(result);
+            }
+        }
+    }
+
+    /// Return from drill-down to aggregation view, or clear filter entirely.
+    fn aggregation_back(&mut self) {
+        let tab = self.active_tab_mut();
+
+        if let Some(result) = tab.source.filter.drill_down_aggregation.take() {
+            // Restore aggregation view
+            tab.source.filter.pattern = tab.source.filter.drill_down_pattern.take();
+            tab.source.aggregation_result = Some(result);
+            tab.source.mode = ViewMode::Aggregation;
+        } else {
+            // No drill-down state — clear filter entirely
+            tab.clear_filter();
+        }
+    }
+
+    /// Compute aggregation if pending_aggregation is set on the active tab.
+    fn maybe_compute_aggregation(&mut self) {
+        let tab = self.active_tab_mut();
+        if let Some((ref agg, ref parser)) = tab.source.filter.pending_aggregation {
+            let agg = agg.clone();
+            let parser = parser.clone();
+            let indices = tab.source.line_indices.clone();
+            let mut reader = tab.source.reader.lock().unwrap();
+            let result = crate::filter::aggregation::AggregationResult::compute(
+                &mut *reader,
+                &indices,
+                &agg,
+                &parser,
+            );
+            drop(reader);
+            let tab = self.active_tab_mut();
+            tab.source.aggregation_result = Some(result);
+            tab.source.mode = ViewMode::Aggregation;
+            tab.aggregation_view = tab::AggregationViewState::default();
+        }
+    }
+
     /// Clear filter
     pub fn clear_filter(&mut self) {
         self.active_tab_mut().clear_filter();
@@ -1052,6 +1129,8 @@ impl App {
             } => {
                 // Merge partial results for immediate display
                 self.merge_partial_filter_results(matches, lines_processed);
+                // Live-update aggregation during filtering
+                self.maybe_compute_aggregation();
             }
             AppEvent::FilterComplete {
                 indices,
@@ -1069,7 +1148,13 @@ impl App {
                         .unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
-                if self.active_tab().source.follow_mode {
+
+                // Compute aggregation if pending
+                self.maybe_compute_aggregation();
+
+                if self.active_tab().source.follow_mode
+                    && self.active_tab().source.mode != ViewMode::Aggregation
+                {
                     self.jump_to_end();
                 }
             }
@@ -1144,6 +1229,42 @@ impl App {
             AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
             AppEvent::DisableFollowMode => {
                 self.active_tab_mut().source.follow_mode = false;
+            }
+
+            // Aggregation navigation events
+            AppEvent::AggregationDown => {
+                let tab = self.active_tab_mut();
+                if let Some(ref result) = tab.source.aggregation_result {
+                    let max = result.groups.len().saturating_sub(1);
+                    if tab.aggregation_view.selected_row < max {
+                        tab.aggregation_view.selected_row += 1;
+                    }
+                }
+                self.active_tab_mut().aggregation_view.ensure_visible();
+            }
+            AppEvent::AggregationUp => {
+                let tab = self.active_tab_mut();
+                tab.aggregation_view.selected_row =
+                    tab.aggregation_view.selected_row.saturating_sub(1);
+                tab.aggregation_view.ensure_visible();
+            }
+            AppEvent::AggregationJumpToStart => {
+                let tab = self.active_tab_mut();
+                tab.aggregation_view.selected_row = 0;
+                tab.aggregation_view.scroll_offset = 0;
+            }
+            AppEvent::AggregationJumpToEnd => {
+                let tab = self.active_tab_mut();
+                if let Some(ref result) = tab.source.aggregation_result {
+                    tab.aggregation_view.selected_row = result.groups.len().saturating_sub(1);
+                }
+                self.active_tab_mut().aggregation_view.ensure_visible();
+            }
+            AppEvent::AggregationDrillDown => {
+                self.aggregation_drill_down();
+            }
+            AppEvent::AggregationBack => {
+                self.aggregation_back();
             }
 
             // System events

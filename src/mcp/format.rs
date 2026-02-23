@@ -9,7 +9,10 @@
 
 use std::fmt::Write;
 
-use super::types::{GetContextResponse, GetLinesResponse, GetStatsResponse, SearchResponse};
+use super::types::{
+    AggregationResponse, GetContextResponse, GetLinesResponse, GetStatsResponse, OutputFormat,
+    SearchResponse,
+};
 
 /// Format a GetLinesResponse (used by get_lines and get_tail) as plain text.
 pub fn format_lines_text(resp: &GetLinesResponse) -> String {
@@ -143,6 +146,32 @@ pub fn format_stats_text(resp: &GetStatsResponse) -> String {
     }
 
     out
+}
+
+/// Format an AggregationResponse as plain text.
+pub fn format_aggregation_text(resp: &AggregationResponse) -> String {
+    let mut out = String::with_capacity(resp.groups.len() * 80 + 128);
+    writeln!(out, "--- total_matches: {}", resp.total_matches).unwrap();
+    writeln!(out, "--- lines_searched: {}", resp.lines_searched).unwrap();
+    writeln!(out, "--- groups: {}", resp.groups.len()).unwrap();
+    out.push('\n');
+
+    for g in &resp.groups {
+        let mut parts: Vec<String> = g.key.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        parts.sort();
+        writeln!(out, "{} | count={}", parts.join(", "), g.count).unwrap();
+    }
+
+    out
+}
+
+/// Format an AggregationResponse according to the requested output format.
+pub fn format_aggregation(resp: &AggregationResponse, output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Text => format_aggregation_text(resp),
+        OutputFormat::Json => serde_json::to_string_pretty(resp)
+            .unwrap_or_else(|e| format!("Error serializing response: {}", e)),
+    }
 }
 
 #[cfg(test)]

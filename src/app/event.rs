@@ -113,6 +113,14 @@ pub enum AppEvent {
     ToggleLineExpansion, // Toggle expansion of currently selected line
     CollapseAll,         // Collapse all expanded lines
 
+    // Aggregation events
+    AggregationDown,
+    AggregationUp,
+    AggregationDrillDown,
+    AggregationBack,
+    AggregationJumpToStart,
+    AggregationJumpToEnd,
+
     // Mouse events
     MouseClick {
         column: u16,
