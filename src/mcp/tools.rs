@@ -303,8 +303,8 @@ impl LazyTailMcp {
         let total = reader.total_lines();
 
         let (start, end, has_more) = if let Some(since) = since_line {
-            let start = since + 1;
-            let end = (start + count).min(total);
+            let start = since.saturating_add(1);
+            let end = start.saturating_add(count).min(total);
             let has_more = end < total;
             (start, end, has_more)
         } else {
