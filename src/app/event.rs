@@ -87,6 +87,8 @@ pub enum AppEvent {
     // Help mode
     ShowHelp,
     HideHelp,
+    ScrollHelpDown,
+    ScrollHelpUp,
 
     // Line jump events
     StartLineJumpInput,
