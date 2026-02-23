@@ -123,10 +123,16 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                         let num_style = severity_color
                             .map(|bg| Style::default().bg(bg))
                             .unwrap_or_default();
-                        wrapped_line.spans.insert(0, Span::styled(line_sep_part, Style::default()));
-                        wrapped_line.spans.insert(0, Span::styled(line_num_part.clone(), num_style));
+                        wrapped_line
+                            .spans
+                            .insert(0, Span::styled(line_sep_part, Style::default()));
+                        wrapped_line
+                            .spans
+                            .insert(0, Span::styled(line_num_part.clone(), num_style));
                     } else {
-                        wrapped_line.spans.insert(0, Span::raw(" ".repeat(prefix_width)));
+                        wrapped_line
+                            .spans
+                            .insert(0, Span::raw(" ".repeat(prefix_width)));
                     }
 
                     // Apply styling based on selection/expansion state

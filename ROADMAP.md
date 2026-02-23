@@ -842,6 +842,19 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 ---
 
+#### Scrollable Help Overlay
+**Goal:** Make the help overlay scrollable so all keybindings are visible on small terminals
+
+**Problem:** The help text can exceed the terminal height, cutting off entries at the bottom.
+
+**Tasks:**
+- [ ] Track a scroll offset for the help overlay
+- [ ] Handle `j`/`k` and `↑`/`↓` to scroll while help is open
+- [ ] Show a scroll indicator (e.g. `↓ more` at the bottom)
+- [ ] Clamp scroll so the last line stays visible
+
+---
+
 #### Structured Logging & Debug Instrumentation 🔴 HIGH PRIORITY
 **Goal:** Add comprehensive logging to debug what LazyTail is doing internally
 

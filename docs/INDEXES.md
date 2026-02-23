@@ -22,7 +22,7 @@ LazyTail builds persistent columnar indexes alongside log files to enable sub-mi
 ```
 .lazytail/idx/{source_name}/
   meta          64 bytes     header with structural info
-  checkpoints   [Checkpoint; M]  64B per entry, one per 100K lines
+  checkpoints   [Checkpoint; M]  64B per entry, one per 100 lines (default)
   offsets       [u64; N]     8B/line   byte offset into log file
   lengths       [u32; N]     4B/line   line length in bytes
   time          [u64; N]     8B/line   arrival/parsed timestamp (epoch millis)
@@ -30,7 +30,7 @@ LazyTail builds persistent columnar indexes alongside log files to enable sub-mi
   templates     [u16; N]     2B/line   Drain cluster ID (future)
 ```
 
-Dense column files are raw typed arrays with no framing. Line `i`'s flags = `flags_mmap[i]`. Missing file = column not yet built. The `checkpoints` file is sparse (one entry per 100K lines) and handles validation, partial rebuild, and cumulative stats.
+Dense column files are raw typed arrays with no framing. Line `i`'s flags = `flags_mmap[i]`. Missing file = column not yet built. The `checkpoints` file is sparse (one entry per `checkpoint_interval` lines, default 100) and handles validation, partial rebuild, and cumulative stats.
 
 ---
 
@@ -40,7 +40,7 @@ Dense column files are raw typed arrays with no framing. Line `i`'s flags = `fla
 offset  size  field
 0       4     magic: [u8; 4] = b"LTIX"
 4       2     version: u16 = 1
-6       2     checkpoint_interval: u16    — in thousands (e.g., 100 = every 100K lines)
+6       2     checkpoint_interval: u16    — lines between checkpoints (default: 100)
 8       8     entry_count: u64            — total indexed lines
 16      8     log_file_size: u64          — expected log file size
 24      8     columns_present: u64        — bitmask of which column files exist
@@ -63,7 +63,7 @@ Fast way to know what's available without filesystem stat calls per column.
 
 ## Checkpoints File
 
-Sparse column — one entry per `checkpoint_interval` lines (default: 100K). Each entry is 64 bytes:
+Sparse column — one entry per `checkpoint_interval` lines (default: 100). Each entry is 64 bytes:
 
 ```
 offset  size  field
@@ -75,7 +75,9 @@ offset  size  field
 60      4     reserved: u32
 ```
 
-For 60M lines at 100K interval = **600 entries = 38 KB**.
+For 60M lines at default interval (100) = **600K entries = ~37 MB**.
+
+**Note on severity counts:** The TUI stats panel and MCP `get_stats` compute live severity counts directly from the `flags` column (not checkpoints) for immediate updates. Checkpoint severity counts are cumulative snapshots used for ingestion rate calculation (comparing timestamps between the last two checkpoints).
 
 ### Granular Stale Detection
 

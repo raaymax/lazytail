@@ -826,7 +826,7 @@ impl LazyTailMcp {
 
     /// Get index statistics for a lazytail source.
     #[tool(
-        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, and severity breakdown (from checkpoint data). Useful for understanding log composition before searching. Pass a source name from list_sources."
+        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, severity breakdown (from flags column), and recent ingestion rate (lines/sec from checkpoint timestamps). Useful for understanding log composition before searching. Pass a source name from list_sources."
     )]
     fn get_stats(&self, #[tool(aggr)] req: GetStatsRequest) -> String {
         let path = match source::resolve_source_for_context(&req.source, &self.discovery) {
