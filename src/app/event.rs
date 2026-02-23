@@ -113,6 +113,12 @@ pub enum AppEvent {
     ToggleLineExpansion, // Toggle expansion of currently selected line
     CollapseAll,         // Collapse all expanded lines
 
+    // Mouse events
+    MouseClick {
+        column: u16,
+        row: u16,
+    },
+
     // System events
     Quit,
 }

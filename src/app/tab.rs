@@ -681,6 +681,12 @@ impl TabState {
         self.sync_from_viewport();
     }
 
+    /// Select a specific file line number (for mouse click handling)
+    pub fn select_line(&mut self, file_line: usize) {
+        self.viewport.jump_to_line(file_line);
+        self.sync_from_viewport();
+    }
+
     /// Toggle expansion state of the currently selected line
     pub fn toggle_expansion(&mut self) {
         if self.source.line_indices.is_empty() {

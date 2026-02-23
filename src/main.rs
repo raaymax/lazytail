@@ -908,6 +908,12 @@ fn collect_input_events<B: ratatui::backend::Backend>(
                     events.push(AppEvent::MouseScrollUp(scroll_count * MOUSE_SCROLL_LINES));
                     events.push(AppEvent::DisableFollowMode);
                 }
+                MouseEventKind::Down(crossterm_event::MouseButton::Left) => {
+                    events.push(AppEvent::MouseClick {
+                        column: mouse_event.column,
+                        row: mouse_event.row,
+                    });
+                }
                 _ => {}
             }
         }

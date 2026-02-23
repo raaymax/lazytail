@@ -17,6 +17,40 @@ use std::time::{Duration, Instant};
 /// Debounce delay for live filter preview (milliseconds)
 const FILTER_DEBOUNCE_MS: u64 = 500;
 
+/// Lightweight rectangle for storing layout areas (avoids ratatui dependency in app module)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayoutRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl LayoutRect {
+    /// Check if a point is inside the inner content area (excluding 1px borders on all sides)
+    fn contains_inner(&self, column: u16, row: u16) -> bool {
+        column > self.x
+            && column < self.x + self.width.saturating_sub(1)
+            && row > self.y
+            && row < self.y + self.height.saturating_sub(1)
+    }
+
+    /// Convert a terminal row to inner content row (0-indexed, relative to content start)
+    fn inner_row(&self, row: u16) -> usize {
+        (row - self.y - 1) as usize
+    }
+}
+
+/// Cached layout areas from the most recent render pass.
+/// Used by mouse click handling to resolve click targets.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayoutAreas {
+    /// The sources list area in the side panel (top portion)
+    pub side_panel_sources: LayoutRect,
+    /// The main log content area
+    pub log_view: LayoutRect,
+}
+
 /// Maximum number of filter history entries to keep
 const MAX_HISTORY_ENTRIES: usize = 50;
 
@@ -164,6 +198,9 @@ pub struct App {
 
     /// Verbose mode (-v flag)
     pub verbose: bool,
+
+    /// Cached layout areas from the most recent render pass
+    pub layout: LayoutAreas,
 }
 
 impl App {
@@ -206,6 +243,7 @@ impl App {
             startup_time: None,
             first_render_elapsed: None,
             verbose: false,
+            layout: LayoutAreas::default(),
         }
     }
 
@@ -327,15 +365,14 @@ impl App {
         }
     }
 
-    /// Navigate tree selection up or down
-    fn source_panel_navigate(&mut self, delta: i32) {
-        // Build flat list of navigable items
+    /// Build a flat list of navigable tree items (categories + expanded sources)
+    pub fn build_source_tree_items(&self) -> Vec<TreeSelection> {
         let categories = self.tabs_by_category();
         let mut items: Vec<TreeSelection> = Vec::new();
 
         for (cat, tab_indices) in &categories {
             if tab_indices.is_empty() {
-                continue; // Skip empty categories
+                continue;
             }
             items.push(TreeSelection::Category(*cat));
             let cat_idx = *cat as usize;
@@ -345,6 +382,13 @@ impl App {
                 }
             }
         }
+
+        items
+    }
+
+    /// Navigate tree selection up or down
+    fn source_panel_navigate(&mut self, delta: i32) {
+        let items = self.build_source_tree_items();
 
         if items.is_empty() {
             return;
@@ -1193,8 +1237,73 @@ impl App {
                 FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
             }
 
+            // Mouse events
+            AppEvent::MouseClick { column, row } => self.handle_mouse_click(column, row),
+
             // Stream events are handled directly in main loop, not here
             AppEvent::StreamData { .. } | AppEvent::StreamComplete => {}
+        }
+    }
+
+    /// Handle a mouse click at the given terminal coordinates
+    fn handle_mouse_click(&mut self, column: u16, row: u16) {
+        // Dismiss help overlay on any click
+        if self.help_scroll_offset.is_some() {
+            self.help_scroll_offset = None;
+            return;
+        }
+
+        // Ignore clicks during modal input modes
+        match self.input_mode {
+            InputMode::ConfirmClose
+            | InputMode::EnteringFilter
+            | InputMode::EnteringLineJump
+            | InputMode::ZPending => return,
+            _ => {}
+        }
+
+        let sp = self.layout.side_panel_sources;
+        let lv = self.layout.log_view;
+
+        // Hit test: side panel sources area (inner content, excluding borders)
+        if sp.contains_inner(column, row) {
+            let inner_row = sp.inner_row(row);
+            let items = self.build_source_tree_items();
+
+            if inner_row < items.len() {
+                match &items[inner_row] {
+                    TreeSelection::Category(cat) => {
+                        let idx = *cat as usize;
+                        self.source_panel.expanded[idx] = !self.source_panel.expanded[idx];
+                    }
+                    TreeSelection::Item(cat, idx) => {
+                        if let Some(tab_idx) = self.find_tab_index(*cat, *idx) {
+                            self.active_tab = tab_idx;
+                            self.input_mode = InputMode::Normal;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Hit test: log view area (inner content, excluding borders)
+        if lv.contains_inner(column, row) {
+            let inner_row = lv.inner_row(row);
+            let tab = self.active_tab_mut();
+            let scroll_pos = tab.viewport.scroll_position();
+            let target_index = scroll_pos + inner_row;
+
+            if target_index < tab.source.line_indices.len() {
+                let file_line = tab.source.line_indices[target_index];
+                tab.select_line(file_line);
+                tab.source.follow_mode = false;
+            }
+
+            // Return to normal mode if in source panel
+            if self.input_mode == InputMode::SourcePanel {
+                self.input_mode = InputMode::Normal;
+            }
         }
     }
 }
@@ -2120,6 +2229,191 @@ mod tests {
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.input_mode, InputMode::Normal);
         assert!(app.pending_close_tab.is_none());
+    }
+
+    #[test]
+    fn test_build_source_tree_items_returns_correct_items() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let file3 = create_temp_log_file(&["c"]);
+        let app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        let items = app.build_source_tree_items();
+        // All files go into the "File" category
+        // Should have: Category(File), Item(File, 0), Item(File, 1), Item(File, 2)
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0], TreeSelection::Category(SourceType::File));
+        assert_eq!(items[1], TreeSelection::Item(SourceType::File, 0));
+        assert_eq!(items[2], TreeSelection::Item(SourceType::File, 1));
+        assert_eq!(items[3], TreeSelection::Item(SourceType::File, 2));
+    }
+
+    #[test]
+    fn test_build_source_tree_items_respects_collapsed() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        // Collapse the File category
+        app.source_panel.expanded[SourceType::File as usize] = false;
+        let items = app.build_source_tree_items();
+        // Should only have the category header
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0], TreeSelection::Category(SourceType::File));
+    }
+
+    #[test]
+    fn test_mouse_click_side_panel_selects_tab() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(app.active_tab, 0);
+
+        // Set up layout areas as if render had run
+        // Side panel sources: starts at (0,0), width 32, height 20
+        app.layout.side_panel_sources = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 20,
+        };
+
+        // Tree items: row 0 = Category(File), row 1 = Item(File,0), row 2 = Item(File,1)
+        // Click on row 2 (Item(File,1)) - accounting for 1px top border, inner_row = row - (y+1)
+        // So to hit inner_row 2, click row = 0 + 1 + 2 = 3
+        app.apply_event(AppEvent::MouseClick { column: 5, row: 3 });
+
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.input_mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn test_mouse_click_side_panel_toggles_category() {
+        let file1 = create_temp_log_file(&["a"]);
+        let mut app = App::new(vec![file1.path().to_path_buf()], false).unwrap();
+
+        app.layout.side_panel_sources = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 20,
+        };
+
+        // Category header is at inner_row 0, so click row = 0 + 1 + 0 = 1
+        assert!(app.source_panel.expanded[SourceType::File as usize]);
+        app.apply_event(AppEvent::MouseClick { column: 5, row: 1 });
+        assert!(!app.source_panel.expanded[SourceType::File as usize]);
+
+        // Click again to expand
+        app.apply_event(AppEvent::MouseClick { column: 5, row: 1 });
+        assert!(app.source_panel.expanded[SourceType::File as usize]);
+    }
+
+    #[test]
+    fn test_mouse_click_log_view_selects_line() {
+        let temp_file = create_temp_log_file(&["line1", "line2", "line3", "line4", "line5"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Jump to start so scroll_position is 0
+        app.apply_event(AppEvent::JumpToStart);
+
+        // Set up layout: log view at (32, 0) with height 20
+        app.layout.log_view = LayoutRect {
+            x: 32,
+            y: 0,
+            width: 80,
+            height: 20,
+        };
+
+        // Click on inner_row 2 (third visible line) → row = 0 + 1 + 2 = 3
+        app.apply_event(AppEvent::MouseClick { column: 40, row: 3 });
+
+        // Should select the third line (index 2)
+        assert_eq!(app.active_tab().selected_line, 2);
+        assert!(!app.active_tab().source.follow_mode);
+    }
+
+    #[test]
+    fn test_mouse_click_dismisses_help() {
+        let temp_file = create_temp_log_file(&["line"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        // Show help
+        app.apply_event(AppEvent::ShowHelp);
+        assert!(app.help_scroll_offset.is_some());
+
+        // Click anywhere should dismiss
+        app.apply_event(AppEvent::MouseClick {
+            column: 10,
+            row: 10,
+        });
+        assert!(app.help_scroll_offset.is_none());
+    }
+
+    #[test]
+    fn test_mouse_click_ignored_during_filter_input() {
+        let temp_file = create_temp_log_file(&["line1", "line2"]);
+        let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
+
+        app.layout.log_view = LayoutRect {
+            x: 32,
+            y: 0,
+            width: 80,
+            height: 20,
+        };
+
+        // Enter filter mode
+        app.apply_event(AppEvent::StartFilterInput);
+        assert_eq!(app.input_mode, InputMode::EnteringFilter);
+
+        // Click should be ignored
+        app.apply_event(AppEvent::MouseClick { column: 40, row: 3 });
+        assert_eq!(app.input_mode, InputMode::EnteringFilter);
+    }
+
+    #[test]
+    fn test_mouse_click_ignored_during_confirm_close() {
+        let file1 = create_temp_log_file(&["line1"]);
+        let file2 = create_temp_log_file(&["line2"]);
+        let mut app = App::new(
+            vec![file1.path().to_path_buf(), file2.path().to_path_buf()],
+            false,
+        )
+        .unwrap();
+
+        app.layout.side_panel_sources = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 20,
+        };
+
+        // Trigger close confirmation
+        app.apply_event(AppEvent::CloseCurrentTab);
+        assert_eq!(app.input_mode, InputMode::ConfirmClose);
+
+        // Click should be ignored
+        let active_before = app.active_tab;
+        app.apply_event(AppEvent::MouseClick { column: 5, row: 3 });
+        assert_eq!(app.input_mode, InputMode::ConfirmClose);
+        assert_eq!(app.active_tab, active_before);
     }
 
     #[test]

@@ -97,6 +97,17 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from("  y             Copy line to clipboard"),
         Line::from(""),
         Line::from(vec![Span::styled(
+            "Mouse",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Click source     Switch to tab"),
+        Line::from("  Click log line   Select line"),
+        Line::from("  Scroll wheel     Scroll log view"),
+        Line::from("  Click category   Expand/collapse"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
             "Side Panel Indicators",
             Style::default()
                 .fg(Color::Cyan)
