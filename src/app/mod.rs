@@ -116,8 +116,8 @@ pub struct App {
     /// Should the app quit
     pub should_quit: bool,
 
-    /// Help overlay visible
-    pub show_help: bool,
+    /// Help overlay scroll offset (None = hidden, Some(n) = visible at offset n)
+    pub help_scroll_offset: Option<usize>,
 
     /// Filter history (up to 50 entries)
     filter_history: Vec<FilterHistoryEntry>,
@@ -190,7 +190,7 @@ impl App {
             input_buffer: String::new(),
             input_cursor: 0,
             should_quit: false,
-            show_help: false,
+            help_scroll_offset: None,
             filter_history: history::load_history(),
             history_index: None,
             current_filter_mode: FilterMode::default(),
@@ -1075,10 +1075,20 @@ impl App {
 
             // Help mode
             AppEvent::ShowHelp => {
-                self.show_help = true;
+                self.help_scroll_offset = Some(0);
             }
             AppEvent::HideHelp => {
-                self.show_help = false;
+                self.help_scroll_offset = None;
+            }
+            AppEvent::ScrollHelpDown => {
+                if let Some(offset) = &mut self.help_scroll_offset {
+                    *offset = offset.saturating_add(1);
+                }
+            }
+            AppEvent::ScrollHelpUp => {
+                if let Some(offset) = &mut self.help_scroll_offset {
+                    *offset = offset.saturating_sub(1);
+                }
             }
 
             // Line jump events
@@ -1205,7 +1215,7 @@ mod tests {
         assert_eq!(app.active_tab, 0);
         assert_eq!(app.active_tab().source.total_lines, 3);
         assert!(!app.should_quit);
-        assert!(!app.show_help);
+        assert!(app.help_scroll_offset.is_none());
     }
 
     #[test]
@@ -1413,15 +1423,15 @@ mod tests {
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
-        assert!(!app.show_help);
+        assert!(app.help_scroll_offset.is_none());
 
         // Show help
         app.apply_event(AppEvent::ShowHelp);
-        assert!(app.show_help);
+        assert!(app.help_scroll_offset.is_some());
 
         // Hide help
         app.apply_event(AppEvent::HideHelp);
-        assert!(!app.show_help);
+        assert!(app.help_scroll_offset.is_none());
     }
 
     #[test]

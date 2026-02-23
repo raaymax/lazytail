@@ -12,7 +12,7 @@ use ratatui::{
 const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
 const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
 
-pub(super) fn render_help_overlay(f: &mut Frame, area: Rect) {
+pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usize) {
     // Calculate centered popup area
     let popup_width = (area.width as f32 * HELP_POPUP_WIDTH_PERCENT) as u16;
     let popup_height = (area.height as f32 * HELP_POPUP_HEIGHT_PERCENT) as u16;
@@ -124,21 +124,40 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  q / Ctrl+C    Quit"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Press any key to close",
+            "j/k to scroll, any other key to close",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
         )]),
     ];
 
+    let total_lines = help_lines.len();
+    // Inner height = popup height - 2 (top/bottom border)
+    let inner_height = popup_height.saturating_sub(2) as usize;
+    // Clamp scroll offset so we don't scroll past the content
+    let max_scroll = total_lines.saturating_sub(inner_height);
+    let scroll = scroll_offset.min(max_scroll);
+
+    let has_more_above = scroll > 0;
+    let has_more_below = scroll < max_scroll;
+
+    // Build title with scroll indicators
+    let title = match (has_more_above, has_more_below) {
+        (true, true) => " Help ↑↓ ",
+        (true, false) => " Help ↑ ",
+        (false, true) => " Help ↓ ",
+        (false, false) => " Help ",
+    };
+
     let help_paragraph = Paragraph::new(help_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Help ")
+                .title(title)
                 .style(Style::default().bg(Color::Black)),
         )
-        .style(Style::default().bg(Color::Black).fg(Color::White));
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .scroll((scroll as u16, 0));
 
     // Clear the area first to remove background content
     f.render_widget(Clear, popup_area);

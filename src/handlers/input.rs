@@ -5,8 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Handle keyboard input and return corresponding events
 /// Does not mutate app state directly - returns events to be processed
 pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
-    // If help is showing, most keys just hide help (except quit)
-    if app.show_help {
+    // If help is showing, handle help navigation or hide
+    if app.help_scroll_offset.is_some() {
         return handle_help_mode(key);
     }
 
@@ -27,6 +27,8 @@ fn handle_help_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::Quit]
         }
+        KeyCode::Char('j') | KeyCode::Down => vec![AppEvent::ScrollHelpDown],
+        KeyCode::Char('k') | KeyCode::Up => vec![AppEvent::ScrollHelpUp],
         // Any other key hides help
         _ => vec![AppEvent::HideHelp],
     }
@@ -352,17 +354,32 @@ mod tests {
     #[test]
     fn test_hide_help_on_any_key() {
         let (mut app, _file) = create_test_app();
-        app.show_help = true;
+        app.help_scroll_offset = Some(0);
 
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        // j/k scroll, other keys hide
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::HideHelp]);
     }
 
     #[test]
+    fn test_scroll_help() {
+        let (mut app, _file) = create_test_app();
+        app.help_scroll_offset = Some(0);
+
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::ScrollHelpDown]);
+
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::ScrollHelpUp]);
+    }
+
+    #[test]
     fn test_quit_from_help_mode() {
         let (mut app, _file) = create_test_app();
-        app.show_help = true;
+        app.help_scroll_offset = Some(0);
 
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
