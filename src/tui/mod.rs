@@ -3,10 +3,10 @@ mod log_view;
 mod side_panel;
 mod status_bar;
 
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, LayoutRect};
 use anyhow::Result;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     widgets::Clear,
     Frame,
 };
@@ -19,7 +19,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
         .split(f.area());
 
     // Render side panel with tabs
-    let source_overflow = side_panel::render_side_panel(f, main_chunks[0], app);
+    let (sources_area, source_overflow) = side_panel::render_side_panel(f, main_chunks[0], app);
 
     // Content area layout
     let content_chunks = Layout::default()
@@ -34,6 +34,10 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
             }), // Input prompt
         ])
         .split(main_chunks[1]);
+
+    // Store layout areas for mouse click hit testing
+    app.layout.side_panel_sources = rect_to_layout(sources_area);
+    app.layout.log_view = rect_to_layout(content_chunks[0]);
 
     log_view::render_log_view(f, content_chunks[0], app)?;
     status_bar::render_status_bar(f, content_chunks[1], app);
@@ -61,4 +65,13 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn rect_to_layout(r: Rect) -> LayoutRect {
+    LayoutRect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+    }
 }

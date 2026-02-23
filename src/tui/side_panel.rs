@@ -13,7 +13,7 @@ pub(super) fn render_side_panel(
     f: &mut Frame,
     area: Rect,
     app: &App,
-) -> Option<(Line<'static>, Rect)> {
+) -> (Rect, Option<(Line<'static>, Rect)>) {
     // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
     let tab = app.active_tab();
     let is_filtered = tab.source.filter.pattern.is_some();
@@ -40,13 +40,15 @@ pub(super) fn render_side_panel(
         .constraints([Constraint::Min(3), Constraint::Length(stats_height)])
         .split(area);
 
+    let sources_area = chunks[0];
+
     // Render sources list
-    let overflow = render_sources_list(f, chunks[0], app);
+    let overflow = render_sources_list(f, sources_area, app);
 
     // Render stats panel
     render_stats_panel(f, chunks[1], app);
 
-    overflow
+    (sources_area, overflow)
 }
 
 /// Build a source line with indicators (loading, filter, follow, status)
