@@ -310,6 +310,9 @@ impl LogReader for FileReader {
         if new_size >= self.scanned_up_to {
             // File grew — refresh columnar offsets from the index that
             // capture is building in real-time, then scan only the unindexed tail.
+            // SAFETY: columnar_offsets mmap is protected from concurrent truncation
+            // by IndexWriteLock — only one writer runs at a time, and a truncating
+            // writer would change the log file size, triggering the shrink branch below.
             self.try_refresh_columnar_offsets();
             let old_lines = self.sparse_index.total_lines();
             self.scan_tail(old_lines, self.scanned_up_to)

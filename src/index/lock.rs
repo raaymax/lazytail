@@ -31,13 +31,4 @@ impl IndexWriteLock {
         Ok(Some(Self { _file: file }))
     }
 }
-
-#[cfg(unix)]
-impl Drop for IndexWriteLock {
-    fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd;
-        unsafe {
-            libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
-}
+// No explicit Drop needed — closing the File fd automatically releases the flock.

@@ -19,7 +19,7 @@ mod watcher;
 mod web;
 
 use anyhow::{Context, Result};
-use app::{App, AppEvent, SourceType, StreamMessage, TabState};
+use app::{App, AppEvent, FilterState, SourceType, StreamMessage, TabState};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -707,31 +707,40 @@ fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         if let Some(ref rx) = tab.source.filter.receiver {
-            if let Ok(progress) = rx.try_recv() {
-                let is_incremental = tab.source.filter.is_incremental;
-                let filter_events =
-                    handlers::filter::handle_filter_progress(progress, is_incremental);
+            match rx.try_recv() {
+                Ok(progress) => {
+                    let is_incremental = tab.source.filter.is_incremental;
+                    let filter_events =
+                        handlers::filter::handle_filter_progress(progress, is_incremental);
 
-                if tab_idx == active_tab {
-                    // Active tab: check for completion and collect events
-                    let completed = filter_events.iter().any(|e| {
-                        matches!(
-                            e,
-                            AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
-                        )
-                    });
-                    events.extend(filter_events);
-                    if completed {
-                        tab.source.filter.receiver = None;
-                    }
-                } else {
-                    // Inactive tab: apply filter events directly
-                    for ev in &filter_events {
-                        if tab.apply_filter_event(ev) {
+                    if tab_idx == active_tab {
+                        // Active tab: check for completion and collect events
+                        let completed = filter_events.iter().any(|e| {
+                            matches!(
+                                e,
+                                AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
+                            )
+                        });
+                        events.extend(filter_events);
+                        if completed {
                             tab.source.filter.receiver = None;
+                        }
+                    } else {
+                        // Inactive tab: apply filter events directly
+                        for ev in &filter_events {
+                            if tab.apply_filter_event(ev) {
+                                tab.source.filter.receiver = None;
+                            }
                         }
                     }
                 }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    tab.source.filter.receiver = None;
+                    if matches!(tab.source.filter.state, FilterState::Processing { .. }) {
+                        tab.source.filter.state = FilterState::Inactive;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
     }

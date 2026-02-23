@@ -426,6 +426,10 @@ impl WebState {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         tab.source.filter.receiver = None;
+                        if matches!(tab.source.filter.state, FilterState::Processing { .. }) {
+                            tab.source.filter.state = FilterState::Inactive;
+                            changed = true;
+                        }
                         break;
                     }
                 }
@@ -1244,9 +1248,14 @@ fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
         anyhow::bail!("Cannot delete source outside lazytail data directories");
     }
 
+    // Resolve canonical path and re-check to prevent TOCTOU symlink attacks
     if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to delete source file: {}", path.display()))?;
+        let canonical = path.canonicalize().context("Cannot resolve source path")?;
+        if !state.is_under_data_roots(&canonical) {
+            anyhow::bail!("Resolved path is outside lazytail data directories");
+        }
+        fs::remove_file(&canonical)
+            .with_context(|| format!("Failed to delete source file: {}", canonical.display()))?;
     }
 
     if let Some(marker_path) = path

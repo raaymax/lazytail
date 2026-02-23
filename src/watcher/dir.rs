@@ -34,27 +34,29 @@ impl DirectoryWatcher {
         let path_buf = path.as_ref().to_path_buf();
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
-            if let Ok(event) = res {
-                match event.kind {
-                    EventKind::Create(CreateKind::File)
-                    | EventKind::Modify(ModifyKind::Name(_)) => {
-                        // File created or renamed
-                        for path in event.paths {
-                            if path.extension().is_some_and(|ext| ext == "log") {
-                                let _ = tx.send(DirEvent::NewFile(path));
-                            }
-                        }
-                    }
-                    EventKind::Remove(RemoveKind::File) => {
-                        // File removed
-                        for path in event.paths {
-                            if path.extension().is_some_and(|ext| ext == "log") {
-                                let _ = tx.send(DirEvent::FileRemoved(path));
-                            }
-                        }
-                    }
-                    _ => {}
+            let event = match res {
+                Ok(event) => event,
+                Err(e) => {
+                    eprintln!("Warning: directory watcher error: {}", e);
+                    return;
                 }
+            };
+            match event.kind {
+                EventKind::Create(CreateKind::File) | EventKind::Modify(ModifyKind::Name(_)) => {
+                    for path in event.paths {
+                        if path.extension().is_some_and(|ext| ext == "log") {
+                            let _ = tx.send(DirEvent::NewFile(path));
+                        }
+                    }
+                }
+                EventKind::Remove(RemoveKind::File) => {
+                    for path in event.paths {
+                        if path.extension().is_some_and(|ext| ext == "log") {
+                            let _ = tx.send(DirEvent::FileRemoved(path));
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .context("Failed to create directory watcher")?;

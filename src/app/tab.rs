@@ -721,17 +721,20 @@ impl TabState {
             ir.refresh(path);
         }
 
-        // If tab has an active filter, trigger incremental filtering
-        if let Some(pattern) = self.source.filter.pattern.clone() {
-            if new_total > self.source.filter.last_filtered_line {
-                let mode = self.source.filter.mode;
-                let range = Some((self.source.filter.last_filtered_line, new_total));
-                crate::filter::orchestrator::FilterOrchestrator::trigger(
-                    &mut self.source,
-                    pattern,
-                    mode,
-                    range,
-                );
+        // If tab has a completed filter, trigger incremental filtering for new lines.
+        // Skip if still Processing — the in-flight filter hasn't finished yet.
+        if matches!(self.source.filter.state, FilterState::Complete { .. }) {
+            if let Some(pattern) = self.source.filter.pattern.clone() {
+                if new_total > self.source.filter.last_filtered_line {
+                    let mode = self.source.filter.mode;
+                    let range = Some((self.source.filter.last_filtered_line, new_total));
+                    crate::filter::orchestrator::FilterOrchestrator::trigger(
+                        &mut self.source,
+                        pattern,
+                        mode,
+                        range,
+                    );
+                }
             }
         }
     }

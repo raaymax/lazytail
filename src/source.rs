@@ -370,6 +370,7 @@ pub fn remove_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Res
 }
 
 /// Remove a marker file for the given source name.
+#[cfg(test)]
 pub fn remove_marker(name: &str) -> Result<()> {
     let Some(sources) = sources_dir() else {
         return Ok(());
@@ -385,14 +386,22 @@ pub fn remove_marker(name: &str) -> Result<()> {
 
 /// Delete a source (log file and marker).
 ///
-/// Only deletes sources in the lazytail data directory.
+/// Only deletes sources in lazytail data directories (global or project-local).
+/// Derives the marker directory from the log path's parent structure.
 pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
-    // Safety check: only delete files in our data directory
-    let Some(data) = data_dir() else {
-        anyhow::bail!("Could not determine data directory");
-    };
+    // Safety check: only delete files in a lazytail data directory
+    let is_in_global = data_dir().is_some_and(|d| log_path.starts_with(&d));
+    let is_in_project = log_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "data")
+        && log_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == ".lazytail");
 
-    if !log_path.starts_with(&data) {
+    if !is_in_global && !is_in_project {
         anyhow::bail!("Cannot delete source outside data directory");
     }
 
@@ -401,8 +410,17 @@ pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
         fs::remove_file(log_path).context("Failed to delete source log file")?;
     }
 
-    // Remove the marker if it exists (cleanup stale markers)
-    let _ = remove_marker(name);
+    // Remove the marker — derive sources dir from the log path's data dir sibling
+    if let Some(sources_dir) = log_path
+        .parent()
+        .and_then(|data_dir| data_dir.parent())
+        .map(|root| root.join("sources"))
+    {
+        let marker_path = sources_dir.join(name);
+        if marker_path.exists() {
+            let _ = fs::remove_file(marker_path);
+        }
+    }
 
     Ok(())
 }

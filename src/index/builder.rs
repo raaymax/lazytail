@@ -368,15 +368,7 @@ impl LineIndexer {
         Ok(())
     }
 
-    /// Flush column buffers and write meta so readers can pick up new offsets.
-    /// Call periodically during capture to keep the TUI's columnar offsets current.
-    pub fn sync(&mut self, index_dir: &Path) -> Result<()> {
-        self.offset_writer.flush()?;
-        self.length_writer.flush()?;
-        self.flags_writer.flush()?;
-        self.time_writer.flush()?;
-        self.checkpoint_writer.flush()?;
-
+    fn build_meta(&self) -> IndexMeta {
         let mut meta = IndexMeta::new();
         meta.checkpoint_interval = self.checkpoint_interval;
         meta.entry_count = self.line_count;
@@ -386,7 +378,19 @@ impl LineIndexer {
         meta.set_column(ColumnBit::Time);
         meta.set_column(ColumnBit::Flags);
         meta.set_column(ColumnBit::Checkpoints);
-        meta.write_to(index_dir.join("meta"))?;
+        meta
+    }
+
+    /// Flush column buffers and write meta so readers can pick up new offsets.
+    /// Call periodically during capture to keep the TUI's columnar offsets current.
+    pub fn sync(&mut self, index_dir: &Path) -> Result<()> {
+        self.offset_writer.flush()?;
+        self.length_writer.flush()?;
+        self.flags_writer.flush()?;
+        self.time_writer.flush()?;
+        self.checkpoint_writer.flush()?;
+
+        self.build_meta().write_to(index_dir.join("meta"))?;
 
         Ok(())
     }
@@ -410,15 +414,7 @@ impl LineIndexer {
         self.time_writer.flush()?;
         self.checkpoint_writer.flush()?;
 
-        let mut meta = IndexMeta::new();
-        meta.checkpoint_interval = self.checkpoint_interval;
-        meta.entry_count = self.line_count;
-        meta.log_file_size = self.current_offset;
-        meta.set_column(ColumnBit::Offsets);
-        meta.set_column(ColumnBit::Lengths);
-        meta.set_column(ColumnBit::Time);
-        meta.set_column(ColumnBit::Flags);
-        meta.set_column(ColumnBit::Checkpoints);
+        let meta = self.build_meta();
         meta.write_to(index_dir.join("meta"))?;
 
         Ok(meta)
