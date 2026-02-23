@@ -79,6 +79,7 @@ pub enum AppEvent {
     ToggleCategoryExpand,
     SelectSource,
     CopySourcePath,
+    CopySelectedLine,
 
     // Mode toggles
     ToggleFollowMode,

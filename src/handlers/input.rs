@@ -172,6 +172,7 @@ fn handle_normal_mode(key: KeyEvent) -> Vec<AppEvent> {
         KeyCode::Char('z') => vec![AppEvent::EnterZMode],
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
+        KeyCode::Char('y') => vec![AppEvent::CopySelectedLine],
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         // Tab toggles source panel focus
         KeyCode::Tab => vec![AppEvent::FocusSourcePanel],
@@ -586,6 +587,34 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_y_copies_selected_line() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CopySelectedLine]);
+    }
+
+    #[test]
+    fn test_ctrl_y_viewport_up_not_copy() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(
+            events,
+            vec![AppEvent::ViewportUp, AppEvent::DisableFollowMode]
+        );
+    }
+
+    #[test]
+    fn test_source_panel_y_copies_path_not_line() {
+        let (mut app, _file) = create_test_app();
+        app.input_mode = InputMode::SourcePanel;
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CopySourcePath]);
     }
 
     #[test]

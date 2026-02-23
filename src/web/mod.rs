@@ -13,7 +13,6 @@ use crate::source::{self, SourceLocation, SourceStatus};
 use crate::watcher::FileEvent;
 use crate::watcher::{DirEvent, DirectoryWatcher};
 use anyhow::{Context, Result};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -21,7 +20,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::TryRecvError;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
@@ -40,15 +39,7 @@ type InitialTabsBuild = (
     Option<PathBuf>,
 );
 
-static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"\x1b\[[0-9;?]*[ -/]*[@-~]",          // CSI sequences
-        r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", // OSC sequences
-        r"|\x1b[()][A-Z0-9]",                  // Charset designators
-        r"|\x1b[^\[\]()0-9]",                  // Two-byte escapes
-    ))
-    .expect("ANSI regex must compile")
-});
+use crate::ansi::strip_ansi;
 
 #[derive(Serialize)]
 struct SourcesResponse {
@@ -1245,10 +1236,6 @@ fn severity_label(severity: Severity) -> Option<&'static str> {
         Severity::Fatal => Some("fatal"),
         Severity::Unknown => None,
     }
-}
-
-fn strip_ansi(input: &str) -> String {
-    ANSI_RE.replace_all(input, "").into_owned()
 }
 
 fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
