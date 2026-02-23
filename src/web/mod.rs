@@ -327,6 +327,19 @@ impl WebState {
                 }
             }
 
+            // Fallback: check file size directly if watcher didn't fire.
+            // Catches cases where the OS file watcher misses events (macOS FSEvents).
+            if !has_modified {
+                if let Some(ref path) = tab.source.source_path {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        let current_size = meta.len();
+                        if tab.source.file_size.is_some_and(|s| current_size != s) {
+                            has_modified = true;
+                        }
+                    }
+                }
+            }
+
             if has_modified {
                 let old_total = tab.source.total_lines;
                 let mut reader = match tab.source.reader.lock() {
@@ -341,6 +354,11 @@ impl WebState {
 
                 let new_total = reader.total_lines();
                 drop(reader);
+
+                // Update file size so the poll fallback doesn't re-trigger
+                if let Some(ref path) = tab.source.source_path {
+                    tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                }
 
                 if new_total < old_total {
                     reset_tab_after_truncation(tab, new_total);
