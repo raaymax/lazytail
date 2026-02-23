@@ -451,6 +451,11 @@ struct Aggregation {
     - Useful in TUI for readable views of dense JSON/logfmt lines
     - Useful in MCP for agents requesting specific field projections
   - [ ] Query history with mode
+  - [ ] Filter history prefix matching (zsh-style)
+    - When text is already typed in the filter input, `Up`/`Down` only cycles through history entries that match the current input as a prefix
+    - E.g. type `err` then press `Up` → jumps to last history entry starting with `err`, skipping unrelated entries
+    - Empty input = normal full history navigation (current behavior, unchanged)
+    - Works across all filter modes (Plain, Regex, Query)
   - [ ] Documentation and examples
 
 ---
@@ -1027,6 +1032,25 @@ fn apply_filter(reader: &dyn LogReader, filter: Arc<dyn Filter>) {
   - [x] Incremental index building during capture mode
   - [x] ~2.5s to index 60M lines (9GB file)
   - [x] ANSI-aware severity detection with memchr-assisted scanning
+- [ ] Compressed file support & log/index compression
+  - **Reading compressed logs:** transparently open `.gz`, `.zst`, `.lz4` files (detect by extension or magic bytes)
+    - Decompression on-the-fly during reading (streaming decompressor wrapping `LogReader`)
+    - Support common formats: gzip (`.log.gz`), zstd (`.log.zst`), lz4
+    - Rotated log archives (`app.log.1.gz`) should just work as sources
+  - **Capture-time compression:** compress logs written by `lazytail -n` to save disk
+    - `lazytail -n "API" --compress zstd` — compress as data is captured
+    - Configurable in `lazytail.yaml`: `compression: zstd` (default: none)
+    - Zstd preferred (best ratio/speed tradeoff, streaming-friendly)
+  - **Index compression:** reduce index file size for large logs
+    - Columnar index files (`.idx`) can grow large for 100M+ line files
+    - Delta-encode line offsets (monotonically increasing → small deltas)
+    - Optional zstd compression for flags column (repetitive severity patterns compress well)
+    - Mmap compatibility: consider memory-mapped compressed blocks vs decompress-on-load tradeoff
+  - **Considerations:**
+    - Compressed files lose O(1) random line access — need block-level index or full decompression
+    - Block compression (zstd seekable format) could preserve random access with modest overhead
+    - Filter performance impact: streaming filter (mmap + SIMD) won't work on compressed data — need decompress-then-filter path
+    - Prioritize read support first (common need), write compression second
 - [ ] Performance profiling on very large files (100GB+)
 - [ ] Optimize ANSI parsing (cache parsed lines?)
 - [ ] Benchmark filtering performance
@@ -1093,22 +1117,39 @@ sources:
   - [ ] Default filter patterns per source
   - [ ] UI preferences (colors, panel width, default modes)
   - [ ] MCP server settings (enabled tools, access control)
-- [ ] `lazytail clear` CLI subcommand
-  - Clear all captured log files from the project data directory (`.lazytail/data/` or `~/.config/lazytail/data/`)
-  - `lazytail clear` — clear all ended sources
-  - `lazytail clear <name>` — clear a specific source by name
-  - `lazytail clear --all` — clear all sources including active ones (with confirmation)
-  - Respect project scoping (clear project logs when `lazytail.yaml` is present, global otherwise)
-  - Confirmation prompt before destructive action (skip with `--yes` / `-y`)
-- [ ] `lazytail sources` / `lazytail list` CLI subcommand
-  - List all available sources (discovered + config-defined) from the terminal without opening the TUI
-  - Show name, path, active/ended status, total lines
-  - Useful for scripting, piping into other tools, quick inspection
-- [ ] Register sources from CLI and MCP (without piping data)
-  - CLI: `lazytail add <name> --path /var/log/app.log` — register an existing log file as a named source
-  - MCP: `add_source` tool — let AI agents register sources programmatically (e.g. discover a log path and add it)
-  - Currently the only ways to add sources are: pipe via `lazytail -n`, define in `lazytail.yaml`, or place files in data dir
-  - This would allow dynamic source management without editing config or restarting captures
+- [ ] **CLI Subcommands** — extend CLI to be a full log management tool, not just a TUI launcher
+  - **`lazytail sources` / `lazytail list`** — list all available sources
+    - Show name, path, active/ended status, total lines, file size
+    - Useful for scripting, piping into other tools, quick inspection
+    - `lazytail sources --json` for machine-readable output
+  - **`lazytail search <pattern> [source]`** — filter/search from CLI without opening TUI
+    - `lazytail search "error" API` — search a specific source by name
+    - `lazytail search "error" /var/log/app.log` — search a file directly
+    - `lazytail search --regex "err(or|no)" API` — regex mode
+    - `lazytail search --query 'json | level == "error"'` — query language support
+    - Output to stdout (pipe-friendly, like grep but with lazytail's engines)
+    - Support `--count` for match count only, `--context N` for surrounding lines
+    - Color output by default (respects `--no-color` / `NO_COLOR` env)
+    - Uses streaming filter / SIMD search — same performance as TUI and MCP
+  - **`lazytail tail [source]`** — tail a source from CLI (like `tail -f` but source-aware)
+    - `lazytail tail API` — tail a named source
+    - `lazytail tail API --follow` / `-f` — follow mode (live stream new lines)
+    - `lazytail tail API -n 50` — last 50 lines
+    - Combines with search: `lazytail tail API -f | grep error` or built-in `--filter`
+  - **`lazytail clear`** — clear captured log files
+    - `lazytail clear` — clear all ended sources
+    - `lazytail clear <name>` — clear a specific source by name
+    - `lazytail clear --all` — clear all sources including active ones (with confirmation)
+    - Respect project scoping (clear project logs when `lazytail.yaml` is present, global otherwise)
+    - Confirmation prompt before destructive action (skip with `--yes` / `-y`)
+  - **`lazytail add <name> --path <path>`** — register an existing log file as a named source
+    - MCP equivalent: `add_source` tool for AI agents
+    - Currently sources can only be added via `lazytail -n`, `lazytail.yaml`, or placing files in data dir
+    - This enables dynamic source management without editing config
+  - **`lazytail rm <name>`** — remove/unregister a source
+    - Remove marker file and optionally delete the log file (`--delete-data`)
+    - `lazytail rm --ended` — remove all ended sources
+  - All subcommands respect project scoping (`lazytail.yaml` → `.lazytail/`, otherwise `~/.config/lazytail/`)
 - [ ] JSON pretty collapsible viewer in TUI
   - Detect JSON content in log lines automatically
   - Pretty-print with syntax highlighting (keys, values, types)
@@ -1123,7 +1164,12 @@ sources:
   - Table view (for structured logs)
 - [ ] Bookmarks (mark lines for quick navigation)
 - [ ] Export filtered results to file
-- [ ] Copy selected line to clipboard
+- [ ] Copy selected line to clipboard with `y`
+  - `y` currently copies source path — change to context-aware: copy selected line content when a line is selected, source path otherwise
+  - Copy full raw line content (not truncated), including expanded content if line is expanded
+  - Visual feedback (brief flash or status bar message: "Copied line 142")
+  - Use OSC 52 escape sequence for terminal clipboard access (works over SSH/tmux)
+  - Fallback to `xclip`/`xsel`/`wl-copy`/`pbcopy` if OSC 52 not supported
 - [ ] Timestamp parsing and time-based filtering
   - Detect common timestamp formats
   - Filter by time range
