@@ -1008,7 +1008,16 @@ impl App {
                 let tab = self.active_tab_mut();
                 tab.source.total_lines = new_total;
                 if tab.source.mode == ViewMode::Normal {
-                    tab.source.line_indices = (0..new_total).collect();
+                    let old = tab.source.line_indices.len();
+                    if new_total > old {
+                        tab.source.line_indices.extend(old..new_total);
+                    }
+                }
+                // Refresh index reader to pick up new flags/checkpoints
+                if let (Some(ref mut ir), Some(ref path)) =
+                    (&mut tab.source.index_reader, &tab.source.source_path)
+                {
+                    ir.refresh(path);
                 }
                 // Follow mode jump (suppress if a StartFilter is in the same batch)
                 let should_jump = self.active_tab().source.follow_mode

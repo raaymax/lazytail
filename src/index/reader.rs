@@ -52,6 +52,31 @@ impl IndexReader {
         Some(Self { flags, checkpoints })
     }
 
+    /// Refresh flags and checkpoints from disk if the index has grown.
+    /// Called periodically to pick up new data written by capture's `sync()`.
+    pub fn refresh(&mut self, log_path: &Path) {
+        let idx_dir = index_dir_for_log(log_path);
+        let meta = match IndexMeta::read_from(idx_dir.join("meta")).ok() {
+            Some(m) => m,
+            None => return,
+        };
+
+        let new_count = meta.entry_count as usize;
+        if new_count <= self.flags.len() {
+            return; // No new data
+        }
+
+        if let Ok(col_reader) = ColumnReader::<u32>::open(idx_dir.join("flags"), new_count) {
+            self.flags = col_reader.iter().collect();
+        }
+
+        if meta.has_column(ColumnBit::Checkpoints) {
+            if let Ok(r) = CheckpointReader::open(idx_dir.join("checkpoints")) {
+                self.checkpoints = r.iter().collect();
+            }
+        }
+    }
+
     /// Get the severity level for a specific line.
     pub fn severity(&self, line_number: usize) -> Severity {
         self.flags

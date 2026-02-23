@@ -235,7 +235,7 @@ impl Default for IndexBuilder {
 /// The delimiter is detected per-line, so mixed LF/CRLF files are handled correctly.
 /// The last line of a file may omit the delimiter entirely.
 pub struct LineIndexer {
-    _lock: IndexWriteLock,
+    _lock: Option<IndexWriteLock>,
     offset_writer: ColumnWriter<u64>,
     length_writer: ColumnWriter<u32>,
     flags_writer: ColumnWriter<u32>,
@@ -251,7 +251,12 @@ pub struct LineIndexer {
 
 impl LineIndexer {
     pub fn create(index_dir: &Path) -> Result<Self> {
-        let lock = IndexWriteLock::acquire(index_dir)?;
+        let lock = IndexWriteLock::try_acquire(index_dir)?;
+        if lock.is_none() {
+            eprintln!(
+                "Warning: index directory is locked by another process, proceeding without lock"
+            );
+        }
 
         std::fs::create_dir_all(index_dir)
             .with_context(|| format!("creating index dir: {}", index_dir.display()))?;
@@ -273,7 +278,12 @@ impl LineIndexer {
     }
 
     pub fn resume(index_dir: &Path) -> Result<Self> {
-        let lock = IndexWriteLock::acquire(index_dir)?;
+        let lock = IndexWriteLock::try_acquire(index_dir)?;
+        if lock.is_none() {
+            eprintln!(
+                "Warning: index directory is locked by another process, proceeding without lock"
+            );
+        }
 
         let meta = IndexMeta::read_from(index_dir.join("meta"))?;
 
@@ -354,6 +364,29 @@ impl LineIndexer {
                 severity_counts: self.severity_counts,
             })?;
         }
+
+        Ok(())
+    }
+
+    /// Flush column buffers and write meta so readers can pick up new offsets.
+    /// Call periodically during capture to keep the TUI's columnar offsets current.
+    pub fn sync(&mut self, index_dir: &Path) -> Result<()> {
+        self.offset_writer.flush()?;
+        self.length_writer.flush()?;
+        self.flags_writer.flush()?;
+        self.time_writer.flush()?;
+        self.checkpoint_writer.flush()?;
+
+        let mut meta = IndexMeta::new();
+        meta.checkpoint_interval = self.checkpoint_interval;
+        meta.entry_count = self.line_count;
+        meta.log_file_size = self.current_offset;
+        meta.set_column(ColumnBit::Offsets);
+        meta.set_column(ColumnBit::Lengths);
+        meta.set_column(ColumnBit::Time);
+        meta.set_column(ColumnBit::Flags);
+        meta.set_column(ColumnBit::Checkpoints);
+        meta.write_to(index_dir.join("meta"))?;
 
         Ok(())
     }

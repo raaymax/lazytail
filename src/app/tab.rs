@@ -708,7 +708,17 @@ impl TabState {
         self.source.total_lines = new_total;
 
         if self.source.mode == ViewMode::Normal {
-            self.source.line_indices = (0..new_total).collect();
+            let old = self.source.line_indices.len();
+            if new_total > old {
+                self.source.line_indices.extend(old..new_total);
+            }
+        }
+
+        // Refresh index reader to pick up new flags/checkpoints from capture's sync()
+        if let (Some(ref mut ir), Some(ref path)) =
+            (&mut self.source.index_reader, &self.source.source_path)
+        {
+            ir.refresh(path);
         }
 
         // If tab has an active filter, trigger incremental filtering
