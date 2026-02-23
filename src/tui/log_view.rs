@@ -102,8 +102,9 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let is_selected = i == selected_idx;
             let is_expanded = expanded_lines.contains(&line_number);
 
-            // Add line number prefix
-            let line_prefix = format!("{:6} | ", line_number + 1);
+            // Add line number prefix (split so severity bg stops before separator)
+            let line_num_part = format!("{:6} |", line_number + 1);
+            let line_sep_part = " ";
 
             if is_expanded && available_width > prefix_width {
                 // Expanded: wrap content across multiple lines
@@ -112,24 +113,50 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
                 let mut item_lines: Vec<Line<'static>> = Vec::new();
 
-                for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
-                    // First line gets the line number prefix, others get indent
-                    let prefix = if wrap_idx == 0 {
-                        line_prefix.clone()
-                    } else {
-                        " ".repeat(prefix_width)
-                    };
+                let severity_color = index_reader
+                    .map(|ir| ir.severity(line_number))
+                    .and_then(severity_bg);
 
-                    // Insert prefix at the beginning
-                    wrapped_line.spans.insert(0, Span::raw(prefix));
+                for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
+                    if wrap_idx == 0 {
+                        // First line: number part with severity bg, then separator
+                        let num_style = severity_color
+                            .map(|bg| Style::default().bg(bg))
+                            .unwrap_or_default();
+                        wrapped_line.spans.insert(0, Span::styled(line_sep_part, Style::default()));
+                        wrapped_line.spans.insert(0, Span::styled(line_num_part.clone(), num_style));
+                    } else {
+                        wrapped_line.spans.insert(0, Span::raw(" ".repeat(prefix_width)));
+                    }
 
                     // Apply styling based on selection/expansion state
-                    for span in &mut wrapped_line.spans {
-                        if is_selected {
+                    if is_selected {
+                        for span in &mut wrapped_line.spans {
                             span.style = apply_selection_style(span.style);
-                        } else {
-                            // Expanded but not selected: subtle dark background
+                        }
+                    } else {
+                        // Expanded but not selected: subtle dark background for content spans
+                        // Skip the number span (index 0) and separator span (index 1) on first line
+                        let skip = if wrap_idx == 0 { 2 } else { 1 };
+                        for span in wrapped_line.spans.iter_mut().skip(skip) {
                             span.style = span.style.bg(EXPANDED_BG);
+                        }
+                        // Separator gets expanded bg on first line
+                        if wrap_idx == 0 {
+                            if let Some(sep_span) = wrapped_line.spans.get_mut(1) {
+                                sep_span.style = sep_span.style.bg(EXPANDED_BG);
+                            }
+                            // Number part gets expanded bg only if no severity color
+                            if severity_color.is_none() {
+                                if let Some(num_span) = wrapped_line.spans.first_mut() {
+                                    num_span.style = num_span.style.bg(EXPANDED_BG);
+                                }
+                            }
+                        } else {
+                            // Continuation indent gets expanded bg
+                            if let Some(indent_span) = wrapped_line.spans.first_mut() {
+                                indent_span.style = indent_span.style.bg(EXPANDED_BG);
+                            }
                         }
                     }
 
@@ -143,7 +170,8 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
 
                 let mut final_line = Line::default();
-                final_line.spans.push(Span::raw(line_prefix));
+                final_line.spans.push(Span::raw(line_num_part.clone()));
+                final_line.spans.push(Span::raw(line_sep_part));
 
                 if let Some(first_line) = parsed_text.lines.first() {
                     for span in &first_line.spans {
@@ -153,7 +181,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     }
                 }
 
-                // Apply line styling: selection takes priority, then severity background
+                // Apply line styling: selection takes priority, then severity on number only
                 if is_selected {
                     for span in &mut final_line.spans {
                         span.style = apply_selection_style(span.style);
@@ -162,10 +190,9 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     .map(|ir| ir.severity(line_number))
                     .and_then(severity_bg)
                 {
-                    for span in &mut final_line.spans {
-                        if span.style.bg.is_none() {
-                            span.style = span.style.bg(bg);
-                        }
+                    // Color only the line number background, not the separator or content
+                    if let Some(num_span) = final_line.spans.first_mut() {
+                        num_span.style = num_span.style.bg(bg);
                     }
                 }
 

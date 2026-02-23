@@ -2,7 +2,7 @@ use super::viewport::Viewport;
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
 use crate::index::reader::IndexReader;
-use crate::log_source::calculate_index_size;
+use crate::log_source::{calculate_index_size, LineRateTracker};
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
@@ -159,6 +159,7 @@ impl TabState {
                     file_size,
                     index_reader,
                     index_size,
+                    rate_tracker: LineRateTracker::new(total_lines),
                 },
                 scroll_position: 0,
                 selected_line,
@@ -194,6 +195,7 @@ impl TabState {
                     file_size: None,
                     index_reader: None,
                     index_size: None,
+                    rate_tracker: LineRateTracker::new(0),
                 },
                 scroll_position: 0,
                 selected_line: 0,
@@ -232,6 +234,7 @@ impl TabState {
                 file_size: None,
                 index_reader: None,
                 index_size: None,
+                rate_tracker: LineRateTracker::new(0),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -278,6 +281,7 @@ impl TabState {
                 file_size,
                 index_reader,
                 index_size,
+                rate_tracker: LineRateTracker::new(total_lines),
             },
             scroll_position: 0,
             selected_line,
@@ -340,6 +344,7 @@ impl TabState {
                 file_size,
                 index_reader,
                 index_size,
+                rate_tracker: LineRateTracker::new(total_lines),
             },
             scroll_position: 0,
             selected_line,
@@ -373,6 +378,7 @@ impl TabState {
                 file_size: None,
                 index_reader: None,
                 index_size: None,
+                rate_tracker: LineRateTracker::new(0),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -421,6 +427,7 @@ impl TabState {
 
         // Update total lines
         self.source.total_lines = old_total + new_lines_count;
+        self.source.rate_tracker.record(self.source.total_lines);
 
         // In normal mode, add new line indices
         if self.source.mode == ViewMode::Normal {
@@ -706,6 +713,7 @@ impl TabState {
     /// Updates total_lines, line_indices, and triggers incremental filtering if needed.
     pub fn apply_file_modification(&mut self, new_total: usize) {
         self.source.total_lines = new_total;
+        self.source.rate_tracker.record(new_total);
 
         if self.source.mode == ViewMode::Normal {
             let old = self.source.line_indices.len();

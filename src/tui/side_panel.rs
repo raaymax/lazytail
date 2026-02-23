@@ -340,13 +340,26 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
-    // Show severity bar chart from checkpoint data
+    // Show line ingestion rate
+    if let Some(rate) = tab.source.rate_tracker.lines_per_second() {
+        if rate > 0.1 {
+            let (value, unit) = format_rate(rate);
+            stats_text.push(Line::from(vec![
+                Span::raw(" Speed: "),
+                Span::styled(
+                    format!("{:.1} {}", value, unit),
+                    Style::default().fg(Color::Green),
+                ),
+            ]));
+        }
+    }
+
+    // Show severity bar chart from live flags data
     if let Some(counts) = tab
         .source
         .index_reader
         .as_ref()
-        .and_then(|ir| ir.checkpoints().last())
-        .map(|cp| cp.severity_counts)
+        .map(|ir| ir.severity_counts())
     {
         let entries: &[(u32, &str, Color)] = &[
             (counts.fatal, "Fatal", Color::Magenta),
@@ -418,6 +431,18 @@ fn format_file_size(bytes: u64) -> String {
         }
     } else {
         format!("{}B", bytes)
+    }
+}
+
+/// Format a line rate with adaptive units.
+/// Returns (value, unit_str) picking the best unit so the value stays readable.
+fn format_rate(lines_per_sec: f64) -> (f64, &'static str) {
+    if lines_per_sec >= 1.0 {
+        (lines_per_sec, "lines/s")
+    } else if lines_per_sec * 60.0 >= 1.0 {
+        (lines_per_sec * 60.0, "lines/min")
+    } else {
+        (lines_per_sec * 3600.0, "lines/h")
     }
 }
 

@@ -1007,6 +1007,7 @@ impl App {
             } => {
                 let tab = self.active_tab_mut();
                 tab.source.total_lines = new_total;
+                tab.source.rate_tracker.record(new_total);
                 if tab.source.mode == ViewMode::Normal {
                     let old = tab.source.line_indices.len();
                     if new_total > old {
@@ -1041,6 +1042,7 @@ impl App {
 
                 // Reset state on truncation
                 tab.source.total_lines = new_total;
+                tab.source.rate_tracker.record(new_total);
                 tab.source.line_indices = (0..new_total).collect();
                 tab.source.mode = ViewMode::Normal;
 

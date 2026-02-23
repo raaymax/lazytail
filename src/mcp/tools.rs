@@ -467,7 +467,7 @@ impl LazyTailMcp {
     pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
         let stats = IndexReader::stats(path);
 
-        let (indexed_lines, log_file_size, has_index, severity_counts, columns) =
+        let (indexed_lines, log_file_size, has_index, severity_counts, lines_per_second, columns) =
             if let Some(stats) = stats {
                 let sc = stats.severity_counts.map(|sc| SeverityCountsInfo {
                     unknown: sc.unknown,
@@ -483,10 +483,11 @@ impl LazyTailMcp {
                     stats.log_file_size,
                     true,
                     sc,
+                    stats.lines_per_second,
                     stats.columns,
                 )
             } else {
-                (0, 0, false, None, Vec::new())
+                (0, 0, false, None, None, Vec::new())
             };
 
         let response = GetStatsResponse {
@@ -495,6 +496,7 @@ impl LazyTailMcp {
             log_file_size,
             has_index,
             severity_counts,
+            lines_per_second,
             columns,
         };
 

@@ -278,6 +278,15 @@ lazytail
   - Current behavior: appends to existing log file, accumulating stale data across runs
   - New default: truncate the file on start so each capture session begins fresh
   - Add `--append` / `-a` flag to preserve existing contents (opt-in)
+- [ ] Session ID for capture runs
+  - Each `lazytail -n` invocation generates a unique session ID (e.g., UUID or timestamp-based)
+  - Write a session boundary marker to the log file on start (e.g., `--- session: abc123 started at 2026-02-23T10:00:00 ---`)
+  - Store session ID in the marker file alongside PID
+  - Store session ID in index metadata or as a checkpoint annotation
+  - Expose in `list_sources` response so MCP consumers can see the current session
+  - Enable filtering by session: `session == "abc123"` or `session == "latest"` in query language
+  - Use case: when logs accumulate across multiple runs, users can filter to just the current run without clearing old data
+  - Pairs well with the truncate-on-start option above (session ID works when you *want* to keep history)
 - [ ] `--file <path>` for custom log file location
 - [ ] `--max-size <size>` for log rotation
 - [ ] Memory-only mode with streaming (no file)
