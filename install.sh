@@ -169,7 +169,7 @@ fi
 
 # Get latest release version
 echo "Fetching latest release..."
-LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+LATEST_VERSION=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i '^location:' | sed -E 's|.*/tag/([^ \r]+).*|\1|')
 
 if [ -z "$LATEST_VERSION" ]; then
     echo -e "${RED}Failed to fetch latest version${NC}"
