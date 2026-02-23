@@ -515,6 +515,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
     watched_location: Option<source::SourceLocation>,
 ) -> Result<()> {
     let mut last_status_refresh = Instant::now();
+    let mut last_file_poll = Instant::now();
     loop {
         // Phase 1: Render
         render(terminal, app)?;
@@ -581,9 +582,18 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
             }
         }
 
+        // Phase 2.7: Periodic file size poll — safety net for platforms where
+        // the file watcher may not deliver events reliably (e.g. macOS FSEvents).
+        let force_poll = if last_file_poll.elapsed() >= Duration::from_secs(1) {
+            last_file_poll = Instant::now();
+            true
+        } else {
+            false
+        };
+
         // Phase 3: Collect events from all sources
         let mut events = Vec::new();
-        events.extend(collect_file_events(app));
+        events.extend(collect_file_events(app, force_poll));
         events.extend(collect_filter_progress(app));
         collect_stream_events(app); // Handle stream events directly (modifies tabs)
         events.extend(collect_input_events(terminal, app)?);
@@ -628,62 +638,79 @@ struct ActiveTabFileModification {
     old_total: usize,
 }
 
-/// Collect file watcher events from all tabs
-fn collect_file_events(app: &mut App) -> Vec<AppEvent> {
+/// Collect file watcher events from all tabs.
+/// When `force_poll` is true, also checks file sizes directly as a safety net
+/// for platforms where the file watcher may miss events (e.g. macOS FSEvents).
+fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
     let active_tab = app.active_tab;
 
     // First pass: reload files and handle inactive tabs
     let mut active_tab_modification: Option<ActiveTabFileModification> = None;
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
+        // Drain watcher events
+        let mut has_modified = false;
+        let mut last_error = None;
         if let Some(ref watcher) = tab.watcher {
             // Drain all pending events — only the last one matters.
             // The unbounded channel can accumulate thousands of events
             // (one per flush in capture mode), but we only need one reload.
-            let mut has_modified = false;
-            let mut last_error = None;
             while let Some(file_event) = watcher.try_recv() {
                 match file_event {
                     watcher::FileEvent::Modified => has_modified = true,
                     watcher::FileEvent::Error(err) => last_error = Some(err),
                 }
             }
+        }
 
-            if let Some(err) = last_error {
-                eprintln!("File watcher error for tab {}: {}", tab_idx, err);
+        // Periodic file size poll: if the watcher didn't fire but the file grew,
+        // treat it as a modification. This catches cases where the OS file watcher
+        // fails to deliver events (common on macOS with FSEvents).
+        if !has_modified && force_poll {
+            if let Some(ref path) = tab.source.source_path {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    let current_size = meta.len();
+                    if tab.source.file_size.is_some_and(|s| current_size != s) {
+                        has_modified = true;
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = last_error {
+            eprintln!("File watcher error for tab {}: {}", tab_idx, err);
+        }
+
+        if has_modified {
+            let mut reader_guard = tab
+                .source
+                .reader
+                .lock()
+                .expect("Reader lock poisoned - filter thread panicked");
+
+            if let Err(e) = reader_guard.reload() {
+                eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
+                continue;
             }
 
-            if has_modified {
-                let mut reader_guard = tab
-                    .source
-                    .reader
-                    .lock()
-                    .expect("Reader lock poisoned - filter thread panicked");
+            let new_total = reader_guard.total_lines();
+            let old_total = tab.source.total_lines;
+            drop(reader_guard);
 
-                if let Err(e) = reader_guard.reload() {
-                    eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
-                    continue;
-                }
+            // Update file size
+            if let Some(ref path) = tab.source.source_path {
+                tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+            }
 
-                let new_total = reader_guard.total_lines();
-                let old_total = tab.source.total_lines;
-                drop(reader_guard);
-
-                // Update file size
-                if let Some(ref path) = tab.source.source_path {
-                    tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
-                }
-
-                if tab_idx == active_tab {
-                    // Collect for processing after the loop
-                    active_tab_modification = Some(ActiveTabFileModification {
-                        new_total,
-                        old_total,
-                    });
-                } else {
-                    // Inactive tab: update state directly
-                    tab.apply_file_modification(new_total);
-                }
+            if tab_idx == active_tab {
+                // Collect for processing after the loop
+                active_tab_modification = Some(ActiveTabFileModification {
+                    new_total,
+                    old_total,
+                });
+            } else {
+                // Inactive tab: update state directly
+                tab.apply_file_modification(new_total);
             }
         }
     }

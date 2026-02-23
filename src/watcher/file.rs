@@ -24,11 +24,10 @@ impl FileWatcher {
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             match res {
                 Ok(event) => {
-                    // Only care about modify events
-                    if matches!(
-                        event.kind,
-                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
-                    ) {
+                    // Accept any event that could indicate file content changed.
+                    // macOS FSEvents may deliver events as Any or Access rather than
+                    // the specific Modify/Create variants that inotify uses on Linux.
+                    if !matches!(event.kind, notify::EventKind::Remove(_)) {
                         let _ = tx.send(FileEvent::Modified);
                     }
                 }
