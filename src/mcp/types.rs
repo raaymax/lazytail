@@ -154,6 +154,12 @@ pub struct GetTailRequest {
     /// Number of lines to fetch from the end (default 100, max 1000)
     #[serde(default = "default_count")]
     pub count: usize,
+    /// Only return lines after this line number (0-indexed, exclusive).
+    /// Enables efficient incremental polling — pass the last line_number
+    /// you received to get only new lines. When set, returns up to `count`
+    /// lines starting from `since_line + 1`.
+    #[serde(default)]
+    pub since_line: Option<usize>,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
     #[serde(default)]
     pub raw: bool,
