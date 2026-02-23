@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/raaymax/lazytail/compare/v0.6.0...v0.7.0) (2026-02-23)
+
+
+### Features
+
+* **cli:** add a simple web client ([#30](https://github.com/raaymax/lazytail/issues/30)) ([26afdbe](https://github.com/raaymax/lazytail/commit/26afdbe42c22671ecc877727bbfa161882580dfe))
+* severity line-number coloring, live stats, and ingestion rate ([9734a72](https://github.com/raaymax/lazytail/commit/9734a72222dd177cfe54f0dc39103a3bfba66d31))
+* **update:** add self-update with CLI subcommand and background check ([#36](https://github.com/raaymax/lazytail/issues/36)) ([c0d4fd7](https://github.com/raaymax/lazytail/commit/c0d4fd7b653a7a69afbb529010ba7c91e250c137))
+
+
+### Bug Fixes
+
+* **ci:** auto-trigger release builds when release-please creates releases ([97ace90](https://github.com/raaymax/lazytail/commit/97ace90159397db27c0e8f3fad1b74047e5e7824))
+* **examples:** add lz4_flex dev-dep and bench_compression example ([662ddd8](https://github.com/raaymax/lazytail/commit/662ddd84dc395dd4fe5c4d046106bc8cf3ab6577))
+* harden atomicity, error handling, and safety across codebase ([b48b719](https://github.com/raaymax/lazytail/commit/b48b7199023c8cb42eb78e8e43273169a052d4c9))
+* **index:** add writer lock and truncate orphaned entries on resume ([2a6c286](https://github.com/raaymax/lazytail/commit/2a6c286ec081d964f707b1e2685f701e4507c548))
+* **perf:** resolve TUI freeze during active capture streams ([dd72e63](https://github.com/raaymax/lazytail/commit/dd72e6354a43a4a8f1ca2740cc5863242ee9ff43))
+* **source:** show global sources alongside project sources ([d8fc3bd](https://github.com/raaymax/lazytail/commit/d8fc3bd4871ba2cb60eec6734900a0a887a490a6))
+
 ## [0.6.0](https://github.com/raaymax/lazytail/compare/v0.5.3...v0.6.0) (2026-02-19)
 
 
