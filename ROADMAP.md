@@ -68,6 +68,15 @@ This is a local planning document for upcoming features and improvements.
 - Incremental index building during capture mode
 - O(1) line access via mmap-backed columnar offsets
 
+**v0.7.0 Features:**
+- Self-update (`lazytail update`) with package manager detection
+
+**Post-v0.7.0 (unreleased):**
+- Scrollable help overlay with j/k navigation
+- MCP `get_tail` `since_line` parameter for incremental polling
+- Copy selected line to clipboard (`y`) with OSC 52, ANSI stripping, status bar feedback
+- Mouse click: click sources in side panel to switch tabs, click log lines to select, click category headers to expand/collapse
+
 ---
 
 ## Upcoming Features & Improvements
@@ -853,8 +862,8 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 **Goal:** Expand mouse support beyond scroll — make the UI fully mouse-interactive
 
 **Tasks:**
-- [ ] Click to select a log line
-- [ ] Click source in side panel to switch tabs
+- [x] Click to select a log line
+- [x] Click source in side panel to switch tabs
 - [ ] Click severity levels in stats panel to filter (when severity stats land)
 - [ ] Click-and-drag to select text for copying
 - [ ] Right-click context menu (expand, copy, filter by selection)
@@ -865,6 +874,29 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 - Lower barrier to entry for non-vim users
 - Faster interaction for common actions (tab switching, line selection)
 - Expected by users coming from GUI log viewers
+
+---
+
+#### Multi-Line Selection
+**Goal:** Select a range of log lines for copying, exporting, or inspection
+
+**Behavior:**
+- `V` enters visual/selection mode (vim-style), `Esc` exits
+- `Shift+Up`/`Shift+Down` or `Shift+j`/`Shift+k` to extend selection
+- `Shift+Click` to select range from current line to clicked line
+- Click-and-drag to select range with mouse
+- Selected lines highlighted with distinct background color
+- `y` copies all selected lines to clipboard
+- `Esc` or movement without Shift clears selection
+- Selection works with both filtered and unfiltered views
+
+**Tasks:**
+- [ ] Selection state in viewport (anchor line + current line range)
+- [ ] Visual mode toggle (`V`) and keyboard range extension
+- [ ] Mouse selection (Shift+Click range, click-and-drag)
+- [ ] Render selected lines with highlight background
+- [ ] `y` copies selected range to clipboard (full raw content, newline-separated)
+- [ ] Selection count indicator in status bar ("3 lines selected")
 
 ---
 
@@ -886,16 +918,16 @@ TRACE → DEBUG → INFO → WARN → ERROR → FATAL
 
 ---
 
-#### Scrollable Help Overlay
+#### Scrollable Help Overlay ✅
 **Goal:** Make the help overlay scrollable so all keybindings are visible on small terminals
 
-**Problem:** The help text can exceed the terminal height, cutting off entries at the bottom.
+**Status:** ✅ Complete (post-v0.7.0)
 
 **Tasks:**
-- [ ] Track a scroll offset for the help overlay
-- [ ] Handle `j`/`k` and `↑`/`↓` to scroll while help is open
-- [ ] Show a scroll indicator (e.g. `↓ more` at the bottom)
-- [ ] Clamp scroll so the last line stays visible
+- [x] Track a scroll offset for the help overlay
+- [x] Handle `j`/`k` and `↑`/`↓` to scroll while help is open
+- [x] Show a scroll indicator (e.g. `↓ more` at the bottom)
+- [x] Clamp scroll so the last line stays visible
 
 ---
 
@@ -1032,6 +1064,16 @@ fn apply_filter(reader: &dyn LogReader, filter: Arc<dyn Filter>) {
   - [x] Incremental index building during capture mode
   - [x] ~2.5s to index 60M lines (9GB file)
   - [x] ANSI-aware severity detection with memchr-assisted scanning
+- [ ] Search Result Bitmap Cache (Roaring Bitmaps)
+  - Persist filter results as Roaring Bitmaps alongside columnar index files
+  - Cache files live in `.lazytail/idx/{source_name}/search/`, keyed by filter pattern
+  - Searching the same term twice returns results without re-scanning the log file
+  - Bitmap is **extended** (not invalidated) when log file grows with appended lines — only scan new lines
+  - Bitmap is **invalidated and rebuilt** when log content changes (truncation, rotation)
+  - Two bitmaps can be AND/OR'd to resolve compound queries without scanning log content
+  - Cache miss falls through transparently to `streaming_filter` — no visible behavior change
+  - Especially impactful on large files (5GB+) where re-scanning on every keystroke is expensive
+  - See `.planning/ROADMAP.md` Phase 6 for full design notes
 - [ ] Compressed file support & log/index compression
   - **Reading compressed logs:** transparently open `.gz`, `.zst`, `.lz4` files (detect by extension or magic bytes)
     - Decompression on-the-fly during reading (streaming decompressor wrapping `LogReader`)
@@ -1164,12 +1206,12 @@ sources:
   - Table view (for structured logs)
 - [ ] Bookmarks (mark lines for quick navigation)
 - [ ] Export filtered results to file
-- [ ] Copy selected line to clipboard with `y`
-  - `y` currently copies source path — change to context-aware: copy selected line content when a line is selected, source path otherwise
-  - Copy full raw line content (not truncated), including expanded content if line is expanded
-  - Visual feedback (brief flash or status bar message: "Copied line 142")
-  - Use OSC 52 escape sequence for terminal clipboard access (works over SSH/tmux)
-  - Fallback to `xclip`/`xsel`/`wl-copy`/`pbcopy` if OSC 52 not supported
+- [x] Copy selected line to clipboard with `y` — ✅ post-v0.7.0
+  - [x] Context-aware: copy selected line content (ANSI-stripped) in log view, source path in side panel
+  - [x] Full raw line content (not truncated)
+  - [x] Visual feedback (status bar message: "Copied: ...")
+  - [x] OSC 52 escape sequence for terminal clipboard access (works over SSH/tmux)
+  - [ ] Fallback to `xclip`/`xsel`/`wl-copy`/`pbcopy` if OSC 52 not supported
 - [ ] Timestamp parsing and time-based filtering
   - Detect common timestamp formats
   - Filter by time range
@@ -1267,7 +1309,7 @@ sources:
 **Planned `get_tail` Enhancements:**
 | Feature | Purpose | Priority |
 |---------|---------|----------|
-| `since_line` parameter | Return only lines after a given line number. Enables efficient incremental polling of active sources without re-fetching or deduplicating. Currently monitoring a live source means blind-polling `get_tail` and manually tracking what you've already seen. | 🔴 High |
+| `since_line` parameter | Return only lines after a given line number. Enables efficient incremental polling of active sources without re-fetching or deduplicating. | ✅ Complete |
 
 **Planned `get_lines` Enhancements:**
 | Feature | Purpose | Priority |
