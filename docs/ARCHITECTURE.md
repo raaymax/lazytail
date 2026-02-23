@@ -19,8 +19,8 @@ The application operates in five distinct modes:
 src/
   main.rs           Core event loop, mode dispatch, CLI definition
   app.rs            Top-level application state (App struct)
-  tab.rs            Per-tab TUI state (TabState) wrapping LogSourceState
-  source_state.rs   Domain-only source state (LogSourceState, FilterConfig)
+  tab.rs            Per-tab TUI state (TabState) wrapping LogSource
+  log_source.rs     Domain-only source state (LogSource, FilterConfig, LineRateTracker)
   viewport.rs       Vim-style viewport with anchor-based scrolling
   event.rs          AppEvent enum (all possible state transitions)
   signal.rs         Flag-based SIGINT/SIGTERM handling
@@ -140,14 +140,14 @@ App
   source_panel: ...           Tree navigation state
 
 TabState                              TUI adapter state
-  source: LogSourceState              Domain core (shared across adapters)
+  source: LogSource              Domain core (shared across adapters)
   viewport: Viewport                  Scroll/selection state
   expansion: ExpansionState           Expanded/collapsed lines
   watcher: Option<FileWatcher>        inotify file watcher
   stream_writer: ...                  Stdin background reader handle
   stream_receiver: ...                Stdin message channel
 
-LogSourceState                        Domain-only state (source_state.rs)
+LogSource                        Domain-only state (log_source.rs)
   reader: Arc<Mutex<dyn LogReader>>   File or stream reader
   index_reader: Option<IndexReader>   Columnar index (severity, flags)
   filter: FilterConfig                Active filter, cancel token, receiver
@@ -159,9 +159,9 @@ LogSourceState                        Domain-only state (source_state.rs)
   source_status: Option<SourceStatus> Active/Ended for discovered sources
 ```
 
-Each tab is fully independent. Domain state lives in `LogSourceState` which is shared by TUI, Web, and MCP adapters. Adapter-specific state (viewport, expansion, watchers) stays on `TabState`.
+Each tab is fully independent. Domain state lives in `LogSource` which is shared by TUI, Web, and MCP adapters. Adapter-specific state (viewport, expansion, watchers) stays on `TabState`.
 
-See [ADR-014: Hexagonal Architecture — LogSourceState Extraction](adr/014-hexagonal-log-source-state.md).
+See [ADR-014: Hexagonal Architecture — LogSource Extraction](adr/014-hexagonal-log-source-state.md).
 
 ### Filter Pipeline
 
@@ -250,7 +250,7 @@ See [ADR-008: Flag-Based Signal Handling](adr/008-flag-based-signals.md).
 
 ### Web Server
 
-The `lazytail web` subcommand starts an HTTP server with an embedded single-page application. It reuses `LogSourceState` and `FilterOrchestrator` from the core domain, adding only web-specific concerns (HTTP routing, JSON serialization, SSE polling).
+The `lazytail web` subcommand starts an HTTP server with an embedded single-page application. It reuses `LogSource` and `FilterOrchestrator` from the core domain, adding only web-specific concerns (HTTP routing, JSON serialization, SSE polling).
 
 Key endpoints:
 - `GET /api/sources` - list sources with severity counts and filter state
@@ -259,7 +259,7 @@ Key endpoints:
 - `POST /api/filter/clear` - cancel and clear filter
 - `POST /api/follow` - toggle follow mode
 
-The web adapter uses the same `TabState` as TUI for file watching and filter progress polling, but only consumes the `LogSourceState` portion for API responses. Severity data flows from `IndexReader` through to JSON responses automatically.
+The web adapter uses the same `TabState` as TUI for file watching and filter progress polling, but only consumes the `LogSource` portion for API responses. Severity data flows from `IndexReader` through to JSON responses automatically.
 
 ### MCP Server
 

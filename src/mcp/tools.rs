@@ -14,11 +14,10 @@ use super::format;
 use super::types::*;
 use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
-use crate::filter::{cancel::CancelToken, engine::FilterProgress, streaming_filter};
+use crate::filter::search_engine::SearchEngine;
+use crate::filter::{cancel::CancelToken, engine::FilterProgress};
 use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
-use crate::index::checkpoint::CheckpointReader;
 use crate::index::flags::Severity;
-use crate::index::meta::{ColumnBit, IndexMeta};
 use crate::index::reader::IndexReader;
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::source;
@@ -345,7 +344,6 @@ impl LazyTailMcp {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
-        // Use streaming filter for fast search (same as UI)
         let filter: Arc<dyn Filter> = match mode {
             SearchMode::Plain => Arc::new(StringFilter::new(pattern, case_sensitive)),
             SearchMode::Regex => match RegexFilter::new(pattern, case_sensitive) {
@@ -354,14 +352,8 @@ impl LazyTailMcp {
             },
         };
 
-        // Run streaming filter (grep-like performance).
-        // The filter runs on a dedicated thread; we block here waiting for results.
-        // See module doc for why this is acceptable in the current MCP design.
-        let rx = match streaming_filter::run_streaming_filter(
-            path.to_path_buf(),
-            filter,
-            CancelToken::new(),
-        ) {
+        let rx = match SearchEngine::search_file(path, filter, None, None, None, CancelToken::new())
+        {
             Ok(rx) => rx,
             Err(e) => {
                 return error_response(format!("Failed to search file '{}': {}", path.display(), e))
@@ -430,57 +422,29 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
     ) -> String {
-        use lazytail::index::reader::IndexReader;
-
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
-        // Try index-accelerated path
-        let bitmap = query.index_mask().and_then(|(mask, want)| {
-            let reader = IndexReader::open(path)?;
-            if reader.is_empty() {
-                return None;
-            }
-            Some(reader.candidate_bitmap(mask, want, reader.len()))
-        });
+        let index = IndexReader::open(path);
 
-        let query_filter = match QueryFilter::new(query) {
+        let query_filter = match QueryFilter::new(query.clone()) {
             Ok(f) => f,
             Err(e) => return error_response(format!("Invalid query: {}", e)),
         };
 
         let filter: Arc<dyn Filter> = Arc::new(query_filter);
 
-        let rx = if let Some(bitmap) = bitmap {
-            match streaming_filter::run_streaming_filter_indexed(
-                path.to_path_buf(),
-                filter,
-                bitmap,
-                CancelToken::new(),
-            ) {
-                Ok(rx) => rx,
-                Err(e) => {
-                    return error_response(format!(
-                        "Failed to search file '{}': {}",
-                        path.display(),
-                        e
-                    ))
-                }
-            }
-        } else {
-            match streaming_filter::run_streaming_filter(
-                path.to_path_buf(),
-                filter,
-                CancelToken::new(),
-            ) {
-                Ok(rx) => rx,
-                Err(e) => {
-                    return error_response(format!(
-                        "Failed to search file '{}': {}",
-                        path.display(),
-                        e
-                    ))
-                }
+        let rx = match SearchEngine::search_file(
+            path,
+            filter,
+            Some(&query),
+            index.as_ref(),
+            None,
+            CancelToken::new(),
+        ) {
+            Ok(rx) => rx,
+            Err(e) => {
+                return error_response(format!("Failed to search file '{}': {}", path.display(), e))
             }
         };
 
@@ -501,63 +465,38 @@ impl LazyTailMcp {
     }
 
     pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
-        let idx_dir = source::index_dir_for_log(path);
-        let meta_path = idx_dir.join("meta");
+        let stats = IndexReader::stats(path);
 
-        if !meta_path.exists() {
-            let response = GetStatsResponse {
-                source: source_name.to_string(),
-                indexed_lines: 0,
-                log_file_size: 0,
-                has_index: false,
-                severity_counts: None,
-                columns: Vec::new(),
+        let (indexed_lines, log_file_size, has_index, severity_counts, lines_per_second, columns) =
+            if let Some(stats) = stats {
+                let sc = stats.severity_counts.map(|sc| SeverityCountsInfo {
+                    unknown: sc.unknown,
+                    trace: sc.trace,
+                    debug: sc.debug,
+                    info: sc.info,
+                    warn: sc.warn,
+                    error: sc.error,
+                    fatal: sc.fatal,
+                });
+                (
+                    stats.indexed_lines,
+                    stats.log_file_size,
+                    true,
+                    sc,
+                    stats.lines_per_second,
+                    stats.columns,
+                )
+            } else {
+                (0, 0, false, None, None, Vec::new())
             };
-            return format_stats(&response, output);
-        }
-
-        let meta = match IndexMeta::read_from(&meta_path) {
-            Ok(m) => m,
-            Err(e) => return error_response(format!("Failed to read index meta: {}", e)),
-        };
-
-        let mut columns = Vec::new();
-        let column_names = [
-            (ColumnBit::Offsets, "offsets"),
-            (ColumnBit::Lengths, "lengths"),
-            (ColumnBit::Time, "time"),
-            (ColumnBit::Flags, "flags"),
-            (ColumnBit::Checkpoints, "checkpoints"),
-        ];
-        for (bit, name) in &column_names {
-            if meta.has_column(*bit) {
-                columns.push(name.to_string());
-            }
-        }
-
-        let severity_counts = if meta.has_column(ColumnBit::Checkpoints) {
-            CheckpointReader::open(idx_dir.join("checkpoints"))
-                .ok()
-                .and_then(|cr| cr.last())
-                .map(|cp| SeverityCountsInfo {
-                    unknown: cp.severity_counts.unknown,
-                    trace: cp.severity_counts.trace,
-                    debug: cp.severity_counts.debug,
-                    info: cp.severity_counts.info,
-                    warn: cp.severity_counts.warn,
-                    error: cp.severity_counts.error,
-                    fatal: cp.severity_counts.fatal,
-                })
-        } else {
-            None
-        };
 
         let response = GetStatsResponse {
             source: source_name.to_string(),
-            indexed_lines: meta.entry_count,
-            log_file_size: meta.log_file_size,
-            has_index: true,
+            indexed_lines,
+            log_file_size,
+            has_index,
             severity_counts,
+            lines_per_second,
             columns,
         };
 
@@ -887,7 +826,7 @@ impl LazyTailMcp {
 
     /// Get index statistics for a lazytail source.
     #[tool(
-        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, and severity breakdown (from checkpoint data). Useful for understanding log composition before searching. Pass a source name from list_sources."
+        description = "Get columnar index statistics for a lazytail source. Returns indexed line count, log file size, available columns, severity breakdown (from flags column), and recent ingestion rate (lines/sec from checkpoint timestamps). Useful for understanding log composition before searching. Pass a source name from list_sources."
     )]
     fn get_stats(&self, #[tool(aggr)] req: GetStatsRequest) -> String {
         let path = match source::resolve_source_for_context(&req.source, &self.discovery) {

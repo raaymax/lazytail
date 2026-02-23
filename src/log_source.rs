@@ -5,9 +5,11 @@ use crate::filter::FilterMode;
 use crate::index::reader::IndexReader;
 use crate::reader::LogReader;
 use crate::source::SourceStatus;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Calculate the total size of all files in the index directory
 pub(crate) fn calculate_index_size(log_path: &Path) -> Option<u64> {
@@ -28,6 +30,60 @@ pub(crate) fn calculate_index_size(log_path: &Path) -> Option<u64> {
     }
 
     Some(total_size)
+}
+
+/// Tracks line ingestion rate using a sliding window of snapshots.
+pub struct LineRateTracker {
+    snapshots: VecDeque<(Instant, usize)>,
+}
+
+const RATE_WINDOW_SECS: f64 = 5.0;
+
+impl LineRateTracker {
+    pub fn new(initial_lines: usize) -> Self {
+        let mut snapshots = VecDeque::new();
+        snapshots.push_back((Instant::now(), initial_lines));
+        Self { snapshots }
+    }
+
+    /// Record a new total_lines value. Call whenever total_lines changes.
+    pub fn record(&mut self, total_lines: usize) {
+        let now = Instant::now();
+        self.snapshots.push_back((now, total_lines));
+        // Prune snapshots older than the window (keep at least one old one for rate calc)
+        while self.snapshots.len() > 2 {
+            if let Some(&(t, _)) = self.snapshots.get(1) {
+                if now.duration_since(t).as_secs_f64() > RATE_WINDOW_SECS {
+                    self.snapshots.pop_front();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Returns lines per second over the window, or None if not enough data.
+    pub fn lines_per_second(&self) -> Option<f64> {
+        if self.snapshots.len() < 2 {
+            return None;
+        }
+        let (t_old, n_old) = self.snapshots.front()?;
+        let (t_new, n_new) = self.snapshots.back()?;
+        let dt = t_new.duration_since(*t_old).as_secs_f64();
+        if dt < 0.5 {
+            return None; // Not enough elapsed time
+        }
+        let dn = n_new.saturating_sub(*n_old) as f64;
+        Some(dn / dt)
+    }
+}
+
+impl Default for LineRateTracker {
+    fn default() -> Self {
+        Self::new(0)
+    }
 }
 
 /// Filter-related state for a source
@@ -85,6 +141,8 @@ pub struct LogSource {
     pub index_reader: Option<IndexReader>,
     /// Index directory size in bytes (None if no index)
     pub index_size: Option<u64>,
+    /// Tracks line ingestion rate
+    pub rate_tracker: LineRateTracker,
 }
 
 #[allow(dead_code)]

@@ -267,9 +267,12 @@ pub struct GetStatsResponse {
     pub log_file_size: u64,
     /// Whether a columnar index exists
     pub has_index: bool,
-    /// Severity counts (from last checkpoint, approximate)
+    /// Severity counts from flags column
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity_counts: Option<SeverityCountsInfo>,
+    /// Approximate ingestion rate in lines per second (from checkpoint timestamps)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines_per_second: Option<f64>,
     /// Which index columns are present
     pub columns: Vec<String>,
 }

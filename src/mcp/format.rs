@@ -131,6 +131,17 @@ pub fn format_stats_text(resp: &GetStatsResponse) -> String {
         writeln!(out, "  unknown: {}", counts.unknown).unwrap();
     }
 
+    if let Some(rate) = resp.lines_per_second {
+        let (value, unit) = if rate >= 1.0 {
+            (rate, "lines/s")
+        } else if rate * 60.0 >= 1.0 {
+            (rate * 60.0, "lines/min")
+        } else {
+            (rate * 3600.0, "lines/h")
+        };
+        writeln!(out, "--- rate: {:.1} {}", value, unit).unwrap();
+    }
+
     out
 }
 

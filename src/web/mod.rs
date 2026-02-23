@@ -1,7 +1,7 @@
+use crate::app::TabState;
 use crate::app::{FilterState, SourceType, ViewMode};
-use crate::cmd::WebArgs;
+use crate::cli::WebArgs;
 use crate::config;
-use crate::dir_watcher::{DirEvent, DirectoryWatcher};
 use crate::filter::engine::FilterProgress;
 use crate::filter::orchestrator::FilterOrchestrator;
 use crate::filter::query;
@@ -10,8 +10,8 @@ use crate::filter::FilterMode;
 use crate::index::flags::Severity;
 use crate::signal::setup_shutdown_handlers;
 use crate::source::{self, SourceLocation, SourceStatus};
-use crate::tab::TabState;
 use crate::watcher::FileEvent;
+use crate::watcher::{DirEvent, DirectoryWatcher};
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -314,57 +314,61 @@ impl WebState {
         let mut changed = false;
 
         for tab in &mut self.tabs {
-            loop {
-                let file_event = tab.watcher.as_ref().and_then(|watcher| watcher.try_recv());
-                let Some(file_event) = file_event else {
-                    break;
-                };
-
-                match file_event {
-                    FileEvent::Modified => {
-                        let old_total = tab.source.total_lines;
-                        let mut reader = match tab.source.reader.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-
-                        if let Err(err) = reader.reload() {
-                            eprintln!("[web] Failed to reload '{}': {}", tab.source.name, err);
-                            break;
+            // Drain all pending events — only reload once per cycle.
+            let mut has_modified = false;
+            if let Some(ref watcher) = tab.watcher {
+                while let Some(file_event) = watcher.try_recv() {
+                    match file_event {
+                        FileEvent::Modified => has_modified = true,
+                        FileEvent::Error(err) => {
+                            eprintln!("[web] Watcher error for '{}': {}", tab.source.name, err);
                         }
-
-                        let new_total = reader.total_lines();
-                        drop(reader);
-
-                        if new_total < old_total {
-                            reset_tab_after_truncation(tab, new_total);
-                            changed = true;
-                            continue;
-                        }
-
-                        tab.source.total_lines = new_total;
-                        if tab.source.mode == ViewMode::Normal {
-                            tab.source.line_indices = (0..new_total).collect();
-                        }
-
-                        if let Some(pattern) = tab.source.filter.pattern.clone() {
-                            if new_total > tab.source.filter.last_filtered_line {
-                                let mode = tab.source.filter.mode;
-                                let range = Some((tab.source.filter.last_filtered_line, new_total));
-                                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
-                            }
-                        }
-
-                        if tab.source.follow_mode {
-                            tab.jump_to_end();
-                        }
-
-                        changed = true;
-                    }
-                    FileEvent::Error(err) => {
-                        eprintln!("[web] Watcher error for '{}': {}", tab.source.name, err);
                     }
                 }
+            }
+
+            if has_modified {
+                let old_total = tab.source.total_lines;
+                let mut reader = match tab.source.reader.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+
+                if let Err(err) = reader.reload() {
+                    eprintln!("[web] Failed to reload '{}': {}", tab.source.name, err);
+                    continue;
+                }
+
+                let new_total = reader.total_lines();
+                drop(reader);
+
+                if new_total < old_total {
+                    reset_tab_after_truncation(tab, new_total);
+                    changed = true;
+                    continue;
+                }
+
+                tab.source.total_lines = new_total;
+                if tab.source.mode == ViewMode::Normal {
+                    let old = tab.source.line_indices.len();
+                    if new_total > old {
+                        tab.source.line_indices.extend(old..new_total);
+                    }
+                }
+
+                if let Some(pattern) = tab.source.filter.pattern.clone() {
+                    if new_total > tab.source.filter.last_filtered_line {
+                        let mode = tab.source.filter.mode;
+                        let range = Some((tab.source.filter.last_filtered_line, new_total));
+                        FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
+                    }
+                }
+
+                if tab.source.follow_mode {
+                    tab.jump_to_end();
+                }
+
+                changed = true;
             }
         }
 
@@ -422,6 +426,10 @@ impl WebState {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         tab.source.filter.receiver = None;
+                        if matches!(tab.source.filter.state, FilterState::Processing { .. }) {
+                            tab.source.filter.state = FilterState::Inactive;
+                            changed = true;
+                        }
                         break;
                     }
                 }
@@ -1240,9 +1248,14 @@ fn delete_ended_source(tab: &TabState, state: &WebState) -> Result<()> {
         anyhow::bail!("Cannot delete source outside lazytail data directories");
     }
 
+    // Resolve canonical path and re-check to prevent TOCTOU symlink attacks
     if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to delete source file: {}", path.display()))?;
+        let canonical = path.canonicalize().context("Cannot resolve source path")?;
+        if !state.is_under_data_roots(&canonical) {
+            anyhow::bail!("Resolved path is outside lazytail data directories");
+        }
+        fs::remove_file(&canonical)
+            .with_context(|| format!("Failed to delete source file: {}", canonical.display()))?;
     }
 
     if let Some(marker_path) = path

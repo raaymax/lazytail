@@ -264,12 +264,10 @@ pub fn check_source_status_in_dir(name: &str, sources_dir: &Path) -> SourceStatu
 /// Scans both the project-local `.lazytail/data/` (if in a project) and the
 /// global `~/.config/lazytail/data/` directories for log sources.
 ///
-/// Project sources appear first in the result and shadow global sources
-/// with the same name (i.e., if a source exists in both locations, only
-/// the project-local version is returned).
+/// Project sources appear first in the result. Sources with the same name in
+/// both locations are both returned — `SourceLocation` distinguishes them.
 pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<DiscoveredSource>> {
     let mut all_sources = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
 
     // First, scan project data directory if in a project
     if discovery.project_root.is_some() {
@@ -280,11 +278,7 @@ pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<D
                 project_sources.as_deref(),
                 SourceLocation::Project,
             )?;
-
-            for source in sources {
-                seen_names.insert(source.name.clone());
-                all_sources.push(source);
-            }
+            all_sources.extend(sources);
         }
     }
 
@@ -296,13 +290,7 @@ pub fn discover_sources_for_context(discovery: &DiscoveryResult) -> Result<Vec<D
             global_sources_path.as_deref(),
             SourceLocation::Global,
         )?;
-
-        // Only add global sources that aren't shadowed by project sources
-        for source in sources {
-            if !seen_names.contains(&source.name) {
-                all_sources.push(source);
-            }
-        }
+        all_sources.extend(sources);
     }
 
     Ok(all_sources)
@@ -382,6 +370,7 @@ pub fn remove_marker_for_context(name: &str, discovery: &DiscoveryResult) -> Res
 }
 
 /// Remove a marker file for the given source name.
+#[cfg(test)]
 pub fn remove_marker(name: &str) -> Result<()> {
     let Some(sources) = sources_dir() else {
         return Ok(());
@@ -397,14 +386,22 @@ pub fn remove_marker(name: &str) -> Result<()> {
 
 /// Delete a source (log file and marker).
 ///
-/// Only deletes sources in the lazytail data directory.
+/// Only deletes sources in lazytail data directories (global or project-local).
+/// Derives the marker directory from the log path's parent structure.
 pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
-    // Safety check: only delete files in our data directory
-    let Some(data) = data_dir() else {
-        anyhow::bail!("Could not determine data directory");
-    };
+    // Safety check: only delete files in a lazytail data directory
+    let is_in_global = data_dir().is_some_and(|d| log_path.starts_with(&d));
+    let is_in_project = log_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "data")
+        && log_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == ".lazytail");
 
-    if !log_path.starts_with(&data) {
+    if !is_in_global && !is_in_project {
         anyhow::bail!("Cannot delete source outside data directory");
     }
 
@@ -413,8 +410,17 @@ pub fn delete_source(name: &str, log_path: &Path) -> Result<()> {
         fs::remove_file(log_path).context("Failed to delete source log file")?;
     }
 
-    // Remove the marker if it exists (cleanup stale markers)
-    let _ = remove_marker(name);
+    // Remove the marker — derive sources dir from the log path's data dir sibling
+    if let Some(sources_dir) = log_path
+        .parent()
+        .and_then(|data_dir| data_dir.parent())
+        .map(|root| root.join("sources"))
+    {
+        let marker_path = sources_dir.join(name);
+        if marker_path.exists() {
+            let _ = fs::remove_file(marker_path);
+        }
+    }
 
     Ok(())
 }
@@ -1012,10 +1018,12 @@ mod tests {
 
         let sources = discover_sources_for_context(&discovery).unwrap();
 
-        // Should only have 1 source (project shadows global)
-        assert_eq!(sources.len(), 1);
+        // Should have 2 sources — same name in both locations, both visible
+        assert_eq!(sources.len(), 2);
         assert_eq!(sources[0].name, "shared");
         assert_eq!(sources[0].location, SourceLocation::Project);
+        assert_eq!(sources[1].name, "shared");
+        assert_eq!(sources[1].location, SourceLocation::Global);
 
         if let Some(home) = old_home {
             env::set_var("HOME", home);

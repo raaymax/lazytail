@@ -1,14 +1,14 @@
+use super::viewport::Viewport;
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
 use crate::index::reader::IndexReader;
-use crate::log_source::calculate_index_size;
+use crate::log_source::{calculate_index_size, LineRateTracker};
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
     check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
-use crate::viewport::Viewport;
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -125,10 +125,15 @@ impl TabState {
             .unwrap_or_else(|| path.to_string_lossy().to_string());
 
         if is_regular_file {
-            // Regular file - close this handle and use FileReader (which opens its own)
-            let file_size = Some(metadata.len());
+            // Regular file - open reader + index directly
             drop(file);
             let file_reader = FileReader::new(&path)?;
+            let index_reader = IndexReader::open(&path);
+            let file_size = Some(metadata.len());
+            let index_size = index_reader
+                .as_ref()
+                .and_then(|_| calculate_index_size(&path));
+
             let watcher = if watch {
                 FileWatcher::new(&path).ok()
             } else {
@@ -138,10 +143,6 @@ impl TabState {
             let total_lines = file_reader.total_lines();
             let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
-            let index_reader = IndexReader::open(&path);
-            let index_size = index_reader
-                .as_ref()
-                .and_then(|_| calculate_index_size(&path));
 
             Ok(Self {
                 source: LogSource {
@@ -158,6 +159,7 @@ impl TabState {
                     file_size,
                     index_reader,
                     index_size,
+                    rate_tracker: LineRateTracker::new(total_lines),
                 },
                 scroll_position: 0,
                 selected_line,
@@ -193,6 +195,7 @@ impl TabState {
                     file_size: None,
                     index_reader: None,
                     index_size: None,
+                    rate_tracker: LineRateTracker::new(0),
                 },
                 scroll_position: 0,
                 selected_line: 0,
@@ -231,6 +234,7 @@ impl TabState {
                 file_size: None,
                 index_reader: None,
                 index_size: None,
+                rate_tracker: LineRateTracker::new(0),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -245,8 +249,13 @@ impl TabState {
 
     /// Create a new tab from a discovered source
     pub fn from_discovered_source(source: DiscoveredSource, watch: bool) -> Result<Self> {
-        let file_size = std::fs::metadata(&source.log_path).map(|m| m.len()).ok();
         let file_reader = FileReader::new(&source.log_path)?;
+        let index_reader = IndexReader::open(&source.log_path);
+        let file_size = std::fs::metadata(&source.log_path).map(|m| m.len()).ok();
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.log_path));
+
         let watcher = if watch {
             FileWatcher::new(&source.log_path).ok()
         } else {
@@ -256,10 +265,6 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
-        let index_reader = IndexReader::open(&source.log_path);
-        let index_size = index_reader
-            .as_ref()
-            .and_then(|_| calculate_index_size(&source.log_path));
 
         Ok(Self {
             source: LogSource {
@@ -276,6 +281,7 @@ impl TabState {
                 file_size,
                 index_reader,
                 index_size,
+                rate_tracker: LineRateTracker::new(total_lines),
             },
             scroll_position: 0,
             selected_line,
@@ -306,8 +312,13 @@ impl TabState {
         }
 
         // Create normal file tab
-        let file_size = std::fs::metadata(&source.path).map(|m| m.len()).ok();
         let file_reader = FileReader::new(&source.path)?;
+        let index_reader = IndexReader::open(&source.path);
+        let file_size = std::fs::metadata(&source.path).map(|m| m.len()).ok();
+        let index_size = index_reader
+            .as_ref()
+            .and_then(|_| calculate_index_size(&source.path));
+
         let watcher = if watch {
             FileWatcher::new(&source.path).ok()
         } else {
@@ -317,10 +328,6 @@ impl TabState {
         let total_lines = file_reader.total_lines();
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
-        let index_reader = IndexReader::open(&source.path);
-        let index_size = index_reader
-            .as_ref()
-            .and_then(|_| calculate_index_size(&source.path));
 
         Ok(Self {
             source: LogSource {
@@ -337,6 +344,7 @@ impl TabState {
                 file_size,
                 index_reader,
                 index_size,
+                rate_tracker: LineRateTracker::new(total_lines),
             },
             scroll_position: 0,
             selected_line,
@@ -370,6 +378,7 @@ impl TabState {
                 file_size: None,
                 index_reader: None,
                 index_size: None,
+                rate_tracker: LineRateTracker::new(0),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -418,6 +427,7 @@ impl TabState {
 
         // Update total lines
         self.source.total_lines = old_total + new_lines_count;
+        self.source.rate_tracker.record(self.source.total_lines);
 
         // In normal mode, add new line indices
         if self.source.mode == ViewMode::Normal {
@@ -703,22 +713,36 @@ impl TabState {
     /// Updates total_lines, line_indices, and triggers incremental filtering if needed.
     pub fn apply_file_modification(&mut self, new_total: usize) {
         self.source.total_lines = new_total;
+        self.source.rate_tracker.record(new_total);
 
         if self.source.mode == ViewMode::Normal {
-            self.source.line_indices = (0..new_total).collect();
+            let old = self.source.line_indices.len();
+            if new_total > old {
+                self.source.line_indices.extend(old..new_total);
+            }
         }
 
-        // If tab has an active filter, trigger incremental filtering
-        if let Some(pattern) = self.source.filter.pattern.clone() {
-            if new_total > self.source.filter.last_filtered_line {
-                let mode = self.source.filter.mode;
-                let range = Some((self.source.filter.last_filtered_line, new_total));
-                crate::filter::orchestrator::FilterOrchestrator::trigger(
-                    &mut self.source,
-                    pattern,
-                    mode,
-                    range,
-                );
+        // Refresh index reader to pick up new flags/checkpoints from capture's sync()
+        if let (Some(ref mut ir), Some(ref path)) =
+            (&mut self.source.index_reader, &self.source.source_path)
+        {
+            ir.refresh(path);
+        }
+
+        // If tab has a completed filter, trigger incremental filtering for new lines.
+        // Skip if still Processing — the in-flight filter hasn't finished yet.
+        if matches!(self.source.filter.state, FilterState::Complete { .. }) {
+            if let Some(pattern) = self.source.filter.pattern.clone() {
+                if new_total > self.source.filter.last_filtered_line {
+                    let mode = self.source.filter.mode;
+                    let range = Some((self.source.filter.last_filtered_line, new_total));
+                    crate::filter::orchestrator::FilterOrchestrator::trigger(
+                        &mut self.source,
+                        pattern,
+                        mode,
+                        range,
+                    );
+                }
             }
         }
     }
@@ -726,8 +750,8 @@ impl TabState {
     /// Apply a filter event directly to this tab (works for both active and inactive tabs).
     ///
     /// Returns `true` if the filter operation completed (receiver should be cleared).
-    pub fn apply_filter_event(&mut self, event: &crate::event::AppEvent) -> bool {
-        use crate::event::AppEvent;
+    pub fn apply_filter_event(&mut self, event: &super::event::AppEvent) -> bool {
+        use super::event::AppEvent;
 
         match event {
             AppEvent::FilterProgress(lines_processed) => {

@@ -115,6 +115,37 @@ impl FileReader {
         true
     }
 
+    /// Refresh columnar offsets from the index that capture is building in real-time.
+    /// Re-mmaps the offsets column if the index has grown since we last loaded it.
+    /// This keeps `get_line()` on the O(1) path for lines the indexer has already processed.
+    fn try_refresh_columnar_offsets(&mut self) {
+        let idx_dir = index_dir_for_log(&self.path);
+        let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        let new_indexed = meta.entry_count as usize;
+        if new_indexed <= self.indexed_lines {
+            return; // No new indexed lines
+        }
+
+        // Re-mmap the offsets column with the updated size
+        let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), new_indexed) {
+            Ok(r) if r.len() == new_indexed => r,
+            _ => return,
+        };
+
+        self.columnar_offsets = Some(offsets);
+        self.indexed_lines = new_indexed;
+
+        // Advance scanned_up_to so scan_tail only covers the unindexed remainder
+        if meta.log_file_size > self.scanned_up_to {
+            self.scanned_up_to = meta.log_file_size;
+            self.sparse_index.set_total_lines(new_indexed);
+        }
+    }
+
     /// Scan only the tail of the file (from `start_offset`) to count new lines
     /// and extend the sparse index. `base_lines` is the number of lines already indexed.
     fn scan_tail(&mut self, base_lines: usize, start_offset: u64) -> Result<()> {
@@ -266,17 +297,27 @@ impl LogReader for FileReader {
     }
 
     fn reload(&mut self) -> Result<()> {
+        let new_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+
+        // Nothing changed — skip the reload entirely
+        if new_size == self.scanned_up_to {
+            return Ok(());
+        }
+
         let file = File::open(&self.path)?;
         self.reader = BufReader::new(file);
 
-        let new_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
-
-        if new_size >= self.scanned_up_to && self.scanned_up_to > 0 {
-            // File grew or stayed the same — scan only the new tail
+        if new_size >= self.scanned_up_to {
+            // File grew — refresh columnar offsets from the index that
+            // capture is building in real-time, then scan only the unindexed tail.
+            // SAFETY: columnar_offsets mmap is protected from concurrent truncation
+            // by IndexWriteLock — only one writer runs at a time, and a truncating
+            // writer would change the log file size, triggering the shrink branch below.
+            self.try_refresh_columnar_offsets();
             let old_lines = self.sparse_index.total_lines();
             self.scan_tail(old_lines, self.scanned_up_to)
         } else {
-            // File was truncated or empty — columnar offsets are now invalid
+            // File was truncated — columnar offsets are now invalid
             self.columnar_offsets = None;
             self.indexed_lines = 0;
             self.build_index()

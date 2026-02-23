@@ -1,10 +1,8 @@
 mod app;
 mod cache;
 mod capture;
-mod cmd;
+mod cli;
 mod config;
-mod dir_watcher;
-mod event;
 mod filter;
 mod handlers;
 mod history;
@@ -14,16 +12,14 @@ mod mcp;
 mod reader;
 mod signal;
 mod source;
-mod tab;
-mod ui;
+mod tui;
 #[cfg(feature = "self-update")]
 mod update;
-mod viewport;
 mod watcher;
 mod web;
 
 use anyhow::{Context, Result};
-use app::{App, SourceType};
+use app::{App, AppEvent, FilterState, SourceType, StreamMessage, TabState};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -103,7 +99,7 @@ struct Cli {
 
     /// Subcommand to run
     #[command(subcommand)]
-    command: Option<cmd::Commands>,
+    command: Option<cli::Commands>,
 }
 
 fn main() -> Result<()> {
@@ -120,20 +116,20 @@ fn main() -> Result<()> {
     // Handle subcommands first (before mode detection)
     if let Some(command) = cli.command {
         return match command {
-            cmd::Commands::Init(args) => cmd::init::run(args.force)
+            cli::Commands::Init(args) => cli::init::run(args.force)
                 .map_err(|code| anyhow::anyhow!("init failed with exit code {}", code)),
-            cmd::Commands::Web(args) => {
+            cli::Commands::Web(args) => {
                 web::run(args).map_err(|code| anyhow::anyhow!("web failed with exit code {}", code))
             }
-            cmd::Commands::Config { action } => match action {
-                cmd::ConfigAction::Validate => cmd::config::validate().map_err(|code| {
+            cli::Commands::Config { action } => match action {
+                cli::ConfigAction::Validate => cli::config::validate().map_err(|code| {
                     anyhow::anyhow!("config validate failed with exit code {}", code)
                 }),
-                cmd::ConfigAction::Show => cmd::config::show()
+                cli::ConfigAction::Show => cli::config::show()
                     .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
             },
             #[cfg(feature = "self-update")]
-            cmd::Commands::Update(args) => cmd::update::run(args.check)
+            cli::Commands::Update(args) => cli::update::run(args.check)
                 .map_err(|code| anyhow::anyhow!("update failed with exit code {}", code)),
         };
     }
@@ -256,7 +252,7 @@ fn main() -> Result<()> {
 
     // Add project sources
     for source in &cfg.project_sources {
-        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+        match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
             Ok(t) => tabs.push(t),
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
@@ -264,7 +260,7 @@ fn main() -> Result<()> {
 
     // Add global sources
     for source in &cfg.global_sources {
-        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+        match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
             Ok(t) => tabs.push(t),
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
@@ -275,7 +271,7 @@ fn main() -> Result<()> {
 
     // If stdin has piped data, always include it as the first tab
     if has_piped_input {
-        tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+        tabs.push(TabState::from_stdin().context("Failed to read from stdin")?);
         stdin_used = true;
     }
 
@@ -286,9 +282,9 @@ fn main() -> Result<()> {
                 continue;
             }
             stdin_used = true;
-            tabs.push(tab::TabState::from_stdin().context("Failed to read from stdin")?);
+            tabs.push(TabState::from_stdin().context("Failed to read from stdin")?);
         } else {
-            tabs.push(tab::TabState::new(file, watch).context("Failed to open log file")?);
+            tabs.push(TabState::new(file, watch).context("Failed to open log file")?);
         }
     }
     if verbose {
@@ -408,7 +404,7 @@ fn run_discovery_mode(
 
     // Add project sources
     for source in &cfg.project_sources {
-        match tab::TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+        match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
             Ok(t) => tabs.push(t),
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
@@ -416,16 +412,16 @@ fn run_discovery_mode(
 
     // Add global sources
     for source in &cfg.global_sources {
-        match tab::TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+        match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
             Ok(t) => tabs.push(t),
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
     }
 
     // Add discovered sources
-    let discovery_tabs: Vec<tab::TabState> = sources
+    let discovery_tabs: Vec<TabState> = sources
         .into_iter()
-        .filter_map(|s| tab::TabState::from_discovered_source(s, watch).ok())
+        .filter_map(|s| TabState::from_discovered_source(s, watch).ok())
         .collect();
     tabs.extend(discovery_tabs);
     if verbose {
@@ -460,7 +456,7 @@ fn run_discovery_mode(
         } else {
             source::data_dir()
         };
-        watch_dir.and_then(|p| dir_watcher::DirectoryWatcher::new(p).ok())
+        watch_dir.and_then(|p| watcher::DirectoryWatcher::new(p).ok())
     } else {
         None
     };
@@ -515,11 +511,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
 fn run_app_with_discovery<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    dir_watcher: Option<dir_watcher::DirectoryWatcher>,
+    dir_watcher: Option<watcher::DirectoryWatcher>,
     watched_location: Option<source::SourceLocation>,
 ) -> Result<()> {
-    use event::AppEvent;
-
+    let mut last_status_refresh = Instant::now();
     loop {
         // Phase 1: Render
         render(terminal, app)?;
@@ -536,16 +531,19 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
             }
         }
 
-        // Phase 2.5: Refresh source status for discovered sources
-        for tab in &mut app.tabs {
-            tab.refresh_source_status();
+        // Phase 2.5: Refresh source status for discovered sources (throttled to every 2s)
+        if last_status_refresh.elapsed() >= Duration::from_secs(2) {
+            last_status_refresh = Instant::now();
+            for tab in &mut app.tabs {
+                tab.refresh_source_status();
+            }
         }
 
         // Phase 2.6: Check for new sources from directory watcher
         if let Some(ref watcher) = dir_watcher {
             while let Some(dir_event) = watcher.try_recv() {
                 match dir_event {
-                    dir_watcher::DirEvent::NewFile(path) => {
+                    watcher::DirEvent::NewFile(path) => {
                         // Check if we already have this file open
                         let already_open = app
                             .tabs
@@ -570,14 +568,13 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     location: watched_location
                                         .unwrap_or(source::SourceLocation::Global),
                                 };
-                                if let Ok(tab) = tab::TabState::from_discovered_source(source, true)
-                                {
+                                if let Ok(tab) = TabState::from_discovered_source(source, true) {
                                     app.add_tab(tab);
                                 }
                             }
                         }
                     }
-                    dir_watcher::DirEvent::FileRemoved(_path) => {
+                    watcher::DirEvent::FileRemoved(_path) => {
                         // Optionally handle file removal (don't close tab, just mark as unavailable)
                     }
                 }
@@ -611,7 +608,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
 /// Render the UI and manage cursor visibility
 fn render<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     terminal.draw(|f| {
-        if let Err(e) = ui::render(f, app) {
+        if let Err(e) = tui::render(f, app) {
             eprintln!("Render error: {}", e);
         }
     })?;
@@ -632,7 +629,7 @@ struct ActiveTabFileModification {
 }
 
 /// Collect file watcher events from all tabs
-fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
+fn collect_file_events(app: &mut App) -> Vec<AppEvent> {
     let active_tab = app.active_tab;
 
     // First pass: reload files and handle inactive tabs
@@ -640,43 +637,52 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         if let Some(ref watcher) = tab.watcher {
-            if let Some(file_event) = watcher.try_recv() {
+            // Drain all pending events — only the last one matters.
+            // The unbounded channel can accumulate thousands of events
+            // (one per flush in capture mode), but we only need one reload.
+            let mut has_modified = false;
+            let mut last_error = None;
+            while let Some(file_event) = watcher.try_recv() {
                 match file_event {
-                    watcher::FileEvent::Modified => {
-                        let mut reader_guard = tab
-                            .source
-                            .reader
-                            .lock()
-                            .expect("Reader lock poisoned - filter thread panicked");
+                    watcher::FileEvent::Modified => has_modified = true,
+                    watcher::FileEvent::Error(err) => last_error = Some(err),
+                }
+            }
 
-                        if let Err(e) = reader_guard.reload() {
-                            eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
-                            continue;
-                        }
+            if let Some(err) = last_error {
+                eprintln!("File watcher error for tab {}: {}", tab_idx, err);
+            }
 
-                        let new_total = reader_guard.total_lines();
-                        let old_total = tab.source.total_lines;
-                        drop(reader_guard);
+            if has_modified {
+                let mut reader_guard = tab
+                    .source
+                    .reader
+                    .lock()
+                    .expect("Reader lock poisoned - filter thread panicked");
 
-                        // Update file size
-                        if let Some(ref path) = tab.source.source_path {
-                            tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
-                        }
+                if let Err(e) = reader_guard.reload() {
+                    eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
+                    continue;
+                }
 
-                        if tab_idx == active_tab {
-                            // Collect for processing after the loop
-                            active_tab_modification = Some(ActiveTabFileModification {
-                                new_total,
-                                old_total,
-                            });
-                        } else {
-                            // Inactive tab: update state directly
-                            tab.apply_file_modification(new_total);
-                        }
-                    }
-                    watcher::FileEvent::Error(err) => {
-                        eprintln!("File watcher error for tab {}: {}", tab_idx, err);
-                    }
+                let new_total = reader_guard.total_lines();
+                let old_total = tab.source.total_lines;
+                drop(reader_guard);
+
+                // Update file size
+                if let Some(ref path) = tab.source.source_path {
+                    tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
+                }
+
+                if tab_idx == active_tab {
+                    // Collect for processing after the loop
+                    active_tab_modification = Some(ActiveTabFileModification {
+                        new_total,
+                        old_total,
+                    });
+                } else {
+                    // Inactive tab: update state directly
+                    tab.apply_file_modification(new_total);
                 }
             }
         }
@@ -695,39 +701,46 @@ fn collect_file_events(app: &mut App) -> Vec<event::AppEvent> {
 }
 
 /// Collect filter progress from all tabs
-fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
-    use event::AppEvent;
-
+fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
     let mut events = Vec::new();
     let active_tab = app.active_tab;
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         if let Some(ref rx) = tab.source.filter.receiver {
-            if let Ok(progress) = rx.try_recv() {
-                let is_incremental = tab.source.filter.is_incremental;
-                let filter_events =
-                    handlers::filter::handle_filter_progress(progress, is_incremental);
+            match rx.try_recv() {
+                Ok(progress) => {
+                    let is_incremental = tab.source.filter.is_incremental;
+                    let filter_events =
+                        handlers::filter::handle_filter_progress(progress, is_incremental);
 
-                if tab_idx == active_tab {
-                    // Active tab: check for completion and collect events
-                    let completed = filter_events.iter().any(|e| {
-                        matches!(
-                            e,
-                            AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
-                        )
-                    });
-                    events.extend(filter_events);
-                    if completed {
-                        tab.source.filter.receiver = None;
-                    }
-                } else {
-                    // Inactive tab: apply filter events directly
-                    for ev in &filter_events {
-                        if tab.apply_filter_event(ev) {
+                    if tab_idx == active_tab {
+                        // Active tab: check for completion and collect events
+                        let completed = filter_events.iter().any(|e| {
+                            matches!(
+                                e,
+                                AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
+                            )
+                        });
+                        events.extend(filter_events);
+                        if completed {
                             tab.source.filter.receiver = None;
+                        }
+                    } else {
+                        // Inactive tab: apply filter events directly
+                        for ev in &filter_events {
+                            if tab.apply_filter_event(ev) {
+                                tab.source.filter.receiver = None;
+                            }
                         }
                     }
                 }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    tab.source.filter.receiver = None;
+                    if matches!(tab.source.filter.state, FilterState::Processing { .. }) {
+                        tab.source.filter.state = FilterState::Inactive;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
     }
@@ -739,7 +752,6 @@ fn collect_filter_progress(app: &mut App) -> Vec<event::AppEvent> {
 /// This modifies tabs directly rather than returning events
 fn collect_stream_events(app: &mut App) {
     use std::sync::mpsc::TryRecvError;
-    use tab::StreamMessage;
 
     for tab in app.tabs.iter_mut() {
         if tab.stream_receiver.is_none() {
@@ -784,9 +796,8 @@ fn collect_stream_events(app: &mut App) {
 fn collect_input_events<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &App,
-) -> Result<Vec<event::AppEvent>> {
+) -> Result<Vec<AppEvent>> {
     use crossterm_event::MouseEventKind;
-    use event::AppEvent;
 
     let mut events = Vec::new();
 
@@ -882,7 +893,7 @@ fn collect_input_events<B: ratatui::backend::Backend>(
 ///
 /// All filter side-effects (debounce, cancellation, follow-mode jumps) are now
 /// handled inside `App::apply_event()`, so this function is a thin passthrough.
-fn process_event(app: &mut App, event: event::AppEvent) {
+fn process_event(app: &mut App, event: AppEvent) {
     app.apply_event(event);
 }
 

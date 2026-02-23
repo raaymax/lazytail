@@ -1,9 +1,19 @@
-use crate::index::checkpoint::{Checkpoint, CheckpointReader};
+use crate::index::checkpoint::{Checkpoint, CheckpointReader, SeverityCounts};
 use crate::index::column::ColumnReader;
 use crate::index::flags::Severity;
 use crate::index::meta::{ColumnBit, IndexMeta};
 use crate::source::index_dir_for_log;
 use std::path::Path;
+
+/// Aggregated index statistics for a log file.
+pub struct IndexStats {
+    pub indexed_lines: u64,
+    pub log_file_size: u64,
+    pub columns: Vec<String>,
+    pub severity_counts: Option<SeverityCounts>,
+    /// Approximate ingestion rate in lines per second (from checkpoint timestamps).
+    pub lines_per_second: Option<f64>,
+}
 
 /// Read-only access to an index's flags and checkpoint columns.
 ///
@@ -44,6 +54,31 @@ impl IndexReader {
         Some(Self { flags, checkpoints })
     }
 
+    /// Refresh flags and checkpoints from disk if the index has grown.
+    /// Called periodically to pick up new data written by capture's `sync()`.
+    pub fn refresh(&mut self, log_path: &Path) {
+        let idx_dir = index_dir_for_log(log_path);
+        let meta = match IndexMeta::read_from(idx_dir.join("meta")).ok() {
+            Some(m) => m,
+            None => return,
+        };
+
+        let new_count = meta.entry_count as usize;
+        if new_count <= self.flags.len() {
+            return; // No new data
+        }
+
+        if let Ok(col_reader) = ColumnReader::<u32>::open(idx_dir.join("flags"), new_count) {
+            self.flags = col_reader.iter().collect();
+        }
+
+        if meta.has_column(ColumnBit::Checkpoints) {
+            if let Ok(r) = CheckpointReader::open(idx_dir.join("checkpoints")) {
+                self.checkpoints = r.iter().collect();
+            }
+        }
+    }
+
     /// Get the severity level for a specific line.
     pub fn severity(&self, line_number: usize) -> Severity {
         self.flags
@@ -71,6 +106,25 @@ impl IndexReader {
     /// Access the checkpoint data (for severity histogram).
     pub fn checkpoints(&self) -> &[Checkpoint] {
         &self.checkpoints
+    }
+
+    /// Compute live severity counts from the flags column.
+    /// Unlike checkpoint-based counts, this reflects every indexed line immediately.
+    pub fn severity_counts(&self) -> SeverityCounts {
+        use crate::index::flags::SEVERITY_MASK;
+        let mut counts = SeverityCounts::default();
+        for &f in &self.flags {
+            match f & SEVERITY_MASK {
+                1 => counts.trace += 1,
+                2 => counts.debug += 1,
+                3 => counts.info += 1,
+                4 => counts.warn += 1,
+                5 => counts.error += 1,
+                6 => counts.fatal += 1,
+                _ => counts.unknown += 1,
+            }
+        }
+        counts
     }
 
     /// Collect line indices where `(flags & mask) == want`.
@@ -104,6 +158,87 @@ impl IndexReader {
             .iter()
             .map(|&f| f & mask == want)
             .collect()
+    }
+
+    /// Gather aggregated index statistics from the index directory.
+    ///
+    /// Reads meta + checkpoint data to produce a summary. Returns `None`
+    /// if the index directory doesn't exist or meta cannot be read.
+    pub fn stats(log_path: &Path) -> Option<IndexStats> {
+        use crate::index::flags::SEVERITY_MASK;
+
+        let idx_dir = index_dir_for_log(log_path);
+        let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
+
+        let column_names = [
+            (ColumnBit::Offsets, "offsets"),
+            (ColumnBit::Lengths, "lengths"),
+            (ColumnBit::Time, "time"),
+            (ColumnBit::Flags, "flags"),
+            (ColumnBit::Checkpoints, "checkpoints"),
+        ];
+        let columns: Vec<String> = column_names
+            .iter()
+            .filter(|(bit, _)| meta.has_column(*bit))
+            .map(|(_, name)| name.to_string())
+            .collect();
+
+        // Compute severity counts from the flags column (live, not checkpoint-delayed)
+        let severity_counts = if meta.has_column(ColumnBit::Flags) {
+            ColumnReader::<u32>::open(idx_dir.join("flags"), meta.entry_count as usize)
+                .ok()
+                .map(|col| {
+                    let mut counts = SeverityCounts::default();
+                    for f in col.iter() {
+                        match f & SEVERITY_MASK {
+                            1 => counts.trace += 1,
+                            2 => counts.debug += 1,
+                            3 => counts.info += 1,
+                            4 => counts.warn += 1,
+                            5 => counts.error += 1,
+                            6 => counts.fatal += 1,
+                            _ => counts.unknown += 1,
+                        }
+                    }
+                    counts
+                })
+        } else {
+            None
+        };
+
+        // Compute approximate rate from first and last checkpoint timestamps
+        let lines_per_second = if meta.has_column(ColumnBit::Checkpoints) {
+            Self::rate_from_checkpoints(&idx_dir)
+        } else {
+            None
+        };
+
+        Some(IndexStats {
+            indexed_lines: meta.entry_count,
+            log_file_size: meta.log_file_size,
+            columns,
+            severity_counts,
+            lines_per_second,
+        })
+    }
+
+    /// Compute a recent ingestion rate from the last two checkpoint timestamps.
+    fn rate_from_checkpoints(idx_dir: &Path) -> Option<f64> {
+        let reader = CheckpointReader::open(idx_dir.join("checkpoints")).ok()?;
+        let checkpoints: Vec<Checkpoint> = reader.iter().collect();
+        let len = checkpoints.len();
+        if len < 2 {
+            return None;
+        }
+        let prev = &checkpoints[len - 2];
+        let last = &checkpoints[len - 1];
+        let dt_ms = last.index_timestamp.saturating_sub(prev.index_timestamp);
+        if dt_ms == 0 {
+            return None;
+        }
+        let dn = last.line_number.saturating_sub(prev.line_number) as f64;
+        let dt_secs = dt_ms as f64 / 1000.0;
+        Some(dn / dt_secs)
     }
 }
 

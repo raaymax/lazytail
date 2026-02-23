@@ -62,6 +62,18 @@ impl<T: ColumnElement> ColumnWriter<T> {
         })
     }
 
+    /// Truncate column file to `entry_count` entries, then open for appending.
+    /// Discards orphaned entries written by a previous writer that was killed mid-run.
+    pub fn truncate_and_open(path: impl AsRef<Path>, entry_count: usize) -> Result<Self> {
+        let target_len = (entry_count * T::SIZE) as u64;
+        OpenOptions::new()
+            .write(true)
+            .open(path.as_ref())
+            .with_context(|| format!("truncating column file: {}", path.as_ref().display()))?
+            .set_len(target_len)?;
+        Self::open(path)
+    }
+
     /// Open an existing column file for appending.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let file = OpenOptions::new()

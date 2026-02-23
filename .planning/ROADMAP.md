@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Config Loading** - Parse YAML and merge configuration layers
 - [x] **Phase 4: Project-Local Streams** - .lazytail/ directory with context-aware capture
 - [x] **Phase 5: Config Commands** - Init, validate, and show commands for developer experience
+- [ ] **Phase 6: Search Result Bitmap Cache** - Roaring bitmap per search term, co-located with columnar index
 
 ## Phase Details
 
@@ -96,10 +97,23 @@ Plans:
 - [x] 05-01-PLAN.md — CLI subcommand infrastructure and init command
 - [x] 05-02-PLAN.md — Config validate and show commands
 
+### Phase 6: Search Result Bitmap Cache
+**Goal**: Near-instant repeat searches by persisting filter results as Roaring Bitmaps alongside columnar index files
+**Depends on**: Phase 4 (project-local storage), columnar index design in `docs/INDEXES.md`
+**Success Criteria** (what must be TRUE):
+  1. Searching the same plain-text term twice on a large file returns results without re-scanning
+  2. Bitmap is extended (not invalidated) when a log file grows with new appended lines
+  3. Bitmap is invalidated and rebuilt when log file content changes (not just appends)
+  4. Two bitmaps can be AND/OR'd to resolve compound queries without scanning log content
+  5. Bitmap files live in `.lazytail/idx/{source_name}/search/` alongside other index columns
+  6. A cache miss falls through transparently to `streaming_filter` — no visible behaviour change
+
+**Design notes:** See `docs/INDEXES.md` §Search Result Bitmap Cache for full layout and cache-key design.
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -108,3 +122,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Config Loading | 2/2 | Complete | 2026-02-04 |
 | 4. Project-Local Streams | 2/2 | Complete | 2026-02-04 |
 | 5. Config Commands | 2/2 | Complete | 2026-02-05 |
+| 6. Search Result Bitmap Cache | 0/0 | Planned | — |

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use memchr::memchr;
 use memmap2::Mmap;
 
@@ -12,6 +12,7 @@ use super::flags::{
     detect_flags_bytes, SEVERITY_DEBUG, SEVERITY_ERROR, SEVERITY_FATAL, SEVERITY_INFO,
     SEVERITY_MASK, SEVERITY_TRACE, SEVERITY_WARN,
 };
+use super::lock::IndexWriteLock;
 use super::meta::{ColumnBit, IndexMeta};
 
 const BATCH: usize = 1024;
@@ -62,6 +63,10 @@ impl IndexBuilder {
     }
 
     pub fn build(self, log_path: &Path, index_dir: &Path) -> Result<IndexMeta> {
+        let Some(_lock) = IndexWriteLock::try_acquire(index_dir)? else {
+            bail!("index is being written by another process, skipping");
+        };
+
         std::fs::create_dir_all(index_dir)
             .with_context(|| format!("creating index dir: {}", index_dir.display()))?;
 
@@ -230,6 +235,7 @@ impl Default for IndexBuilder {
 /// The delimiter is detected per-line, so mixed LF/CRLF files are handled correctly.
 /// The last line of a file may omit the delimiter entirely.
 pub struct LineIndexer {
+    _lock: Option<IndexWriteLock>,
     offset_writer: ColumnWriter<u64>,
     length_writer: ColumnWriter<u32>,
     flags_writer: ColumnWriter<u32>,
@@ -245,10 +251,18 @@ pub struct LineIndexer {
 
 impl LineIndexer {
     pub fn create(index_dir: &Path) -> Result<Self> {
+        let lock = IndexWriteLock::try_acquire(index_dir)?;
+        if lock.is_none() {
+            eprintln!(
+                "Warning: index directory is locked by another process, proceeding without lock"
+            );
+        }
+
         std::fs::create_dir_all(index_dir)
             .with_context(|| format!("creating index dir: {}", index_dir.display()))?;
 
         Ok(Self {
+            _lock: lock,
             offset_writer: ColumnWriter::create(index_dir.join("offsets"))?,
             length_writer: ColumnWriter::create(index_dir.join("lengths"))?,
             flags_writer: ColumnWriter::create(index_dir.join("flags"))?,
@@ -263,8 +277,14 @@ impl LineIndexer {
         })
     }
 
-    #[allow(dead_code)]
     pub fn resume(index_dir: &Path) -> Result<Self> {
+        let lock = IndexWriteLock::try_acquire(index_dir)?;
+        if lock.is_none() {
+            eprintln!(
+                "Warning: index directory is locked by another process, proceeding without lock"
+            );
+        }
+
         let meta = IndexMeta::read_from(index_dir.join("meta"))?;
 
         // Restore cumulative severity counts and last content hash from the last checkpoint
@@ -275,11 +295,27 @@ impl LineIndexer {
         };
 
         Ok(Self {
-            offset_writer: ColumnWriter::open(index_dir.join("offsets"))?,
-            length_writer: ColumnWriter::open(index_dir.join("lengths"))?,
-            flags_writer: ColumnWriter::open(index_dir.join("flags"))?,
-            time_writer: ColumnWriter::open(index_dir.join("time"))?,
-            checkpoint_writer: CheckpointWriter::open(index_dir.join("checkpoints"))?,
+            _lock: lock,
+            offset_writer: ColumnWriter::truncate_and_open(
+                index_dir.join("offsets"),
+                meta.entry_count as usize,
+            )?,
+            length_writer: ColumnWriter::truncate_and_open(
+                index_dir.join("lengths"),
+                meta.entry_count as usize,
+            )?,
+            flags_writer: ColumnWriter::truncate_and_open(
+                index_dir.join("flags"),
+                meta.entry_count as usize,
+            )?,
+            time_writer: ColumnWriter::truncate_and_open(
+                index_dir.join("time"),
+                meta.entry_count as usize,
+            )?,
+            checkpoint_writer: CheckpointWriter::truncate_and_open(
+                index_dir.join("checkpoints"),
+                meta.entry_count,
+            )?,
             checkpoint_interval: meta.checkpoint_interval,
             line_count: meta.entry_count,
             current_offset: meta.log_file_size,
@@ -332,6 +368,33 @@ impl LineIndexer {
         Ok(())
     }
 
+    fn build_meta(&self) -> IndexMeta {
+        let mut meta = IndexMeta::new();
+        meta.checkpoint_interval = self.checkpoint_interval;
+        meta.entry_count = self.line_count;
+        meta.log_file_size = self.current_offset;
+        meta.set_column(ColumnBit::Offsets);
+        meta.set_column(ColumnBit::Lengths);
+        meta.set_column(ColumnBit::Time);
+        meta.set_column(ColumnBit::Flags);
+        meta.set_column(ColumnBit::Checkpoints);
+        meta
+    }
+
+    /// Flush column buffers and write meta so readers can pick up new offsets.
+    /// Call periodically during capture to keep the TUI's columnar offsets current.
+    pub fn sync(&mut self, index_dir: &Path) -> Result<()> {
+        self.offset_writer.flush()?;
+        self.length_writer.flush()?;
+        self.flags_writer.flush()?;
+        self.time_writer.flush()?;
+        self.checkpoint_writer.flush()?;
+
+        self.build_meta().write_to(index_dir.join("meta"))?;
+
+        Ok(())
+    }
+
     pub fn finish(mut self, index_dir: &Path) -> Result<IndexMeta> {
         // Final checkpoint if last line wasn't on a boundary
         let interval = self.checkpoint_interval as u64;
@@ -351,15 +414,7 @@ impl LineIndexer {
         self.time_writer.flush()?;
         self.checkpoint_writer.flush()?;
 
-        let mut meta = IndexMeta::new();
-        meta.checkpoint_interval = self.checkpoint_interval;
-        meta.entry_count = self.line_count;
-        meta.log_file_size = self.current_offset;
-        meta.set_column(ColumnBit::Offsets);
-        meta.set_column(ColumnBit::Lengths);
-        meta.set_column(ColumnBit::Time);
-        meta.set_column(ColumnBit::Flags);
-        meta.set_column(ColumnBit::Checkpoints);
+        let meta = self.build_meta();
         meta.write_to(index_dir.join("meta"))?;
 
         Ok(meta)

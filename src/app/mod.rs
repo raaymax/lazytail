@@ -1,9 +1,15 @@
+pub mod event;
+pub mod tab;
+pub mod viewport;
+
+pub use event::AppEvent;
+pub use tab::{StreamMessage, TabState};
+
 use crate::filter::orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
 use crate::source::{self, SourceStatus};
-use crate::tab::TabState;
 #[cfg(test)]
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -855,8 +861,8 @@ impl App {
 
     /// Apply an event to the application state
     /// This is the central event handler that modifies app state based on events
-    pub fn apply_event(&mut self, event: crate::event::AppEvent) {
-        use crate::event::AppEvent;
+    pub fn apply_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
 
         match event {
             // Navigation events - delegate to active tab
@@ -1001,8 +1007,18 @@ impl App {
             } => {
                 let tab = self.active_tab_mut();
                 tab.source.total_lines = new_total;
+                tab.source.rate_tracker.record(new_total);
                 if tab.source.mode == ViewMode::Normal {
-                    tab.source.line_indices = (0..new_total).collect();
+                    let old = tab.source.line_indices.len();
+                    if new_total > old {
+                        tab.source.line_indices.extend(old..new_total);
+                    }
+                }
+                // Refresh index reader to pick up new flags/checkpoints
+                if let (Some(ref mut ir), Some(ref path)) =
+                    (&mut tab.source.index_reader, &tab.source.source_path)
+                {
+                    ir.refresh(path);
                 }
                 // Follow mode jump (suppress if a StartFilter is in the same batch)
                 let should_jump = self.active_tab().source.follow_mode
@@ -1026,6 +1042,7 @@ impl App {
 
                 // Reset state on truncation
                 tab.source.total_lines = new_total;
+                tab.source.rate_tracker.record(new_total);
                 tab.source.line_indices = (0..new_total).collect();
                 tab.source.mode = ViewMode::Normal;
 
@@ -1166,7 +1183,7 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::AppEvent;
+    use event::AppEvent;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1392,7 +1409,7 @@ mod tests {
 
     #[test]
     fn test_help_mode_toggle() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1461,7 +1478,7 @@ mod tests {
 
     #[test]
     fn test_history_navigation() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1491,7 +1508,7 @@ mod tests {
 
     #[test]
     fn test_history_navigation_restores_case_sensitivity() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1525,7 +1542,7 @@ mod tests {
 
     #[test]
     fn test_toggle_filter_mode() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1544,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_toggle_case_sensitivity() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1563,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_toggle_mode_preserves_case_sensitivity() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1586,7 +1603,7 @@ mod tests {
 
     #[test]
     fn test_regex_validation_valid_regex() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1608,7 +1625,7 @@ mod tests {
 
     #[test]
     fn test_regex_validation_invalid_regex() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1626,7 +1643,7 @@ mod tests {
 
     #[test]
     fn test_regex_validation_clears_on_backspace() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1643,7 +1660,7 @@ mod tests {
 
     #[test]
     fn test_regex_validation_not_checked_in_plain_mode() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1662,7 +1679,7 @@ mod tests {
 
     #[test]
     fn test_regex_validation_on_mode_toggle() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1683,7 +1700,7 @@ mod tests {
 
     #[test]
     fn test_tab_events() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let file1 = create_temp_log_file(&["a"]);
         let file2 = create_temp_log_file(&["b"]);
@@ -1717,7 +1734,7 @@ mod tests {
 
     #[test]
     fn test_cursor_moves_with_input() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1734,7 +1751,7 @@ mod tests {
 
     #[test]
     fn test_cursor_left_right() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1759,7 +1776,7 @@ mod tests {
 
     #[test]
     fn test_cursor_at_boundaries() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1789,7 +1806,7 @@ mod tests {
 
     #[test]
     fn test_cursor_home_end() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1814,7 +1831,7 @@ mod tests {
 
     #[test]
     fn test_insert_at_cursor() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1836,7 +1853,7 @@ mod tests {
 
     #[test]
     fn test_backspace_at_cursor() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1859,7 +1876,7 @@ mod tests {
 
     #[test]
     fn test_backspace_at_start() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1879,7 +1896,7 @@ mod tests {
 
     #[test]
     fn test_cursor_with_unicode() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1902,7 +1919,7 @@ mod tests {
 
     #[test]
     fn test_history_sets_cursor_to_end() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1922,7 +1939,7 @@ mod tests {
 
     #[test]
     fn test_toggle_line_expansion_event() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();
@@ -1944,7 +1961,7 @@ mod tests {
 
     #[test]
     fn test_collapse_all_event() {
-        use crate::event::AppEvent;
+        use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line1", "line2", "line3"]);
         let mut app = App::new(vec![temp_file.path().to_path_buf()], false).unwrap();

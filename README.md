@@ -108,6 +108,7 @@ Verify with `/mcp` command inside Gemini CLI.
 | `get_tail` | Get the last N lines from a log file |
 | `get_lines` | Read lines from a specific position |
 | `get_context` | Get lines surrounding a specific line number |
+| `get_stats` | Index metadata, severity breakdown, and ingestion rate |
 
 The `search` tool supports structured queries for field-based filtering on JSON and logfmt logs via the `query` parameter. Operators: `eq`, `ne`, `regex`, `not_regex`, `contains`, `gt`, `lt`, `gte`, `lte`. Supports nested fields (`user.id`) and exclusion patterns.
 
@@ -145,6 +146,8 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 - **Line expansion** - Expand long lines for better readability
 - **Memory efficient** - Viewport-based rendering keeps RAM usage low
 - **Vim-style navigation** - Familiar keybindings for efficient navigation
+- **Severity detection** - Automatic log level coloring (ERROR/WARN/INFO/DEBUG) with severity histogram
+- **Columnar index** - Per-line metadata index built during capture for instant severity stats and accelerated filtering
 - **Config system** - Project-scoped `lazytail.yaml` config with source definitions
 - **Query language** - Structured field filtering (`json | level == "error"`)
 - **Web UI mode** - Browser interface with virtualized source/log lists (`lazytail web`)

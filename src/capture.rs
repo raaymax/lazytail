@@ -71,16 +71,22 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
         location
     );
 
-    // 8. Create indexer for columnar index
+    // 8. Create or resume indexer for columnar index
     let idx_dir = index_dir_for_log(&log_path);
-    let mut indexer = LineIndexer::create(&idx_dir)
-        .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?;
+    let mut indexer = if idx_dir.join("meta").exists() {
+        LineIndexer::resume(&idx_dir)
+            .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
+    } else {
+        LineIndexer::create(&idx_dir)
+            .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?
+    };
 
     // 9. Tee loop: read stdin, write to file AND stdout
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut reader = BufReader::new(stdin.lock());
     let mut line_buf = String::new();
+    let mut last_sync = std::time::Instant::now();
 
     loop {
         // Check for shutdown signal
@@ -106,6 +112,14 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
                 let ts = now_millis();
                 if let Err(e) = indexer.push_line(line_buf.as_bytes(), ts) {
                     eprintln!("Warning: failed to index line: {}", e);
+                }
+
+                // Periodically sync index to disk so the TUI can pick up columnar offsets
+                if last_sync.elapsed() >= std::time::Duration::from_millis(500) {
+                    last_sync = std::time::Instant::now();
+                    if let Err(e) = indexer.sync(&idx_dir) {
+                        eprintln!("Warning: failed to sync index: {}", e);
+                    }
                 }
 
                 // Echo to stdout (ignore errors - stdout might be closed)

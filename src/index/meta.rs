@@ -87,8 +87,12 @@ impl IndexMeta {
     }
 
     pub fn write_to(&self, path: impl AsRef<Path>) -> Result<()> {
-        std::fs::write(path.as_ref(), self.to_bytes())
-            .with_context(|| format!("writing index meta: {}", path.as_ref().display()))
+        let path = path.as_ref();
+        let tmp = path.with_extension("meta.tmp");
+        std::fs::write(&tmp, self.to_bytes())
+            .with_context(|| format!("writing index meta tmp: {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("renaming index meta: {}", path.display()))
     }
 
     pub fn read_from(path: impl AsRef<Path>) -> Result<Self> {
@@ -100,7 +104,9 @@ impl IndexMeta {
                 data.len()
             );
         }
-        let buf: [u8; META_SIZE] = data[..META_SIZE].try_into().unwrap();
+        let buf: [u8; META_SIZE] = data[..META_SIZE]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("meta slice conversion failed"))?;
         Self::from_bytes(&buf)
     }
 }
