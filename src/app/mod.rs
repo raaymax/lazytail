@@ -26,6 +26,21 @@ pub struct LayoutRect {
     pub height: u16,
 }
 
+impl LayoutRect {
+    /// Check if a point is inside the inner content area (excluding 1px borders on all sides)
+    fn contains_inner(&self, column: u16, row: u16) -> bool {
+        column > self.x
+            && column < self.x + self.width.saturating_sub(1)
+            && row > self.y
+            && row < self.y + self.height.saturating_sub(1)
+    }
+
+    /// Convert a terminal row to inner content row (0-indexed, relative to content start)
+    fn inner_row(&self, row: u16) -> usize {
+        (row - self.y - 1) as usize
+    }
+}
+
 /// Cached layout areas from the most recent render pass.
 /// Used by mouse click handling to resolve click targets.
 #[derive(Debug, Clone, Copy, Default)]
@@ -1217,12 +1232,8 @@ impl App {
         let lv = self.layout.log_view;
 
         // Hit test: side panel sources area (inner content, excluding borders)
-        if column > sp.x
-            && column < sp.x + sp.width.saturating_sub(1)
-            && row > sp.y
-            && row < sp.y + sp.height.saturating_sub(1)
-        {
-            let inner_row = (row - sp.y - 1) as usize;
+        if sp.contains_inner(column, row) {
+            let inner_row = sp.inner_row(row);
             let items = self.build_source_tree_items();
 
             if inner_row < items.len() {
@@ -1243,12 +1254,8 @@ impl App {
         }
 
         // Hit test: log view area (inner content, excluding borders)
-        if column > lv.x
-            && column < lv.x + lv.width.saturating_sub(1)
-            && row > lv.y
-            && row < lv.y + lv.height.saturating_sub(1)
-        {
-            let inner_row = (row - lv.y - 1) as usize;
+        if lv.contains_inner(column, row) {
+            let inner_row = lv.inner_row(row);
             let tab = self.active_tab_mut();
             let scroll_pos = tab.viewport.scroll_position();
             let target_index = scroll_pos + inner_row;
