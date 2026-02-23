@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &TabState) {
+pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &mut TabState) {
     let result = match &tab.source.aggregation_result {
         Some(r) => r,
         None => {
@@ -31,6 +31,8 @@ pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &TabState)
 
     let inner_height = area.height.saturating_sub(2) as usize; // borders
     let inner_width = area.width.saturating_sub(2) as usize;
+    let data_rows = inner_height.saturating_sub(1); // -1 for header
+    tab.aggregation_view.visible_rows = data_rows;
     let scroll = tab.aggregation_view.scroll_offset;
     let selected = tab.aggregation_view.selected_row;
 
@@ -53,7 +55,7 @@ pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &TabState)
         .iter()
         .enumerate()
         .skip(scroll)
-        .take(inner_height.saturating_sub(1)); // -1 for header
+        .take(data_rows);
 
     for (idx, group) in visible_groups {
         let is_selected = idx == selected;

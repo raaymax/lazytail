@@ -62,6 +62,20 @@ pub struct AggregationViewState {
     pub selected_row: usize,
     /// Scroll offset for the aggregation table.
     pub scroll_offset: usize,
+    /// Number of visible data rows (set during rendering).
+    pub visible_rows: usize,
+}
+
+impl AggregationViewState {
+    /// Adjust scroll_offset so that selected_row is visible.
+    pub fn ensure_visible(&mut self) {
+        let visible = self.visible_rows.max(1);
+        if self.selected_row < self.scroll_offset {
+            self.scroll_offset = self.selected_row;
+        } else if self.selected_row >= self.scroll_offset + visible {
+            self.scroll_offset = self.selected_row + 1 - visible;
+        }
+    }
 }
 
 /// Per-tab state for viewing a single log source.

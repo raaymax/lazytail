@@ -41,7 +41,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     app.layout.log_view = rect_to_layout(content_chunks[0]);
 
     if app.active_tab().source.mode == ViewMode::Aggregation {
-        aggregation_view::render_aggregation_view(f, content_chunks[0], app.active_tab());
+        aggregation_view::render_aggregation_view(f, content_chunks[0], app.active_tab_mut());
     } else {
         log_view::render_log_view(f, content_chunks[0], app)?;
     }

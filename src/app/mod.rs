@@ -1240,11 +1240,13 @@ impl App {
                         tab.aggregation_view.selected_row += 1;
                     }
                 }
+                self.active_tab_mut().aggregation_view.ensure_visible();
             }
             AppEvent::AggregationUp => {
                 let tab = self.active_tab_mut();
                 tab.aggregation_view.selected_row =
                     tab.aggregation_view.selected_row.saturating_sub(1);
+                tab.aggregation_view.ensure_visible();
             }
             AppEvent::AggregationJumpToStart => {
                 let tab = self.active_tab_mut();
@@ -1256,6 +1258,7 @@ impl App {
                 if let Some(ref result) = tab.source.aggregation_result {
                     tab.aggregation_view.selected_row = result.groups.len().saturating_sub(1);
                 }
+                self.active_tab_mut().aggregation_view.ensure_visible();
             }
             AppEvent::AggregationDrillDown => {
                 self.aggregation_drill_down();
