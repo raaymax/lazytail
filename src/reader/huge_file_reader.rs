@@ -247,6 +247,10 @@ impl LogReader for HugeFileReader {
         self.total_lines
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn get_line(&mut self, index: usize) -> Result<Option<String>> {
         if index >= self.total_lines {
             return Ok(None);

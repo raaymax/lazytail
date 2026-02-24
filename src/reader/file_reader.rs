@@ -296,6 +296,10 @@ impl LogReader for FileReader {
         self.read_line_at(index)
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn reload(&mut self) -> Result<()> {
         let new_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
 

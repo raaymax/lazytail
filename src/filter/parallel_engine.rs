@@ -295,6 +295,10 @@ mod tests {
         fn reload(&mut self) -> anyhow::Result<()> {
             Ok(())
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[test]

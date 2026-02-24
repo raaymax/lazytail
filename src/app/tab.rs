@@ -95,6 +95,8 @@ pub struct TabState {
     pub viewport: Viewport,
     /// Line expansion state
     pub expansion: ExpansionState,
+    /// Whether this tab is a combined (merged) view of multiple sources.
+    pub is_combined: bool,
     /// Stream writer handle for stream-specific operations (append, mark_complete).
     /// Only set for stdin/pipe tabs. Uses `StreamableReader` trait (ISP).
     stream_writer: Option<Arc<Mutex<dyn StreamableReader>>>,
@@ -192,6 +194,7 @@ impl TabState {
                 watcher,
                 viewport: Viewport::new(selected_line),
                 expansion: ExpansionState::default(),
+                is_combined: false,
                 stream_writer: None,
                 stream_receiver: None,
                 config_source_type: None,
@@ -230,6 +233,7 @@ impl TabState {
                 watcher: None,
                 viewport: Viewport::new(0),
                 expansion: ExpansionState::default(),
+                is_combined: false,
                 stream_writer: Some(stream_writer),
                 stream_receiver: Some(rx),
                 config_source_type: None,
@@ -271,6 +275,7 @@ impl TabState {
             watcher: None,
             viewport: Viewport::new(0),
             expansion: ExpansionState::default(),
+            is_combined: false,
             stream_writer: Some(stream_writer),
             stream_receiver: Some(rx),
             config_source_type: None,
@@ -320,6 +325,7 @@ impl TabState {
             watcher,
             viewport: Viewport::new(selected_line),
             expansion: ExpansionState::default(),
+            is_combined: false,
             stream_writer: None,
             stream_receiver: None,
             config_source_type: match source.location {
@@ -385,6 +391,7 @@ impl TabState {
             watcher,
             viewport: Viewport::new(selected_line),
             expansion: ExpansionState::default(),
+            is_combined: false,
             stream_writer: None,
             stream_receiver: None,
             config_source_type: Some(source_type),
@@ -421,11 +428,58 @@ impl TabState {
             watcher: None,
             viewport: Viewport::new(0),
             expansion: ExpansionState::default(),
+            is_combined: false,
             stream_writer: None,
             stream_receiver: None,
             config_source_type: Some(source_type),
             aggregation_view: AggregationViewState::default(),
         })
+    }
+
+    /// Create a combined (merged) view from multiple source entries.
+    pub fn from_combined(
+        sources: Vec<crate::reader::combined_reader::SourceEntry>,
+        category_name: &str,
+        source_type: SourceType,
+    ) -> Self {
+        use crate::reader::combined_reader::CombinedReader;
+
+        let source_count = sources.len();
+        let combined = CombinedReader::new(sources);
+        let total_lines = combined.total_lines();
+        let line_indices: Vec<usize> = (0..total_lines).collect();
+        let selected_line = total_lines.saturating_sub(1);
+        let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(combined));
+
+        Self {
+            source: LogSource {
+                name: format!("{} ({} sources)", category_name, source_count),
+                source_path: None,
+                mode: ViewMode::Normal,
+                total_lines,
+                line_indices,
+                follow_mode: false,
+                reader,
+                filter: FilterConfig::default(),
+                source_status: None,
+                disabled: false,
+                file_size: None,
+                index_reader: None,
+                index_size: None,
+                rate_tracker: LineRateTracker::new(total_lines),
+                aggregation_result: None,
+            },
+            scroll_position: 0,
+            selected_line,
+            watcher: None,
+            viewport: Viewport::new(selected_line),
+            expansion: ExpansionState::default(),
+            is_combined: true,
+            stream_writer: None,
+            stream_receiver: None,
+            config_source_type: Some(source_type),
+            aggregation_view: AggregationViewState::default(),
+        }
     }
 
     /// Refresh source status for discovered sources.
