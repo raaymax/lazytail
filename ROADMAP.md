@@ -160,6 +160,7 @@ Two-panel layout:
 
 **Future Side Panel Enhancements:**
 - [x] Show total line count and file size per source in side panel (live-updating as file grows) — ✅ v0.6.0
+- [ ] Fix: selected empty/ended source is invisible — grayed-out dim text has no visible selection highlight, making it unclear which tab is active
 - [ ] Tree structure with collapsible groups
 - [ ] Drag-and-drop reordering
 - [ ] Bookmarks section (per UI instance / project scope)
@@ -433,14 +434,22 @@ struct Aggregation {
   - [ ] Timestamp field detection (common field names)
   - [ ] Time range filtering (after/before)
   - [x] Tests for exclusion filtering
-- [ ] Phase 3: Aggregation 🔴 HIGH PRIORITY
-  - [ ] Implement `count by (field)` — e.g. `json | level == "error" | count by (service)` → "which service has the most errors?"
-  - [ ] Implement `top N` / limit
-  - [ ] Multiple group_by fields — e.g. `count by (service, level)`
-  - [ ] Return aggregation results as structured JSON (field → count map)
-  - [ ] Wire into MCP: either extend `search` response or add dedicated `aggregate` tool
-  - [ ] Wire into text query parser (already has AST slots for aggregation)
-  - Real-world motivation: currently requires multiple manual queries to answer "which service has the most errors?" or "what's the error distribution by field?" — a single `count by` would replace N manual queries
+- [x] Phase 3: Aggregation — ✅ `count_by` complete
+  - [x] Implement `count by (field)` — e.g. `json | level == "error" | count by (service)` ✅
+  - [x] Implement `top N` / limit ✅
+  - [x] Multiple group_by fields — e.g. `count by (service, level)` ✅
+  - [x] Return aggregation results as structured JSON (field → count map) ✅
+  - [x] Wire into MCP: extend `search` response with `aggregate` in query ✅
+  - [x] Wire into text query parser (`count by (fields) | top N`) ✅
+  - [x] TUI aggregation view with j/k navigation and drill-down ✅
+- [ ] Phase 3b: Additional Aggregation Types
+  - [ ] `avg(field) by (fields)` — average of numeric field grouped by others (e.g. `json | avg(latency) by (service)`)
+  - [ ] `sum(field) by (fields)` — total of numeric field (e.g. `json | sum(processed) by (service)`)
+  - [ ] `min(field) by (fields)` / `max(field) by (fields)` — extremes with drill-down to actual line
+  - [ ] `p50(field)` / `p90(field)` / `p99(field) by (fields)` — percentiles (e.g. `json | p99(latency) by (service)`)
+  - [ ] `rate(interval)` — count per time window (e.g. `json | level == "error" | rate(1m)`) — requires timestamp parsing
+  - [ ] `count_distinct(field) by (fields)` — unique value count (e.g. `json | count_distinct(user.id) by (service)`)
+  - [ ] `histogram(field, bucket_size)` — bucket numeric field into ranges (e.g. `json | histogram(latency, 100)`)
 - [x] Phase 4: Text Parser (UI) — ✅ v0.5.0
   - [x] Lexer for text query syntax
   - [x] Recursive descent parser → AST
@@ -451,6 +460,7 @@ struct Aggregation {
   - [ ] `pattern` parser (extract fields via template)
   - [x] Nested field access (`user.id`, `request.headers.host`)
 - [ ] Phase 6: Polish
+  - [ ] Autocomplete for field names in filter input (sample lines from current source, extract field names, offer completions after `|` or on Tab)
   - [ ] Syntax highlighting in filter input
   - [ ] LogQL `format` stage — render structured fields into a custom display template
     - Text syntax: `json | format <severity> - <method> <url> - <status>`
@@ -459,6 +469,7 @@ struct Aggregation {
     - Unresolved fields render as empty or `<missing>`
     - Useful in TUI for readable views of dense JSON/logfmt lines
     - Useful in MCP for agents requesting specific field projections
+  - [ ] Arrow up/down in filter input replaces current text with history entry — typed text is lost with no way to recover it. Should save current input as a draft so the user can arrow back down to restore it.
   - [ ] Query history with mode
   - [ ] Filter history prefix matching (zsh-style)
     - When text is already typed in the filter input, `Up`/`Down` only cycles through history entries that match the current input as a prefix
@@ -684,6 +695,7 @@ Raw expanded view (for non-JSON long lines):
 - [x] Multiple expanded entries
   - [x] Allow multiple entries expanded simultaneously
   - [x] Collapse all keybinding (`c`)
+- [ ] Fix: expanding a line near the bottom of the screen shows empty lines when expansion doesn't fit — viewport should auto-scroll up so expanded content is visible
 - [ ] Scrolling within expanded content
   - [ ] Handle very large expanded content (huge JSON)
   - [ ] Nested scrolling or pagination
@@ -1204,6 +1216,14 @@ sources:
   - Compact view (truncate long lines)
   - JSON formatted view
   - Table view (for structured logs)
+  - Conversation view (for AI chat JSONL)
+- [ ] AI conversation JSONL viewer
+  - Detect JSONL files with `role`/`content` fields (OpenAI, Anthropic, generic chat formats)
+  - Render as a conversation: role labels (User/Assistant/System), indented message bubbles
+  - Syntax-highlight code blocks within messages
+  - Collapse/expand individual messages
+  - Filter by role (`json | role == "assistant"`)
+  - Useful for inspecting LLM training data, API logs, chat transcripts
 - [ ] Bookmarks (mark lines for quick navigation)
 - [ ] Export filtered results to file
 - [x] Copy selected line to clipboard with `y` — ✅ post-v0.7.0
@@ -1324,7 +1344,7 @@ sources:
 **Planned New Tools:**
 | Tool | Purpose | Priority |
 |------|---------|----------|
-| `aggregate` | Count by field, top N results. Answers "which service has the most errors?", "what's the error distribution?" in a single call instead of N manual queries. Should integrate with the query language AST (Phase 3 aggregation) so both text queries and MCP JSON work. | 🔴 High |
+| `aggregate` | ✅ Implemented via `search` query `aggregate` param. Count by field, top N. Both text queries (`count by (field) \| top N`) and MCP JSON work. | ✅ Complete |
 | `search_sources` | Search multiple sources at once, grouped results by source name. Essential for cross-service correlation (e.g., "find this request ID across all services"). Doesn't require timestamps or merging — just run the same query across all sources. | 🔴 High |
 | `fields` | Sample N lines from a source and return discovered field names, types, and example values. Makes structured queries far more usable — currently consumers must `get_tail` a few lines and visually parse JSON to discover field names before constructing a query. Critical for LLM consumers that can't eyeball the data. | 🔴 High |
 | `summarize` | Log overview: time range, top patterns, top services, error rate. Content-analysis based summary. | 🟡 Medium |
@@ -1353,7 +1373,8 @@ Already Completed (landed post-v0.4.0):
 
 Remaining:
 - Time range filtering (timestamp field detection, after/before)
-- Aggregation (`count by (field)`, `top N`)
+- ~~Aggregation (`count by (field)`, `top N`)~~ ✅ Complete
+- Additional aggregation types: avg, sum, min/max, percentiles, rate, count_distinct, histogram
 - Filter presets from config available in MCP
 
 #### Sidecar Index & Combined Sources

@@ -11,3 +11,4 @@ PKGBUILD
 aur/
 .planning/
 .worktrees/
+.lazytail/
