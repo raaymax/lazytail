@@ -938,8 +938,8 @@ impl App {
         }
     }
 
-    /// Validate the current input as a query (if it looks like query syntax)
-    /// Sets query_error to None if valid or not query syntax, Some(error) if invalid
+    /// Validate the current input as a query (if in query mode)
+    /// Sets query_error to None if valid or not in query mode, Some(error) if invalid
     pub fn validate_query(&mut self) {
         if !self.current_filter_mode.is_query() || self.input_buffer.is_empty() {
             self.query_error = None;
@@ -1853,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_mode_preserves_case_sensitivity() {
+    fn test_cycle_mode_case_sensitivity_behavior() {
         use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);

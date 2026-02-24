@@ -95,7 +95,7 @@ pub struct FilterConfig {
     pub state: FilterState,
     /// Current filter pattern (if any)
     pub pattern: Option<String>,
-    /// Filter mode (Plain or Regex, with case sensitivity)
+    /// Filter mode (Plain, Regex, or Query)
     pub mode: FilterMode,
     /// Channel receiver for filter progress updates
     pub receiver: Option<Receiver<FilterProgress>>,

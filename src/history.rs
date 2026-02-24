@@ -98,6 +98,10 @@ mod tests {
                     case_sensitive: true,
                 },
             ),
+            FilterHistoryEntry::new(
+                "json | level == \"error\"".to_string(),
+                FilterMode::Query {},
+            ),
         ];
 
         let json = serde_json::to_string(&entries).unwrap();
