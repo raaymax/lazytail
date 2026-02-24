@@ -17,11 +17,12 @@ pub trait Filter: Send + Sync {
 
 use serde::{Deserialize, Serialize};
 
-/// Filter mode for switching between plain text and regex filtering
+/// Filter mode for switching between plain text, regex, and query filtering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilterMode {
     Plain { case_sensitive: bool },
     Regex { case_sensitive: bool },
+    Query {},
 }
 
 impl Default for FilterMode {
@@ -49,19 +50,30 @@ impl FilterMode {
         }
     }
 
-    /// Toggle between Plain and Regex modes, preserving case sensitivity
-    pub fn toggle_mode(&mut self) {
+    /// Create a new query filter mode
+    #[allow(dead_code)] // Public API for external use and tests
+    pub fn query() -> Self {
+        FilterMode::Query {}
+    }
+
+    /// Cycle through filter modes: Plain → Regex → Query → Plain
+    pub fn cycle_mode(&mut self) {
         *self = match *self {
             FilterMode::Plain { case_sensitive } => FilterMode::Regex { case_sensitive },
-            FilterMode::Regex { case_sensitive } => FilterMode::Plain { case_sensitive },
+            FilterMode::Regex { .. } => FilterMode::Query {},
+            FilterMode::Query {} => FilterMode::Plain {
+                case_sensitive: false,
+            },
         };
     }
 
-    /// Toggle case sensitivity within the current mode
+    /// Toggle case sensitivity within the current mode (no-op for Query)
     pub fn toggle_case_sensitivity(&mut self) {
         match self {
-            FilterMode::Plain { case_sensitive } => *case_sensitive = !*case_sensitive,
-            FilterMode::Regex { case_sensitive } => *case_sensitive = !*case_sensitive,
+            FilterMode::Plain { case_sensitive } | FilterMode::Regex { case_sensitive } => {
+                *case_sensitive = !*case_sensitive
+            }
+            FilterMode::Query {} => {}
         }
     }
 
@@ -70,12 +82,18 @@ impl FilterMode {
         matches!(self, FilterMode::Regex { .. })
     }
 
+    /// Check if current mode is query
+    pub fn is_query(&self) -> bool {
+        matches!(self, FilterMode::Query {})
+    }
+
     /// Check if current mode is case sensitive
     pub fn is_case_sensitive(&self) -> bool {
         match self {
             FilterMode::Plain { case_sensitive } | FilterMode::Regex { case_sensitive } => {
                 *case_sensitive
             }
+            FilterMode::Query {} => false,
         }
     }
 
@@ -94,6 +112,7 @@ impl FilterMode {
             FilterMode::Regex {
                 case_sensitive: true,
             } => "Regex [Aa]",
+            FilterMode::Query {} => "Query",
         }
     }
 }
@@ -209,33 +228,67 @@ mod filter_mode_tests {
     }
 
     #[test]
-    fn test_toggle_mode_plain_to_regex() {
+    fn test_cycle_mode_plain_to_regex() {
         let mut mode = FilterMode::plain();
-        mode.toggle_mode();
+        mode.cycle_mode();
         assert!(mode.is_regex());
         assert!(!mode.is_case_sensitive());
     }
 
     #[test]
-    fn test_toggle_mode_regex_to_plain() {
+    fn test_cycle_mode_regex_to_query() {
         let mut mode = FilterMode::regex();
-        mode.toggle_mode();
+        mode.cycle_mode();
+        assert!(mode.is_query());
         assert!(!mode.is_regex());
+    }
+
+    #[test]
+    fn test_cycle_mode_query_to_plain() {
+        let mut mode = FilterMode::query();
+        mode.cycle_mode();
+        assert!(!mode.is_regex());
+        assert!(!mode.is_query());
         assert!(!mode.is_case_sensitive());
     }
 
     #[test]
-    fn test_toggle_mode_preserves_case_sensitivity() {
+    fn test_cycle_mode_full_cycle() {
+        let mut mode = FilterMode::plain();
+        mode.cycle_mode(); // → Regex
+        assert!(mode.is_regex());
+        mode.cycle_mode(); // → Query
+        assert!(mode.is_query());
+        mode.cycle_mode(); // → Plain
+        assert!(!mode.is_regex());
+        assert!(!mode.is_query());
+    }
+
+    #[test]
+    fn test_cycle_mode_preserves_case_plain_to_regex() {
         let mut mode = FilterMode::Plain {
             case_sensitive: true,
         };
-        mode.toggle_mode();
+        mode.cycle_mode();
         assert!(mode.is_regex());
         assert!(mode.is_case_sensitive());
+    }
 
-        mode.toggle_mode();
-        assert!(!mode.is_regex());
-        assert!(mode.is_case_sensitive());
+    #[test]
+    fn test_cycle_mode_regex_to_query_drops_case() {
+        let mut mode = FilterMode::Regex {
+            case_sensitive: true,
+        };
+        mode.cycle_mode();
+        assert!(mode.is_query());
+        assert!(!mode.is_case_sensitive());
+    }
+
+    #[test]
+    fn test_cycle_mode_query_to_plain_resets_case() {
+        let mut mode = FilterMode::query();
+        mode.cycle_mode();
+        assert!(!mode.is_case_sensitive());
     }
 
     #[test]
@@ -263,6 +316,22 @@ mod filter_mode_tests {
     }
 
     #[test]
+    fn test_toggle_case_sensitivity_query_noop() {
+        let mut mode = FilterMode::query();
+        assert!(!mode.is_case_sensitive());
+        mode.toggle_case_sensitivity();
+        assert!(!mode.is_case_sensitive());
+    }
+
+    #[test]
+    fn test_query_constructor() {
+        let mode = FilterMode::query();
+        assert!(mode.is_query());
+        assert!(!mode.is_regex());
+        assert!(!mode.is_case_sensitive());
+    }
+
+    #[test]
     fn test_prompt_label_plain() {
         let mode = FilterMode::Plain {
             case_sensitive: false,
@@ -286,6 +355,12 @@ mod filter_mode_tests {
             case_sensitive: true,
         };
         assert_eq!(mode.prompt_label(), "Regex [Aa]");
+    }
+
+    #[test]
+    fn test_prompt_label_query() {
+        let mode = FilterMode::Query {};
+        assert_eq!(mode.prompt_label(), "Query");
     }
 
     #[test]
