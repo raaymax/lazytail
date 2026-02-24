@@ -31,8 +31,8 @@ impl FilterOrchestrator {
             cancel.cancel();
         }
 
-        // Check for query syntax (json | ... or logfmt | ...)
-        if query::is_query_syntax(&pattern) {
+        // Query mode: user explicitly selected via Tab cycling
+        if mode.is_query() {
             let mut filter_query = match query::parse_query(&pattern) {
                 Ok(q) => q,
                 Err(_) => return,

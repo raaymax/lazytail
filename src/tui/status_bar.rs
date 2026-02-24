@@ -95,36 +95,25 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     let input = app.get_input();
 
-    // Detect if this is query syntax for display purposes
-    let is_query = crate::filter::query::is_query_syntax(input);
-
-    let label = if is_query {
-        "Query"
-    } else {
-        app.current_filter_mode.prompt_label()
-    };
+    let label = app.current_filter_mode.prompt_label();
     let input_text = format!("{}: {}", label, input);
 
     // Determine border color based on mode and validation state
-    let border_color = if app.query_error.is_some() {
-        Color::Red // Invalid query
-    } else if is_query {
-        Color::Magenta // Valid query mode
+    let border_color = if app.query_error.is_some() || app.regex_error.is_some() {
+        Color::Red
+    } else if app.current_filter_mode.is_query() {
+        Color::Magenta
     } else if app.current_filter_mode.is_regex() {
-        if app.regex_error.is_some() {
-            Color::Red // Invalid regex
-        } else {
-            Color::Cyan // Valid regex mode
-        }
+        Color::Cyan
     } else {
-        Color::White // Plain text mode
+        Color::White
     };
 
-    // Build help text with mode hint
-    let mode_hint = if is_query {
-        "Query"
-    } else if app.current_filter_mode.is_regex() {
+    // Build help text with mode hint showing next mode Tab will switch to
+    let mode_hint = if app.current_filter_mode.is_query() {
         "Tab: Plain"
+    } else if app.current_filter_mode.is_regex() {
+        "Tab: Query"
     } else {
         "Tab: Regex"
     };
