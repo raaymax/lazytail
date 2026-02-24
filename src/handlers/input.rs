@@ -203,7 +203,9 @@ fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
         KeyCode::Char('y') => vec![AppEvent::CopySelectedLine],
-        KeyCode::Char('R') => vec![AppEvent::RefreshCombinedView],
+        KeyCode::Char('R') if app.active_tab().is_combined => {
+            vec![AppEvent::RefreshCombinedView]
+        }
         KeyCode::Esc => vec![AppEvent::ClearFilter],
         // Tab toggles source panel focus
         KeyCode::Tab => vec![AppEvent::FocusSourcePanel],

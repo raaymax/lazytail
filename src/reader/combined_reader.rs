@@ -38,6 +38,16 @@ const SOURCE_COLORS: [ratatui::style::Color; 8] = [
 ///
 /// Implements `LogReader` so it works transparently with the existing
 /// rendering pipeline, viewport, and filter infrastructure.
+///
+/// # Locking
+///
+/// `CombinedReader` shares `Arc<Mutex<dyn LogReader>>` handles with the
+/// original source tabs. When the combined tab renders, the outer
+/// `CombinedReader` mutex is held while `get_line()` acquires the inner
+/// source reader mutex. This is safe from deadlocks because lock ordering
+/// is always outer→inner (never reversed). However, if a filter thread
+/// holds a source reader lock, `get_line()` will block until the filter
+/// releases it, which may cause brief render stalls.
 pub struct CombinedReader {
     sources: Vec<SourceEntry>,
     merged: Vec<MergedLine>,

@@ -440,6 +440,7 @@ impl TabState {
     pub fn from_combined(
         sources: Vec<crate::reader::combined_reader::SourceEntry>,
         category_name: &str,
+        source_type: SourceType,
     ) -> Self {
         use crate::reader::combined_reader::CombinedReader;
 
@@ -476,7 +477,7 @@ impl TabState {
             is_combined: true,
             stream_writer: None,
             stream_receiver: None,
-            config_source_type: None,
+            config_source_type: Some(source_type),
             aggregation_view: AggregationViewState::default(),
         }
     }

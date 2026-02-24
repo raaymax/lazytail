@@ -540,7 +540,7 @@ impl App {
             SourceType::Pipe => "Pipes",
         };
 
-        let combined_tab = TabState::from_combined(sources, category_name);
+        let combined_tab = TabState::from_combined(sources, category_name, category);
         self.tabs.push(combined_tab);
         self.active_tab = self.tabs.len() - 1;
         self.input_mode = InputMode::Normal;
@@ -1438,8 +1438,7 @@ impl App {
                     drop(reader);
                     tab.source.line_indices = (0..tab.source.total_lines).collect();
                     tab.source.mode = ViewMode::Normal;
-                    let total = tab.source.total_lines;
-                    tab.viewport.jump_to_end(&(0..total).collect::<Vec<_>>());
+                    tab.viewport.jump_to_end(&tab.source.line_indices);
                     self.status_message =
                         Some(("Combined view refreshed".to_string(), Instant::now()));
                 }
