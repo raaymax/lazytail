@@ -1001,22 +1001,16 @@ impl App {
             return;
         }
 
-        // Skip regex validation if this is query syntax
-        if query::is_query_syntax(&self.input_buffer) {
-            self.regex_error = None;
-            return;
-        }
-
         match regex::Regex::new(&self.input_buffer) {
             Ok(_) => self.regex_error = None,
             Err(e) => self.regex_error = Some(e.to_string()),
         }
     }
 
-    /// Validate the current input as a query (if it looks like query syntax)
-    /// Sets query_error to None if valid or not query syntax, Some(error) if invalid
+    /// Validate the current input as a query (if in query mode)
+    /// Sets query_error to None if valid or not in query mode, Some(error) if invalid
     pub fn validate_query(&mut self) {
-        if !query::is_query_syntax(&self.input_buffer) {
+        if !self.current_filter_mode.is_query() || self.input_buffer.is_empty() {
             self.query_error = None;
             return;
         }
@@ -1170,7 +1164,7 @@ impl App {
                 self.clear_filter();
             }
             AppEvent::ToggleFilterMode => {
-                self.current_filter_mode.toggle_mode();
+                self.current_filter_mode.cycle_mode();
                 self.validate_regex();
                 FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
                 self.pending_filter_at =
@@ -1909,14 +1903,20 @@ mod tests {
 
         // Default is plain mode
         assert!(!app.current_filter_mode.is_regex());
+        assert!(!app.current_filter_mode.is_query());
 
-        // Toggle to regex
+        // Cycle to regex
         app.apply_event(AppEvent::ToggleFilterMode);
         assert!(app.current_filter_mode.is_regex());
 
-        // Toggle back to plain
+        // Cycle to query
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_query());
+
+        // Cycle back to plain
         app.apply_event(AppEvent::ToggleFilterMode);
         assert!(!app.current_filter_mode.is_regex());
+        assert!(!app.current_filter_mode.is_query());
     }
 
     #[test]
@@ -1939,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_mode_preserves_case_sensitivity() {
+    fn test_cycle_mode_case_sensitivity_behavior() {
         use event::AppEvent;
 
         let temp_file = create_temp_log_file(&["line"]);
@@ -1950,15 +1950,21 @@ mod tests {
         assert!(app.current_filter_mode.is_case_sensitive());
         assert!(!app.current_filter_mode.is_regex());
 
-        // Toggle to regex - should preserve case sensitivity
+        // Cycle to regex - should preserve case sensitivity
         app.apply_event(AppEvent::ToggleFilterMode);
         assert!(app.current_filter_mode.is_regex());
         assert!(app.current_filter_mode.is_case_sensitive());
 
-        // Toggle back to plain - should still be case sensitive
+        // Cycle to query - drops case sensitivity
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_query());
+        assert!(!app.current_filter_mode.is_case_sensitive());
+
+        // Cycle back to plain - resets case sensitivity to false
         app.apply_event(AppEvent::ToggleFilterMode);
         assert!(!app.current_filter_mode.is_regex());
-        assert!(app.current_filter_mode.is_case_sensitive());
+        assert!(!app.current_filter_mode.is_query());
+        assert!(!app.current_filter_mode.is_case_sensitive());
     }
 
     #[test]
@@ -2048,13 +2054,22 @@ mod tests {
         app.apply_event(AppEvent::FilterInputChar('['));
         assert!(app.is_regex_valid());
 
-        // Switch to regex mode - now it should be invalid
+        // Cycle to regex mode - now it should be invalid
         app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_regex());
         assert!(!app.is_regex_valid());
         assert!(app.regex_error.is_some());
 
-        // Switch back to plain mode - should be valid again
+        // Cycle to query mode - regex error clears, query error set for invalid syntax
         app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(app.current_filter_mode.is_query());
+        assert!(app.regex_error.is_none());
+        assert!(app.query_error.is_some());
+
+        // Cycle back to plain mode - should be valid again
+        app.apply_event(AppEvent::ToggleFilterMode);
+        assert!(!app.current_filter_mode.is_regex());
+        assert!(!app.current_filter_mode.is_query());
         assert!(app.is_regex_valid());
     }
 

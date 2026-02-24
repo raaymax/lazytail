@@ -56,17 +56,6 @@ impl std::fmt::Display for QueryParseError {
     }
 }
 
-/// Check if input looks like query syntax.
-///
-/// Query syntax is detected when input starts with "json " or "logfmt ".
-pub fn is_query_syntax(input: &str) -> bool {
-    let trimmed = input.trim_start();
-    trimmed.starts_with("json ")
-        || trimmed.starts_with("logfmt ")
-        || trimmed == "json"
-        || trimmed == "logfmt"
-}
-
 /// Parse text query into FilterQuery AST.
 ///
 /// # Examples
@@ -1352,18 +1341,6 @@ mod tests {
     // ========================================================================
     // Text Parser Tests
     // ========================================================================
-
-    #[test]
-    fn test_is_query_syntax() {
-        assert!(is_query_syntax("json | level == \"error\""));
-        assert!(is_query_syntax("json"));
-        assert!(is_query_syntax("logfmt | level == error"));
-        assert!(is_query_syntax("logfmt"));
-        assert!(is_query_syntax("  json | level == \"error\""));
-        assert!(!is_query_syntax("error"));
-        assert!(!is_query_syntax("jsonfile"));
-        assert!(!is_query_syntax("logfmtter"));
-    }
 
     #[test]
     fn test_parse_simple_json_query() {
