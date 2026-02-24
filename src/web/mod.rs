@@ -117,6 +117,7 @@ struct BasicResponse {
 enum WebFilterMode {
     Plain,
     Regex,
+    Query,
 }
 
 impl WebFilterMode {
@@ -124,6 +125,7 @@ impl WebFilterMode {
         match self {
             WebFilterMode::Plain => FilterMode::Plain { case_sensitive },
             WebFilterMode::Regex => FilterMode::Regex { case_sensitive },
+            WebFilterMode::Query => FilterMode::Query {},
         }
     }
 }
@@ -478,6 +480,7 @@ impl WebState {
                     filter_mode: match tab.source.filter.mode {
                         FilterMode::Plain { .. } => "plain",
                         FilterMode::Regex { .. } => "regex",
+                        FilterMode::Query {} => "query",
                     },
                     case_sensitive: tab.source.filter.mode.is_case_sensitive(),
                     filter_state: filter_state_view(tab.source.filter.state),
@@ -863,7 +866,7 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
             }
 
             // Pre-validate pattern before passing to orchestrator
-            if query::is_query_syntax(&trimmed_pattern) {
+            if mode.is_query() {
                 if let Err(err) = query::parse_query(&trimmed_pattern) {
                     respond_json_error(request, 400, format!("Invalid query: {}", err));
                     return;

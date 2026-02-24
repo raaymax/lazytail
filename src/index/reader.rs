@@ -24,6 +24,7 @@ pub struct IndexStats {
 pub struct IndexReader {
     flags: Vec<u32>,
     checkpoints: Vec<Checkpoint>,
+    timestamps: Vec<u64>,
 }
 
 impl IndexReader {
@@ -51,7 +52,23 @@ impl IndexReader {
             Vec::new()
         };
 
-        Some(Self { flags, checkpoints })
+        let timestamps = if meta.has_column(ColumnBit::Time) {
+            ColumnReader::<u64>::open(idx_dir.join("time"), meta.entry_count as usize)
+                .ok()
+                .map(|col| {
+                    let v: Vec<u64> = col.iter().collect();
+                    v
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        Some(Self {
+            flags,
+            checkpoints,
+            timestamps,
+        })
     }
 
     /// Refresh flags and checkpoints from disk if the index has grown.
@@ -77,6 +94,12 @@ impl IndexReader {
                 self.checkpoints = r.iter().collect();
             }
         }
+
+        if meta.has_column(ColumnBit::Time) {
+            if let Ok(col) = ColumnReader::<u64>::open(idx_dir.join("time"), new_count) {
+                self.timestamps = col.iter().collect();
+            }
+        }
     }
 
     /// Get the severity level for a specific line.
@@ -86,6 +109,11 @@ impl IndexReader {
             .copied()
             .map(Severity::from_flags)
             .unwrap_or(Severity::Unknown)
+    }
+
+    /// Get the arrival timestamp (ms since epoch) for a specific line.
+    pub fn get_timestamp(&self, line_number: usize) -> Option<u64> {
+        self.timestamps.get(line_number).copied()
     }
 
     /// Get the raw flags u32 for a specific line.
@@ -251,6 +279,7 @@ mod tests {
         IndexReader {
             flags: flags_data.to_vec(),
             checkpoints: Vec::new(),
+            timestamps: Vec::new(),
         }
     }
 

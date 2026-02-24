@@ -175,6 +175,10 @@ impl LogReader for MmapReader {
         Ok(self.get_line_slice(index).map(|s| s.to_string()))
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn reload(&mut self) -> Result<()> {
         let file = File::open(&self.path)?;
         let metadata = file.metadata()?;

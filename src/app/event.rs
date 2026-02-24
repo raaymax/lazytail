@@ -121,6 +121,10 @@ pub enum AppEvent {
     AggregationJumpToStart,
     AggregationJumpToEnd,
 
+    // Combined view events
+    CreateCombinedView,
+    RefreshCombinedView,
+
     // Mouse events
     MouseClick {
         column: u16,

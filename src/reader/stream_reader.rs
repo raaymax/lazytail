@@ -48,6 +48,10 @@ impl LogReader for StreamReader {
         // Just return Ok to avoid errors
         Ok(())
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl StreamableReader for StreamReader {

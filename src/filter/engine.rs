@@ -427,6 +427,10 @@ mod tests {
         fn reload(&mut self) -> Result<()> {
             Ok(())
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     /// Collect all matches from both PartialResults and Complete messages.
