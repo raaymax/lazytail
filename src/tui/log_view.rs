@@ -1,5 +1,6 @@
 use crate::app::{App, FilterState, InputMode, TabState, ViewMode};
 use crate::index::flags::Severity;
+use crate::reader::combined_reader::CombinedReader;
 use anyhow::Result;
 use ratatui::{
     layout::Rect,
@@ -17,6 +18,8 @@ const SEVERITY_WARN_BG: Color = Color::Rgb(50, 40, 0);
 const SEVERITY_ERROR_BG: Color = Color::Rgb(55, 10, 10);
 const SEVERITY_FATAL_BG: Color = Color::Rgb(75, 0, 15);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
+/// Extra prefix width for combined view: "[tag] " before the line number
+const MAX_SOURCE_TAG_WIDTH: usize = 8; // e.g. "[api-sv] "
 const TAB_SIZE: usize = 4;
 
 /// Map severity to a subtle background color for line highlighting.
@@ -86,7 +89,12 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
     // Calculate available width for content (accounting for borders and line prefix)
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
-    let prefix_width = LINE_PREFIX_WIDTH;
+    let is_combined = tab.is_combined;
+    let prefix_width = if is_combined {
+        LINE_PREFIX_WIDTH + MAX_SOURCE_TAG_WIDTH
+    } else {
+        LINE_PREFIX_WIDTH
+    };
 
     // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.source.reader.lock().unwrap();
@@ -102,6 +110,24 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let is_selected = i == selected_idx;
             let is_expanded = expanded_lines.contains(&line_number);
 
+            // Get source tag and severity from CombinedReader or regular index
+            let (source_tag, severity) = if is_combined {
+                let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
+                let tag = combined.and_then(|c| {
+                    c.source_info(line_number)
+                        .map(|(name, color)| (name.to_string(), color))
+                });
+                let sev = combined
+                    .map(|c| c.severity(line_number))
+                    .unwrap_or(Severity::Unknown);
+                (tag, sev)
+            } else {
+                let sev = index_reader
+                    .map(|ir| ir.severity(line_number))
+                    .unwrap_or(Severity::Unknown);
+                (None, sev)
+            };
+
             // Add line number prefix (split so severity bg stops before separator)
             let line_num_part = format!("{:6} |", line_number + 1);
             let line_sep_part = " ";
@@ -113,9 +139,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
                 let mut item_lines: Vec<Line<'static>> = Vec::new();
 
-                let severity_color = index_reader
-                    .map(|ir| ir.severity(line_number))
-                    .and_then(severity_bg);
+                let severity_color = severity_bg(severity);
 
                 for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
                     if wrap_idx == 0 {
@@ -129,6 +153,13 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                         wrapped_line
                             .spans
                             .insert(0, Span::styled(line_num_part.clone(), num_style));
+                        // Insert source tag for combined view
+                        if let Some((ref name, color)) = source_tag {
+                            let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
+                            wrapped_line
+                                .spans
+                                .insert(0, Span::styled(tag, Style::default().fg(color)));
+                        }
                     } else {
                         wrapped_line
                             .spans
@@ -142,19 +173,29 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                         }
                     } else {
                         // Expanded but not selected: subtle dark background for content spans
-                        // Skip the number span (index 0) and separator span (index 1) on first line
-                        let skip = if wrap_idx == 0 { 2 } else { 1 };
+                        // Skip prefix spans on first line
+                        let skip = if wrap_idx == 0 {
+                            if source_tag.is_some() {
+                                3
+                            } else {
+                                2
+                            }
+                        } else {
+                            1
+                        };
                         for span in wrapped_line.spans.iter_mut().skip(skip) {
                             span.style = span.style.bg(EXPANDED_BG);
                         }
                         // Separator gets expanded bg on first line
                         if wrap_idx == 0 {
-                            if let Some(sep_span) = wrapped_line.spans.get_mut(1) {
+                            let sep_idx = if source_tag.is_some() { 2 } else { 1 };
+                            if let Some(sep_span) = wrapped_line.spans.get_mut(sep_idx) {
                                 sep_span.style = sep_span.style.bg(EXPANDED_BG);
                             }
                             // Number part gets expanded bg only if no severity color
+                            let num_idx = if source_tag.is_some() { 1 } else { 0 };
                             if severity_color.is_none() {
-                                if let Some(num_span) = wrapped_line.spans.first_mut() {
+                                if let Some(num_span) = wrapped_line.spans.get_mut(num_idx) {
                                     num_span.style = num_span.style.bg(EXPANDED_BG);
                                 }
                             }
@@ -176,6 +217,15 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
 
                 let mut final_line = Line::default();
+
+                // Insert source tag for combined view
+                if let Some((ref name, color)) = source_tag {
+                    let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
+                    final_line
+                        .spans
+                        .push(Span::styled(tag, Style::default().fg(color)));
+                }
+
                 final_line.spans.push(Span::raw(line_num_part.clone()));
                 final_line.spans.push(Span::raw(line_sep_part));
 
@@ -192,12 +242,10 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     for span in &mut final_line.spans {
                         span.style = apply_selection_style(span.style);
                     }
-                } else if let Some(bg) = index_reader
-                    .map(|ir| ir.severity(line_number))
-                    .and_then(severity_bg)
-                {
+                } else if let Some(bg) = severity_bg(severity) {
                     // Color only the line number background, not the separator or content
-                    if let Some(num_span) = final_line.spans.first_mut() {
+                    let num_idx = if source_tag.is_some() { 1 } else { 0 };
+                    if let Some(num_span) = final_line.spans.get_mut(num_idx) {
                         num_span.style = num_span.style.bg(bg);
                     }
                 }
@@ -257,6 +305,20 @@ fn build_title(tab: &TabState) -> String {
         }
         (ViewMode::Normal, Some(_)) => format!("{}{}", tab.source.name, path_suffix),
     }
+}
+
+/// Format a source name into a fixed-width tag like "[api] " or "[web-s..] ".
+fn format_source_tag(name: &str, max_width: usize) -> String {
+    // Reserve 3 chars for "[ ] " (brackets + space)
+    let inner_max = max_width.saturating_sub(3);
+    let truncated = if name.len() > inner_max {
+        let cut = inner_max.saturating_sub(2);
+        let boundary = name.floor_char_boundary(cut);
+        format!("{}..", &name[..boundary])
+    } else {
+        name.to_string()
+    };
+    format!("[{:<width$}] ", truncated, width = inner_max)
 }
 
 /// Wrap content to fit within the available width, preserving ANSI styles.

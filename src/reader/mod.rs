@@ -1,3 +1,4 @@
+pub mod combined_reader;
 pub mod file_reader;
 #[allow(dead_code)]
 pub mod huge_file_reader;
@@ -10,6 +11,7 @@ pub mod stream_reader;
 pub mod tail_buffer;
 
 use anyhow::Result;
+use std::any::Any;
 
 /// Trait for reading log lines
 pub trait LogReader {
@@ -21,6 +23,9 @@ pub trait LogReader {
 
     /// Reload the source (e.g., for file watching)
     fn reload(&mut self) -> Result<()>;
+
+    /// Downcast support for accessing concrete reader types (e.g. CombinedReader).
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Extension trait for stream-based readers that support incremental loading.

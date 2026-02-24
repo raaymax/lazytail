@@ -481,6 +481,75 @@ impl App {
         }
     }
 
+    // === Combined View Methods ===
+
+    /// Create a combined (merged) view from the selected category's sources.
+    fn create_combined_view(&mut self) {
+        use crate::reader::combined_reader::SourceEntry;
+
+        // Determine which category is selected in the source panel
+        let category = match &self.source_panel.selection {
+            Some(TreeSelection::Category(cat)) => *cat,
+            Some(TreeSelection::Item(cat, _)) => *cat,
+            None => return,
+        };
+
+        // Collect tab indices for this category (non-disabled only)
+        let tab_indices: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.source_type() == category && !t.source.disabled)
+            .map(|(i, _)| i)
+            .collect();
+
+        if tab_indices.len() < 2 {
+            self.status_message = Some((
+                "Need at least 2 sources to merge".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+
+        // Build SourceEntry from each tab (sharing the reader Arc)
+        let sources: Vec<SourceEntry> = tab_indices
+            .iter()
+            .map(|&idx| {
+                let tab = &self.tabs[idx];
+                let reader = tab.source.reader.clone();
+                let index_reader = tab
+                    .source
+                    .source_path
+                    .as_ref()
+                    .and_then(|p| crate::index::reader::IndexReader::open(p));
+                SourceEntry {
+                    name: tab.source.name.clone(),
+                    reader,
+                    index_reader,
+                    source_path: tab.source.source_path.clone(),
+                    total_lines: tab.source.total_lines,
+                }
+            })
+            .collect();
+
+        let category_name = match category {
+            SourceType::ProjectSource => "Project",
+            SourceType::GlobalSource => "Global",
+            SourceType::Global => "Captured",
+            SourceType::File => "Files",
+            SourceType::Pipe => "Pipes",
+        };
+
+        let combined_tab = TabState::from_combined(sources, category_name);
+        self.tabs.push(combined_tab);
+        self.active_tab = self.tabs.len() - 1;
+        self.input_mode = InputMode::Normal;
+        self.status_message = Some((
+            format!("Merged {} sources into combined view", tab_indices.len()),
+            Instant::now(),
+        ));
+    }
+
     // === Close Confirmation Methods ===
 
     /// Request closing a tab with confirmation dialog
@@ -1356,6 +1425,24 @@ impl App {
                 tab.source.filter.pattern = Some(pattern.clone());
                 tab.source.filter.mode = mode;
                 FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
+            }
+
+            // Combined view events
+            AppEvent::CreateCombinedView => self.create_combined_view(),
+            AppEvent::RefreshCombinedView => {
+                let tab = self.active_tab_mut();
+                if tab.is_combined {
+                    let mut reader = tab.source.reader.lock().unwrap();
+                    let _ = reader.reload();
+                    tab.source.total_lines = reader.total_lines();
+                    drop(reader);
+                    tab.source.line_indices = (0..tab.source.total_lines).collect();
+                    tab.source.mode = ViewMode::Normal;
+                    let total = tab.source.total_lines;
+                    tab.viewport.jump_to_end(&(0..total).collect::<Vec<_>>());
+                    self.status_message =
+                        Some(("Combined view refreshed".to_string(), Instant::now()));
+                }
             }
 
             // Mouse events
