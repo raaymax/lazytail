@@ -2,6 +2,7 @@
 //!
 //! Provides subcommand definitions for config initialization and management.
 
+pub mod bench;
 pub mod config;
 pub mod init;
 #[cfg(feature = "self-update")]
@@ -18,6 +19,9 @@ pub enum Commands {
 
     /// Start browser-based web UI
     Web(WebArgs),
+
+    /// Benchmark filter performance
+    Bench(BenchArgs),
 
     /// Config file commands
     Config {
@@ -45,6 +49,42 @@ pub struct UpdateArgs {
     /// Only check for updates, don't install (exit code 0 = up-to-date, 1 = available)
     #[arg(long)]
     pub check: bool,
+}
+
+/// Arguments for the bench subcommand.
+#[derive(Args, Debug)]
+pub struct BenchArgs {
+    /// Filter pattern
+    #[arg(value_name = "PATTERN")]
+    pub pattern: String,
+
+    /// Log files to benchmark
+    #[arg(value_name = "FILE", required = true)]
+    pub files: Vec<PathBuf>,
+
+    /// Use regex mode
+    #[arg(long)]
+    pub regex: bool,
+
+    /// Use query mode (structured query syntax)
+    #[arg(long)]
+    pub query: bool,
+
+    /// Case-sensitive matching (default: case-insensitive)
+    #[arg(long)]
+    pub case_sensitive: bool,
+
+    /// Number of benchmark trials
+    #[arg(long, default_value_t = 5)]
+    pub trials: usize,
+
+    /// Output JSON instead of human-readable table
+    #[arg(long)]
+    pub json: bool,
+
+    /// Run both indexed and non-indexed paths, report speedup
+    #[arg(long)]
+    pub compare: bool,
 }
 
 /// Config subcommand actions.
