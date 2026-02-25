@@ -20,7 +20,7 @@ mod watcher;
 mod web;
 
 use anyhow::{Context, Result};
-use app::{App, AppEvent, FilterState, SourceType, StreamMessage, TabState};
+use app::{App, AppEvent, FilterState, SourceType, StreamMessage, TabState, ViewMode};
 use clap::Parser;
 use crossterm::{
     event::{self as crossterm_event, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -330,6 +330,7 @@ fn main() -> Result<()> {
     let mut app = App::with_tabs(tabs);
     app.startup_time = Some(startup);
     app.verbose = verbose;
+    app.ensure_combined_tabs();
 
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
@@ -448,6 +449,7 @@ fn run_discovery_mode(
     let mut app = App::with_tabs(tabs);
     app.startup_time = Some(startup);
     app.verbose = verbose;
+    app.ensure_combined_tabs();
 
     // Optionally set up directory watcher for new sources
     // Watch project data dir if in project, otherwise global
@@ -572,6 +574,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                 };
                                 if let Ok(tab) = TabState::from_discovered_source(source, true) {
                                     app.add_tab(tab);
+                                    app.ensure_combined_tabs();
                                 }
                             }
                         }
@@ -647,6 +650,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 
     // First pass: reload files and handle inactive tabs
     let mut active_tab_modification: Option<ActiveTabFileModification> = None;
+    let mut any_file_modified = false;
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         // Drain watcher events
@@ -683,6 +687,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
         }
 
         if has_modified {
+            any_file_modified = true;
             let mut reader_guard = tab
                 .source
                 .reader
@@ -703,8 +708,8 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                 tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
             }
 
-            if tab_idx == active_tab {
-                // Collect for processing after the loop
+            if tab_idx == active_tab && app.active_combined.is_none() {
+                // Collect for processing after the loop (only when a regular tab is active)
                 active_tab_modification = Some(ActiveTabFileModification {
                     new_total,
                     old_total,
@@ -712,6 +717,52 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
             } else {
                 // Inactive tab: update state directly
                 tab.apply_file_modification(new_total);
+            }
+        }
+    }
+
+    // Propagate file changes to combined tabs
+    if any_file_modified {
+        for cat_idx in 0..5 {
+            if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
+                let old_total = combined.source.total_lines;
+                {
+                    let mut reader = combined
+                        .source
+                        .reader
+                        .lock()
+                        .expect("Combined reader lock poisoned");
+                    if let Err(e) = reader.reload() {
+                        eprintln!(
+                            "Failed to reload combined reader for cat {}: {}",
+                            cat_idx, e
+                        );
+                        continue;
+                    }
+                    let new_total = reader.total_lines();
+                    drop(reader);
+
+                    if new_total != old_total {
+                        combined.source.total_lines = new_total;
+                        if combined.source.mode == ViewMode::Normal {
+                            combined.source.line_indices = (0..new_total).collect();
+                        }
+
+                        // Follow mode jump for active combined tab
+                        let is_active_combined =
+                            app.active_combined == Some(SourceType::from_index(cat_idx));
+                        if is_active_combined
+                            && combined.source.follow_mode
+                            && combined.source.mode == ViewMode::Normal
+                        {
+                            let len = combined.source.line_indices.len();
+                            combined.viewport.jump_to_end(&combined.source.line_indices);
+                            if len > 0 {
+                                combined.selected_line = len - 1;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -728,11 +779,13 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
     }
 }
 
-/// Collect filter progress from all tabs
+/// Collect filter progress from all tabs (regular + combined)
 fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
     let mut events = Vec::new();
     let active_tab = app.active_tab;
+    let active_combined = app.active_combined;
 
+    // Regular tabs
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         if let Some(ref rx) = tab.source.filter.receiver {
             match rx.try_recv() {
@@ -741,7 +794,7 @@ fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
                     let filter_events =
                         handlers::filter::handle_filter_progress(progress, is_incremental);
 
-                    if tab_idx == active_tab {
+                    if tab_idx == active_tab && active_combined.is_none() {
                         // Active tab: check for completion and collect events
                         let completed = filter_events.iter().any(|e| {
                             matches!(
@@ -769,6 +822,48 @@ fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    // Combined tabs
+    for cat_idx in 0..5 {
+        if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
+            if let Some(ref rx) = combined.source.filter.receiver {
+                match rx.try_recv() {
+                    Ok(progress) => {
+                        let is_incremental = combined.source.filter.is_incremental;
+                        let filter_events =
+                            handlers::filter::handle_filter_progress(progress, is_incremental);
+
+                        let is_active = active_combined == Some(SourceType::from_index(cat_idx));
+                        if is_active {
+                            let completed = filter_events.iter().any(|e| {
+                                matches!(
+                                    e,
+                                    AppEvent::FilterComplete { .. } | AppEvent::FilterError(_)
+                                )
+                            });
+                            events.extend(filter_events);
+                            if completed {
+                                combined.source.filter.receiver = None;
+                            }
+                        } else {
+                            for ev in &filter_events {
+                                if combined.apply_filter_event(ev) {
+                                    combined.source.filter.receiver = None;
+                                }
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        combined.source.filter.receiver = None;
+                        if matches!(combined.source.filter.state, FilterState::Processing { .. }) {
+                            combined.source.filter.state = FilterState::Inactive;
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
             }
         }
     }
