@@ -119,7 +119,6 @@ fn handle_source_panel_mode(key: KeyEvent) -> Vec<AppEvent> {
             vec![AppEvent::Quit]
         }
         KeyCode::Char('y') => vec![AppEvent::CopySourcePath],
-        KeyCode::Char('m') => vec![AppEvent::CreateCombinedView],
         KeyCode::Char('?') => vec![AppEvent::ShowHelp],
         _ => vec![],
     }

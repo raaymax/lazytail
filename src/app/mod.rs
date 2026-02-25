@@ -64,6 +64,7 @@ pub enum ViewMode {
 
 /// Source type for categorizing tabs in the tree view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
 pub enum SourceType {
     /// Sources from project lazytail.yaml config
     ProjectSource,
@@ -77,9 +78,25 @@ pub enum SourceType {
     Pipe,
 }
 
+impl SourceType {
+    /// Convert array index back to SourceType.
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => SourceType::ProjectSource,
+            1 => SourceType::GlobalSource,
+            2 => SourceType::Global,
+            3 => SourceType::File,
+            4 => SourceType::Pipe,
+            _ => panic!("invalid SourceType index: {}", idx),
+        }
+    }
+}
+
 /// Selection state for the source panel tree
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeSelection {
+    /// Per-category combined view entry
+    CombinedForCategory(SourceType),
     /// A category header is selected
     Category(SourceType),
     /// An item within a category (category type, index within that category)
@@ -138,6 +155,12 @@ pub struct App {
 
     /// Currently active tab index
     pub active_tab: usize,
+
+    /// Per-category combined ($all) tabs, indexed by SourceType as usize
+    pub combined_tabs: [Option<TabState>; 5],
+
+    /// Which category's combined tab is active (None = regular tab active)
+    pub active_combined: Option<SourceType>,
 
     /// Current input mode
     pub input_mode: InputMode,
@@ -224,6 +247,8 @@ impl App {
         Self {
             tabs,
             active_tab: 0,
+            combined_tabs: [None, None, None, None, None],
+            active_combined: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             input_cursor: 0,
@@ -253,8 +278,14 @@ impl App {
     /// # Panics
     /// Panics if there are no tabs (should never happen as App requires at least one tab)
     pub fn active_tab(&self) -> &TabState {
-        debug_assert!(!self.tabs.is_empty(), "No tabs available");
-        &self.tabs[self.active_tab]
+        if let Some(cat) = self.active_combined {
+            self.combined_tabs[cat as usize]
+                .as_ref()
+                .expect("active_combined set but no combined tab for category")
+        } else {
+            debug_assert!(!self.tabs.is_empty(), "No tabs available");
+            &self.tabs[self.active_tab]
+        }
     }
 
     /// Get a mutable reference to the active tab
@@ -262,14 +293,21 @@ impl App {
     /// # Panics
     /// Panics if there are no tabs (should never happen as App requires at least one tab)
     pub fn active_tab_mut(&mut self) -> &mut TabState {
-        debug_assert!(!self.tabs.is_empty(), "No tabs available");
-        &mut self.tabs[self.active_tab]
+        if let Some(cat) = self.active_combined {
+            self.combined_tabs[cat as usize]
+                .as_mut()
+                .expect("active_combined set but no combined tab for category")
+        } else {
+            debug_assert!(!self.tabs.is_empty(), "No tabs available");
+            &mut self.tabs[self.active_tab]
+        }
     }
 
     /// Switch to a specific tab by index
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.active_tab = index;
+            self.active_combined = None;
         }
     }
 
@@ -311,6 +349,16 @@ impl App {
                 self.active_tab = self.tabs.len() - 1;
             } else if self.active_tab > index {
                 self.active_tab -= 1;
+            }
+
+            // Update combined tabs (may remove some if <2 sources remain in a category)
+            self.ensure_combined_tabs();
+
+            // If combined was active but got removed, fall back to a real tab
+            if let Some(cat) = self.active_combined {
+                if self.combined_tabs[cat as usize].is_none() {
+                    self.active_combined = None;
+                }
             }
         }
     }
@@ -355,14 +403,18 @@ impl App {
         self.input_mode = InputMode::SourcePanel;
 
         // Initialize selection to current tab if not set
-        if self.source_panel.selection.is_none() && !self.tabs.is_empty() {
-            let tab = &self.tabs[self.active_tab];
-            let stype = tab.source_type();
-            let idx = self.tabs[..self.active_tab]
-                .iter()
-                .filter(|t| t.source_type() == stype)
-                .count();
-            self.source_panel.selection = Some(TreeSelection::Item(stype, idx));
+        if self.source_panel.selection.is_none() {
+            if let Some(cat) = self.active_combined {
+                self.source_panel.selection = Some(TreeSelection::CombinedForCategory(cat));
+            } else if !self.tabs.is_empty() {
+                let tab = &self.tabs[self.active_tab];
+                let stype = tab.source_type();
+                let idx = self.tabs[..self.active_tab]
+                    .iter()
+                    .filter(|t| t.source_type() == stype)
+                    .count();
+                self.source_panel.selection = Some(TreeSelection::Item(stype, idx));
+            }
         }
     }
 
@@ -378,6 +430,10 @@ impl App {
             items.push(TreeSelection::Category(*cat));
             let cat_idx = *cat as usize;
             if self.source_panel.expanded[cat_idx] {
+                // Insert per-category $all entry if present
+                if self.combined_tabs[cat_idx].is_some() {
+                    items.push(TreeSelection::CombinedForCategory(*cat));
+                }
                 for i in 0..tab_indices.len() {
                     items.push(TreeSelection::Item(*cat, i));
                 }
@@ -421,11 +477,19 @@ impl App {
 
     /// Select a source from the panel (switch to that tab)
     fn select_source_from_panel(&mut self) {
-        if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection {
-            if let Some(tab_idx) = self.find_tab_index(cat, idx) {
-                self.active_tab = tab_idx;
+        match self.source_panel.selection {
+            Some(TreeSelection::CombinedForCategory(cat)) => {
+                self.select_combined_tab(cat);
                 self.input_mode = InputMode::Normal;
             }
+            Some(TreeSelection::Item(cat, idx)) => {
+                if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                    self.active_tab = tab_idx;
+                    self.active_combined = None;
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -483,71 +547,99 @@ impl App {
 
     // === Combined View Methods ===
 
-    /// Create a combined (merged) view from the selected category's sources.
-    fn create_combined_view(&mut self) {
+    /// Create or remove per-category combined ($all) tabs based on source counts.
+    ///
+    /// For each category, if there are 2+ non-disabled tabs, creates (or keeps) a
+    /// combined tab. If fewer than 2, removes it.
+    pub fn ensure_combined_tabs(&mut self) {
         use crate::reader::combined_reader::SourceEntry;
 
-        // Determine which category is selected in the source panel
-        let category = match &self.source_panel.selection {
-            Some(TreeSelection::Category(cat)) => *cat,
-            Some(TreeSelection::Item(cat, _)) => *cat,
+        let categories = self.tabs_by_category();
+
+        for (cat, tab_indices) in &categories {
+            let cat_idx = *cat as usize;
+
+            let sources: Vec<SourceEntry> = tab_indices
+                .iter()
+                .map(|&idx| &self.tabs[idx])
+                .filter(|t| !t.source.disabled)
+                .map(|tab| SourceEntry {
+                    name: tab.source.name.clone(),
+                    reader: tab.source.reader.clone(),
+                    index_reader: tab
+                        .source
+                        .source_path
+                        .as_ref()
+                        .and_then(|p| crate::index::reader::IndexReader::open(p)),
+                    source_path: tab.source.source_path.clone(),
+                    total_lines: tab.source.total_lines,
+                })
+                .collect();
+
+            if sources.len() >= 2 {
+                if self.combined_tabs[cat_idx].is_none() {
+                    // Create new combined tab only if one doesn't exist yet
+                    self.combined_tabs[cat_idx] = Some(TabState::from_combined(sources));
+                }
+                // Existing combined tabs get refreshed via refresh_combined_tab()
+                // to preserve filter/viewport state
+            } else {
+                self.combined_tabs[cat_idx] = None;
+                if self.active_combined == Some(*cat) {
+                    self.active_combined = None;
+                }
+            }
+        }
+    }
+
+    /// Rebuild a specific category's combined tab reader from current sources.
+    fn refresh_combined_tab(&mut self, cat: SourceType) {
+        use crate::reader::combined_reader::{CombinedReader, SourceEntry};
+        use crate::reader::LogReader;
+
+        let cat_idx = cat as usize;
+        let combined = match self.combined_tabs[cat_idx].as_mut() {
+            Some(tab) => tab,
             None => return,
         };
 
-        // Collect tab indices for this category (non-disabled only)
-        let tab_indices: Vec<usize> = self
+        let sources: Vec<SourceEntry> = self
             .tabs
             .iter()
-            .enumerate()
-            .filter(|(_, t)| t.source_type() == category && !t.source.disabled)
-            .map(|(i, _)| i)
-            .collect();
-
-        if tab_indices.len() < 2 {
-            self.status_message = Some((
-                "Need at least 2 sources to merge".to_string(),
-                Instant::now(),
-            ));
-            return;
-        }
-
-        // Build SourceEntry from each tab (sharing the reader Arc)
-        let sources: Vec<SourceEntry> = tab_indices
-            .iter()
-            .map(|&idx| {
-                let tab = &self.tabs[idx];
-                let reader = tab.source.reader.clone();
-                let index_reader = tab
+            .filter(|t| !t.source.disabled && t.source_type() == cat)
+            .map(|tab| SourceEntry {
+                name: tab.source.name.clone(),
+                reader: tab.source.reader.clone(),
+                index_reader: tab
                     .source
                     .source_path
                     .as_ref()
-                    .and_then(|p| crate::index::reader::IndexReader::open(p));
-                SourceEntry {
-                    name: tab.source.name.clone(),
-                    reader,
-                    index_reader,
-                    source_path: tab.source.source_path.clone(),
-                    total_lines: tab.source.total_lines,
-                }
+                    .and_then(|p| crate::index::reader::IndexReader::open(p)),
+                source_path: tab.source.source_path.clone(),
+                total_lines: tab.source.total_lines,
             })
             .collect();
 
-        let category_name = match category {
-            SourceType::ProjectSource => "Project",
-            SourceType::GlobalSource => "Global",
-            SourceType::Global => "Captured",
-            SourceType::File => "Files",
-            SourceType::Pipe => "Pipes",
-        };
+        let source_count = sources.len();
+        let new_reader = CombinedReader::new(sources);
+        let total_lines = new_reader.total_lines();
 
-        let combined_tab = TabState::from_combined(sources, category_name, category);
-        self.tabs.push(combined_tab);
-        self.active_tab = self.tabs.len() - 1;
-        self.input_mode = InputMode::Normal;
-        self.status_message = Some((
-            format!("Merged {} sources into combined view", tab_indices.len()),
-            Instant::now(),
-        ));
+        combined.source.reader = std::sync::Arc::new(std::sync::Mutex::new(new_reader));
+        combined.source.total_lines = total_lines;
+        // Only reset line_indices when not filtered (preserve filter results)
+        if combined.source.mode == ViewMode::Normal {
+            combined.source.line_indices = (0..total_lines).collect();
+        }
+        combined.source.name = format!("$all ({} sources)", source_count);
+    }
+
+    /// Switch to a category's combined ($all) tab with a lazy refresh.
+    fn select_combined_tab(&mut self, cat: SourceType) {
+        let cat_idx = cat as usize;
+        if self.combined_tabs[cat_idx].is_some() {
+            self.refresh_combined_tab(cat);
+            self.active_combined = Some(cat);
+        }
     }
 
     // === Close Confirmation Methods ===
@@ -1097,14 +1189,22 @@ impl App {
             // Tab navigation events
             AppEvent::SelectTab(index) => self.select_tab(index),
             AppEvent::CloseCurrentTab => {
-                let idx = self.active_tab;
-                self.request_close_tab(idx);
+                if self.active_combined.is_none() {
+                    let idx = self.active_tab;
+                    self.request_close_tab(idx);
+                }
             }
             AppEvent::CloseSelectedTab => {
-                if let Some(TreeSelection::Item(cat, idx)) = self.source_panel.selection.clone() {
-                    if let Some(tab_idx) = self.find_tab_index(cat, idx) {
-                        self.request_close_tab(tab_idx);
+                match self.source_panel.selection.clone() {
+                    Some(TreeSelection::CombinedForCategory(_)) => {
+                        // Can't close $all entries
                     }
+                    Some(TreeSelection::Item(cat, idx)) => {
+                        if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                            self.request_close_tab(tab_idx);
+                        }
+                    }
+                    _ => {}
                 }
             }
             AppEvent::ConfirmCloseTab => self.confirm_pending_close(),
@@ -1422,17 +1522,15 @@ impl App {
             }
 
             // Combined view events
-            AppEvent::CreateCombinedView => self.create_combined_view(),
             AppEvent::RefreshCombinedView => {
-                let tab = self.active_tab_mut();
-                if tab.is_combined {
-                    let mut reader = tab.source.reader.lock().unwrap();
-                    let _ = reader.reload();
-                    tab.source.total_lines = reader.total_lines();
-                    drop(reader);
-                    tab.source.line_indices = (0..tab.source.total_lines).collect();
-                    tab.source.mode = ViewMode::Normal;
-                    tab.viewport.jump_to_end(&tab.source.line_indices);
+                if let Some(cat) = self.active_combined {
+                    self.refresh_combined_tab(cat);
+                    let cat_idx = cat as usize;
+                    if let Some(ref mut tab) = self.combined_tabs[cat_idx] {
+                        tab.source.mode = ViewMode::Normal;
+                        let indices = tab.source.line_indices.clone();
+                        tab.viewport.jump_to_end(&indices);
+                    }
                     self.status_message =
                         Some(("Combined view refreshed".to_string(), Instant::now()));
                 }
@@ -1473,6 +1571,10 @@ impl App {
 
             if inner_row < items.len() {
                 match &items[inner_row] {
+                    TreeSelection::CombinedForCategory(cat) => {
+                        self.select_combined_tab(*cat);
+                        self.input_mode = InputMode::Normal;
+                    }
                     TreeSelection::Category(cat) => {
                         let idx = *cat as usize;
                         self.source_panel.expanded[idx] = !self.source_panel.expanded[idx];
@@ -1480,6 +1582,7 @@ impl App {
                     TreeSelection::Item(cat, idx) => {
                         if let Some(tab_idx) = self.find_tab_index(*cat, *idx) {
                             self.active_tab = tab_idx;
+                            self.active_combined = None;
                             self.input_mode = InputMode::Normal;
                         }
                     }
