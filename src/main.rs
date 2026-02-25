@@ -755,10 +755,10 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                             && combined.source.follow_mode
                             && combined.source.mode == ViewMode::Normal
                         {
-                            let indices = combined.source.line_indices.clone();
-                            combined.viewport.jump_to_end(&indices);
-                            if !indices.is_empty() {
-                                combined.selected_line = indices.len() - 1;
+                            let len = combined.source.line_indices.len();
+                            combined.viewport.jump_to_end(&combined.source.line_indices);
+                            if len > 0 {
+                                combined.selected_line = len - 1;
                             }
                         }
                     }
