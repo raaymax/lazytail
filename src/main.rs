@@ -122,6 +122,8 @@ fn main() -> Result<()> {
             cli::Commands::Web(args) => {
                 web::run(args).map_err(|code| anyhow::anyhow!("web failed with exit code {}", code))
             }
+            cli::Commands::Bench(args) => cli::bench::run(args)
+                .map_err(|code| anyhow::anyhow!("bench failed with exit code {}", code)),
             cli::Commands::Config { action } => match action {
                 cli::ConfigAction::Validate => cli::config::validate().map_err(|code| {
                     anyhow::anyhow!("config validate failed with exit code {}", code)
