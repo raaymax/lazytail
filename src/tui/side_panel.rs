@@ -154,7 +154,6 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
         // Category items (if expanded)
         if expanded {
             // Per-category $all entry
-            let cat_idx = *cat as usize;
             if let Some(ref combined) = app.combined_tabs[cat_idx] {
                 let is_active = app.active_combined == Some(*cat);
                 let is_tree_selected = is_panel_focused
