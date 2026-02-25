@@ -708,8 +708,8 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                 tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
             }
 
-            if tab_idx == active_tab {
-                // Collect for processing after the loop
+            if tab_idx == active_tab && app.active_combined.is_none() {
+                // Collect for processing after the loop (only when a regular tab is active)
                 active_tab_modification = Some(ActiveTabFileModification {
                     new_total,
                     old_total,
@@ -727,7 +727,11 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
             if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
                 let old_total = combined.source.total_lines;
                 {
-                    let mut reader = combined.source.reader.lock().unwrap();
+                    let mut reader = combined
+                        .source
+                        .reader
+                        .lock()
+                        .expect("Combined reader lock poisoned");
                     if let Err(e) = reader.reload() {
                         eprintln!(
                             "Failed to reload combined reader for cat {}: {}",

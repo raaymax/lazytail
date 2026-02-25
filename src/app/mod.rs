@@ -64,6 +64,7 @@ pub enum ViewMode {
 
 /// Source type for categorizing tabs in the tree view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
 pub enum SourceType {
     /// Sources from project lazytail.yaml config
     ProjectSource,
@@ -576,7 +577,12 @@ impl App {
                 .collect();
 
             if sources.len() >= 2 {
-                self.combined_tabs[cat_idx] = Some(TabState::from_combined(sources));
+                if self.combined_tabs[cat_idx].is_none() {
+                    // Create new combined tab only if one doesn't exist yet
+                    self.combined_tabs[cat_idx] = Some(TabState::from_combined(sources));
+                }
+                // Existing combined tabs get refreshed via refresh_combined_tab()
+                // to preserve filter/viewport state
             } else {
                 self.combined_tabs[cat_idx] = None;
                 if self.active_combined == Some(*cat) {
@@ -620,7 +626,10 @@ impl App {
 
         combined.source.reader = std::sync::Arc::new(std::sync::Mutex::new(new_reader));
         combined.source.total_lines = total_lines;
-        combined.source.line_indices = (0..total_lines).collect();
+        // Only reset line_indices when not filtered (preserve filter results)
+        if combined.source.mode == ViewMode::Normal {
+            combined.source.line_indices = (0..total_lines).collect();
+        }
         combined.source.name = format!("$all ({} sources)", source_count);
     }
 
@@ -1180,8 +1189,10 @@ impl App {
             // Tab navigation events
             AppEvent::SelectTab(index) => self.select_tab(index),
             AppEvent::CloseCurrentTab => {
-                let idx = self.active_tab;
-                self.request_close_tab(idx);
+                if self.active_combined.is_none() {
+                    let idx = self.active_tab;
+                    self.request_close_tab(idx);
+                }
             }
             AppEvent::CloseSelectedTab => {
                 match self.source_panel.selection.clone() {
