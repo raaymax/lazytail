@@ -122,7 +122,6 @@ pub enum AppEvent {
     AggregationJumpToEnd,
 
     // Combined view events
-    CreateCombinedView,
     RefreshCombinedView,
 
     // Mouse events

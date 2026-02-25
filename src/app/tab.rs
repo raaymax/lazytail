@@ -436,12 +436,8 @@ impl TabState {
         })
     }
 
-    /// Create a combined (merged) view from multiple source entries.
-    pub fn from_combined(
-        sources: Vec<crate::reader::combined_reader::SourceEntry>,
-        category_name: &str,
-        source_type: SourceType,
-    ) -> Self {
+    /// Create a combined (merged) view from all non-disabled sources.
+    pub fn from_combined(sources: Vec<crate::reader::combined_reader::SourceEntry>) -> Self {
         use crate::reader::combined_reader::CombinedReader;
 
         let source_count = sources.len();
@@ -453,12 +449,12 @@ impl TabState {
 
         Self {
             source: LogSource {
-                name: format!("{} ({} sources)", category_name, source_count),
+                name: format!("$all ({} sources)", source_count),
                 source_path: None,
                 mode: ViewMode::Normal,
                 total_lines,
                 line_indices,
-                follow_mode: false,
+                follow_mode: true,
                 reader,
                 filter: FilterConfig::default(),
                 source_status: None,
@@ -477,7 +473,7 @@ impl TabState {
             is_combined: true,
             stream_writer: None,
             stream_receiver: None,
-            config_source_type: Some(source_type),
+            config_source_type: None,
             aggregation_view: AggregationViewState::default(),
         }
     }

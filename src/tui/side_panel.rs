@@ -153,9 +153,67 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
         // Category items (if expanded)
         if expanded {
+            // Per-category $all entry
+            let cat_idx = *cat as usize;
+            if let Some(ref combined) = app.combined_tabs[cat_idx] {
+                let is_active = app.active_combined == Some(*cat);
+                let is_tree_selected = is_panel_focused
+                    && app.source_panel.selection == Some(TreeSelection::CombinedForCategory(*cat));
+
+                if is_tree_selected {
+                    selected_row = Some(row_idx);
+                }
+
+                let indicator = if is_active { ">" } else { " " };
+
+                let mut style = Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD);
+                if is_tree_selected {
+                    style = style.bg(Color::DarkGray);
+                }
+
+                let mut line =
+                    Line::from(vec![Span::styled(format!("   {} $all", indicator), style)]);
+
+                // Inline metadata: line count + source count
+                let source_count = tab_indices
+                    .iter()
+                    .filter(|&&idx| !app.tabs[idx].source.disabled)
+                    .count();
+                let meta = format!(
+                    " {} \u{00b7} {}src",
+                    format_count(combined.source.total_lines),
+                    source_count
+                );
+                let used_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
+                let panel_inner = (area.width as usize).saturating_sub(2);
+                let remaining = panel_inner.saturating_sub(used_width);
+                if remaining > 0 {
+                    let truncated: String = meta.chars().take(remaining).collect();
+                    line.spans.push(Span::styled(
+                        truncated,
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+
+                if is_tree_selected {
+                    let mut full_line =
+                        Line::from(vec![Span::styled(format!("   {} $all", indicator), style)]);
+                    full_line
+                        .spans
+                        .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
+                    selected_line_content = Some(full_line);
+                }
+
+                items.push(ListItem::new(line));
+                row_idx += 1;
+                // $all does NOT increment global_idx (1-9 keys map to real tabs only)
+            }
+
             for (in_cat_idx, &tab_idx) in tab_indices.iter().enumerate() {
                 let tab = &app.tabs[tab_idx];
-                let is_active = tab_idx == app.active_tab;
+                let is_active = tab_idx == app.active_tab && app.active_combined.is_none();
                 let is_tree_selected = is_panel_focused
                     && app.source_panel.selection == Some(TreeSelection::Item(*cat, in_cat_idx));
 
