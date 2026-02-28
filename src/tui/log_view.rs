@@ -83,9 +83,8 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     tab.selected_line = view.selected_index;
 
     // Use the viewport-computed values for rendering
-    let start_idx = view.scroll_position;
+    let mut start_idx = view.scroll_position;
     let selected_idx = view.selected_index;
-    let count = visible_height.min(tab.visible_line_count().saturating_sub(start_idx));
 
     // Calculate available width for content (accounting for borders and line prefix)
     let available_width = area.width.saturating_sub(2) as usize; // Account for borders
@@ -95,20 +94,65 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     } else {
         LINE_PREFIX_WIDTH
     };
+    let content_width = available_width.saturating_sub(prefix_width);
 
     // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.source.reader.lock().unwrap();
     let expanded_lines = tab.expansion.expanded_lines.clone();
     let index_reader = tab.source.index_reader.as_ref();
+    let total_lines = tab.source.line_indices.len();
 
-    // Fetch the lines to display
+    // Adjust start_idx so the selected expanded line fits on screen
+    if !expanded_lines.is_empty() {
+        let end = selected_idx.min(total_lines.saturating_sub(1));
+        let mut visual_rows = 0usize;
+        for i in start_idx..=end {
+            if let Some(&ln) = tab.source.line_indices.get(i) {
+                let h = if expanded_lines.contains(&ln) && content_width > 0 {
+                    let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
+                    wrap_content(&expand_tabs(&raw), content_width).len()
+                } else {
+                    1
+                };
+                visual_rows += h;
+            }
+        }
+        while visual_rows > visible_height && start_idx < selected_idx {
+            if let Some(&ln) = tab.source.line_indices.get(start_idx) {
+                let h = if expanded_lines.contains(&ln) && content_width > 0 {
+                    let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
+                    wrap_content(&expand_tabs(&raw), content_width).len()
+                } else {
+                    1
+                };
+                visual_rows -= h;
+            }
+            start_idx += 1;
+        }
+    }
+
+    // Fetch the lines to display with visual row budget
     let mut items = Vec::new();
-    for i in start_idx..start_idx + count {
+    let mut visual_rows_used = 0usize;
+    for i in start_idx..total_lines {
         if let Some(&line_number) = tab.source.line_indices.get(i) {
             let raw_line = reader_guard.get_line(line_number)?.unwrap_or_default();
             let line_text = expand_tabs(&raw_line);
             let is_selected = i == selected_idx;
             let is_expanded = expanded_lines.contains(&line_number);
+
+            // Pre-compute wrapped lines and item height
+            let wrapped = if is_expanded && content_width > 0 {
+                Some(wrap_content(&line_text, content_width))
+            } else {
+                None
+            };
+            let item_height = wrapped.as_ref().map_or(1, |w| w.len());
+
+            // Break if this item would exceed the visible height (always render first item)
+            if visual_rows_used > 0 && visual_rows_used + item_height > visible_height {
+                break;
+            }
 
             // Get source tag and severity from CombinedReader or regular index
             let (source_tag, severity) = if is_combined {
@@ -132,11 +176,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let line_num_part = format!("{:6} |", line_number + 1);
             let line_sep_part = " ";
 
-            if is_expanded && available_width > prefix_width {
-                // Expanded: wrap content across multiple lines
-                let content_width = available_width.saturating_sub(prefix_width);
-                let wrapped_lines = wrap_content(&line_text, content_width);
-
+            if let Some(wrapped_lines) = wrapped {
                 let mut item_lines: Vec<Line<'static>> = Vec::new();
 
                 let severity_color = severity_bg(severity);
@@ -252,6 +292,8 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
                 items.push(ListItem::new(final_line));
             }
+
+            visual_rows_used += item_height;
         }
     }
 
@@ -428,5 +470,65 @@ fn wrap_content(content: &str, available_width: usize) -> Vec<Line<'static>> {
         vec![Line::default()]
     } else {
         result_lines
+    }
+}
+
+#[cfg(test)]
+mod wrap_content_tests {
+    use super::*;
+
+    fn plain_text(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn short_content_single_line() {
+        let lines = wrap_content("hello", 20);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plain_text(&lines), vec!["hello"]);
+    }
+
+    #[test]
+    fn long_content_wraps_to_multiple_lines() {
+        let lines = wrap_content("abcdefghij", 4);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(plain_text(&lines), vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn content_exactly_at_width() {
+        let lines = wrap_content("abcd", 4);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plain_text(&lines), vec!["abcd"]);
+    }
+
+    #[test]
+    fn zero_width_returns_default() {
+        let lines = wrap_content("hello", 0);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn empty_content_single_line() {
+        let lines = wrap_content("", 10);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn wrap_height_matches_line_count() {
+        let lines = wrap_content("a]b]c]d]e]f]g]h]i]j]k]l]m]n]o]p", 10);
+        assert!(lines.len() > 1);
+        for line in &lines {
+            let width: usize = line.spans.iter().map(|s| s.content.width()).sum();
+            assert!(width <= 10, "line width {} exceeds 10", width);
+        }
     }
 }
