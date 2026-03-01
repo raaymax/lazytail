@@ -333,7 +333,9 @@ fn render_sources_list(
 
             if overlay_y < area.y + area.height.saturating_sub(1) {
                 for span in &mut line_content.spans {
-                    span.style = span.style.bg(ui.selection_bg);
+                    if span.style.bg.is_none() {
+                        span.style = span.style.bg(ui.bg);
+                    }
                 }
                 return Some((
                     line_content,
