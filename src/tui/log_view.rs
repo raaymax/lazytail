@@ -70,6 +70,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     let preset_registry = app.preset_registry.clone();
 
     let ui = &app.theme.ui;
+    let palette = &app.theme.palette;
     let tab = if let Some(cat) = app.active_combined {
         app.combined_tabs[cat as usize]
             .as_mut()
@@ -307,9 +308,10 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 if let Some(segments) = preset_segments {
                     // Use preset-rendered spans
                     for seg in &segments {
-                        final_line
-                            .spans
-                            .push(Span::styled(seg.text.clone(), to_ratatui_style(&seg.style)));
+                        final_line.spans.push(Span::styled(
+                            seg.text.clone(),
+                            to_ratatui_style(&seg.style, Some(palette)),
+                        ));
                     }
                 } else {
                     // Fallback to ANSI parsing
