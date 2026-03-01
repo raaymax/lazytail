@@ -12,6 +12,7 @@ mod log_source;
 mod mcp;
 mod reader;
 mod renderer;
+mod session;
 mod signal;
 mod source;
 mod theme;
@@ -372,6 +373,10 @@ fn main() -> Result<()> {
     app.theme = cfg.theme;
     app.ensure_combined_tabs();
 
+    // Restore last active source from session
+    let project_root = discovery.project_root.as_deref();
+    restore_last_source(&mut app, project_root);
+
     // Setup terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -384,6 +389,9 @@ fn main() -> Result<()> {
 
     // Main loop
     let res = run_app(&mut terminal, &mut app);
+
+    // Save active source to session
+    save_active_source(&app, project_root);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -518,6 +526,10 @@ fn run_discovery_mode(
     app.source_renderer_map = source_renderer_map;
     app.ensure_combined_tabs();
 
+    // Restore last active source from session
+    let project_root = discovery.project_root.as_deref();
+    restore_last_source(&mut app, project_root);
+
     // Optionally set up directory watcher for new sources
     // Watch project data dir if in project, otherwise global
     let dir_watcher = if watch {
@@ -551,6 +563,9 @@ fn run_discovery_mode(
     // Main loop with directory watcher
     let res = run_app_with_discovery(&mut terminal, &mut app, dir_watcher, watched_location);
 
+    // Save active source to session
+    save_active_source(&app, project_root);
+
     // Restore terminal
     disable_raw_mode()?;
     execute!(
@@ -571,6 +586,28 @@ fn run_discovery_mode(
     }
 
     Ok(())
+}
+
+/// Restore the last active source from session, selecting the matching tab.
+fn restore_last_source(app: &mut App, project_root: Option<&std::path::Path>) {
+    if let Some(last_name) = session::load_last_source(project_root) {
+        let categories = app.tabs_by_category();
+        for (_, tab_indices) in &categories {
+            for &tab_idx in tab_indices {
+                if app.tabs[tab_idx].source.name == last_name {
+                    app.select_tab(tab_idx);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Save the active source name to session.
+fn save_active_source(app: &App, project_root: Option<&std::path::Path>) {
+    if let Some(tab) = app.tabs.get(app.active_tab) {
+        session::save_last_source(project_root, &tab.source.name);
+    }
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
