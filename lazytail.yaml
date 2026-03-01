@@ -41,6 +41,10 @@ renderers:
         max_width: 120
       - field: message.content.0.content
         max_width: 120
+      - field: message.content
+        value_type: string
+        style: green
+        max_width: 120
       - field: subtype
         style: [bold, yellow]
       - field: data.type
@@ -49,5 +53,8 @@ renderers:
 # Log sources
 sources:
   - name: claude_log
+    renderers:
+      - claude-conversation
+  - name: claude_log2
     renderers:
       - claude-conversation

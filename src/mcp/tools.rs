@@ -1985,6 +1985,7 @@ plain line with no escapes\n\
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntryDef {
                     field: None,
@@ -1995,6 +1996,7 @@ plain line with no escapes\n\
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntryDef {
                     field: Some("message".to_string()),
@@ -2005,6 +2007,7 @@ plain line with no escapes\n\
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         }];
@@ -2103,6 +2106,7 @@ plain line with no escapes\n\
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         }];
 

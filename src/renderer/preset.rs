@@ -2,7 +2,9 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
-use super::field::{extract_fields, get_field, get_rest_fields, FieldSource};
+use super::field::{
+    extract_fields, get_field, get_rest_fields, json_value_type, FieldSource, JsonValueType,
+};
 use super::format::FieldFormat;
 use super::segment::{
     resolve_severity_style, resolve_status_code_style, SegmentColor, SegmentStyle, StyledSegment,
@@ -39,6 +41,9 @@ pub struct RawLayoutEntry {
     pub style_map: Option<HashMap<String, String>>,
     pub max_width: Option<usize>,
     pub style_when: Option<Vec<RawStyleCondition>>,
+    /// Only render this field when the JSON value at the path matches this type.
+    /// Supported values: `string`, `number`, `bool`, `array`, `object`.
+    pub value_type: Option<String>,
 }
 
 /// A single conditional style rule (used by preset compilation).
@@ -69,6 +74,7 @@ pub enum CompiledLayoutEntry {
         is_rest: bool,
         rest_format: RestFormat,
         field_format: Option<FieldFormat>,
+        value_type: Option<JsonValueType>,
     },
     Literal {
         text: String,
@@ -278,6 +284,20 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
             } else {
                 None
             };
+            let value_type = match entry.value_type.as_deref() {
+                Some("string") => Some(JsonValueType::String),
+                Some("number") => Some(JsonValueType::Number),
+                Some("bool") => Some(JsonValueType::Bool),
+                Some("array") => Some(JsonValueType::Array),
+                Some("object") => Some(JsonValueType::Object),
+                Some(other) => {
+                    return Err(format!(
+                        "field '{}': unknown value_type: {} (expected string, number, bool, array, object)",
+                        field, other
+                    ))
+                }
+                None => None,
+            };
             if !is_rest {
                 consumed_fields.insert(field.clone());
             }
@@ -289,6 +309,7 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
                 is_rest,
                 rest_format,
                 field_format,
+                value_type,
             });
         }
     }
@@ -404,9 +425,13 @@ impl CompiledPreset {
         // Extract fields
         let source = extract_fields(line, &self.parser, self.regex.as_ref(), flags)?;
 
-        // Walk layout entries and produce segments
+        // Walk layout entries and produce segments.
+        // Track whether the last emitted segment came from a field so we can
+        // auto-insert a space between consecutive fields that have no literal
+        // separator between them.
         let mut segments = Vec::new();
         let mut has_field_content = false;
+        let mut last_was_field = false;
         for entry in &self.layout {
             match entry {
                 CompiledLayoutEntry::Literal { text, style } => {
@@ -414,6 +439,7 @@ impl CompiledPreset {
                         text: text.clone(),
                         style: style.clone(),
                     });
+                    last_was_field = false;
                 }
                 CompiledLayoutEntry::Field {
                     name,
@@ -423,10 +449,23 @@ impl CompiledPreset {
                     is_rest,
                     rest_format,
                     field_format,
+                    value_type,
                 } => {
+                    // If value_type is set, skip this field when the JSON type doesn't match
+                    if let Some(expected) = value_type {
+                        if json_value_type(&source, name).as_ref() != Some(expected) {
+                            continue;
+                        }
+                    }
                     if *is_rest {
                         let rest = get_rest_fields(&source, &self.consumed_fields);
                         if !rest.is_empty() {
+                            if last_was_field {
+                                segments.push(StyledSegment {
+                                    text: " ".to_string(),
+                                    style: SegmentStyle::Default,
+                                });
+                            }
                             let text = match rest_format {
                                 RestFormat::KeyValue => rest
                                     .iter()
@@ -444,8 +483,15 @@ impl CompiledPreset {
                             let style = resolve_style_fn(style_fn, &text, Some(&source));
                             segments.push(StyledSegment { text, style });
                             has_field_content = true;
+                            last_was_field = true;
                         }
                     } else if let Some(value) = get_field(&source, name) {
+                        if last_was_field {
+                            segments.push(StyledSegment {
+                                text: " ".to_string(),
+                                style: SegmentStyle::Default,
+                            });
+                        }
                         // Apply field format if present, falling back to raw value
                         let display_value = field_format
                             .as_ref()
@@ -462,8 +508,9 @@ impl CompiledPreset {
                             style,
                         });
                         has_field_content = true;
+                        last_was_field = true;
                     }
-                    // Missing fields are silently skipped
+                    // Missing fields are silently skipped (last_was_field unchanged)
                 }
             }
         }
@@ -584,6 +631,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -594,6 +642,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("message".to_string()),
@@ -604,6 +653,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -614,6 +664,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
@@ -624,6 +675,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         })
@@ -657,6 +709,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -725,6 +778,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -735,6 +789,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("msg".to_string()),
@@ -745,6 +800,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         })
@@ -775,6 +831,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -785,6 +842,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("request".to_string()),
@@ -795,6 +853,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         })
@@ -851,6 +910,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
@@ -861,6 +921,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         })
@@ -898,6 +959,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -925,6 +987,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -994,6 +1057,7 @@ mod tests {
                 style_map: Some(style_map),
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1035,6 +1099,7 @@ mod tests {
                 style_map: Some(style_map),
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -1060,6 +1125,7 @@ mod tests {
                 style_map: None,
                 max_width: Some(10),
                 style_when: None,
+                value_type: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -1088,6 +1154,7 @@ mod tests {
                 style_map: Some(style_map),
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1118,6 +1185,7 @@ mod tests {
                 style_map: Some(style_map),
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1149,6 +1217,7 @@ mod tests {
                 style_map: Some(style_map),
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1180,6 +1249,7 @@ mod tests {
                 style_map: None,
                 max_width: Some(5),
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1207,6 +1277,7 @@ mod tests {
                 style_map: None,
                 max_width: Some(20),
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1242,6 +1313,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1287,6 +1359,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -1315,6 +1388,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1354,6 +1428,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1388,6 +1463,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1419,6 +1495,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1450,6 +1527,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1492,6 +1570,7 @@ mod tests {
                         style: StyleValue::Single("green".to_string()),
                     },
                 ]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1533,6 +1612,7 @@ mod tests {
                     value: r"^/api/v\d+".to_string(),
                     style: StyleValue::Single("blue".to_string()),
                 }]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1572,6 +1652,7 @@ mod tests {
                     value: "error".to_string(),
                     style: StyleValue::Single("red".to_string()),
                 }]),
+                value_type: None,
             }],
         });
 
@@ -1606,6 +1687,7 @@ mod tests {
                     value: "error".to_string(),
                     style: StyleValue::Single("red".to_string()),
                 }]),
+                value_type: None,
             }],
         });
 
@@ -1637,6 +1719,7 @@ mod tests {
                     value: "500".to_string(),
                     style: StyleValue::Single("red".to_string()),
                 }]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1669,6 +1752,7 @@ mod tests {
                     value: "500".to_string(),
                     style: StyleValue::Single("red".to_string()),
                 }]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1709,6 +1793,7 @@ mod tests {
                         style: StyleValue::Single("yellow".to_string()),
                     },
                 ]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1742,6 +1827,7 @@ mod tests {
                     value: "timeout".to_string(),
                     style: StyleValue::Single("yellow".to_string()),
                 }]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1776,6 +1862,7 @@ mod tests {
                     value: "error".to_string(),
                     style: StyleValue::Single("red".to_string()),
                 }]),
+                value_type: None,
             }],
         })
         .unwrap();
@@ -1791,6 +1878,164 @@ mod tests {
     // ========================================================================
     // Empty field fallthrough test
     // ========================================================================
+
+    #[test]
+    fn test_consecutive_fields_get_auto_space() {
+        // When two fields are adjacent (no literal separator between them),
+        // the renderer should auto-insert a space so values don't concatenate.
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "no-sep".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![
+                RawLayoutEntry {
+                    field: Some("tool".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+                // No literal separator here
+                RawLayoutEntry {
+                    field: Some("query".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+            ],
+        })
+        .unwrap();
+
+        let result = preset
+            .render(r#"{"tool":"WebSearch","query":"multitail"}"#, None)
+            .unwrap();
+        let text: String = result.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "WebSearch multitail");
+    }
+
+    #[test]
+    fn test_consecutive_fields_with_missing_middle_field() {
+        // When a middle field is missing, the surrounding fields should still
+        // get an auto-space, not concatenate.
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "mid-gap".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![
+                RawLayoutEntry {
+                    field: Some("a".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+                RawLayoutEntry {
+                    field: Some("b".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+                RawLayoutEntry {
+                    field: Some("c".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+            ],
+        })
+        .unwrap();
+
+        // "b" is missing — "a" and "c" should not concatenate
+        let result = preset.render(r#"{"a":"hello","c":"world"}"#, None).unwrap();
+        let text: String = result.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn test_no_double_space_with_explicit_literal() {
+        // When there's already an explicit literal separator, we should NOT
+        // add an extra auto-space.
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "explicit-sep".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![
+                RawLayoutEntry {
+                    field: Some("a".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+                RawLayoutEntry {
+                    field: None,
+                    literal: Some(" | ".to_string()),
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+                RawLayoutEntry {
+                    field: Some("b".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                    value_type: None,
+                },
+            ],
+        })
+        .unwrap();
+
+        let result = preset.render(r#"{"a":"foo","b":"bar"}"#, None).unwrap();
+        let text: String = result.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "foo | bar");
+    }
 
     #[test]
     fn test_render_returns_none_when_no_fields_match() {
@@ -1815,6 +2060,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -1825,6 +2071,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
                 RawLayoutEntry {
                     field: Some("subtype".to_string()),
@@ -1835,6 +2082,7 @@ mod tests {
                     style_map: None,
                     max_width: None,
                     style_when: None,
+                    value_type: None,
                 },
             ],
         })
@@ -1849,5 +2097,67 @@ mod tests {
             result.is_none(),
             "Preset with no matching fields should return None for fallthrough"
         );
+    }
+
+    #[test]
+    fn test_value_type_filters_field() {
+        // A field with value_type: string should only render when the JSON
+        // value is a string, not when it's an array or object.
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "vtype".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("content".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: Some("string".to_string()),
+            }],
+        })
+        .unwrap();
+
+        // String value → renders
+        let result = preset.render(r#"{"content":"hello world"}"#, None);
+        assert!(result.is_some());
+        let text: String = result.unwrap().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "hello world");
+
+        // Array value → skipped (no field content → returns None)
+        let result = preset.render(r#"{"content":[{"type":"text"}]}"#, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_value_type_invalid() {
+        let result = compile(RawPreset {
+            parser: None,
+            name: "bad-vtype".to_string(),
+            detect: None,
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("x".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: Some("int".to_string()),
+            }],
+        });
+        match result {
+            Err(msg) => assert!(msg.contains("unknown value_type"), "got: {}", msg),
+            Ok(_) => panic!("expected error for invalid value_type"),
+        }
     }
 }

@@ -69,6 +69,7 @@ pub struct RawLayoutEntryDef {
     pub style_map: Option<HashMap<String, String>>,
     pub max_width: Option<usize>,
     pub style_when: Option<Vec<RawStyleConditionDef>>,
+    pub value_type: Option<String>,
 }
 
 /// A single conditional style rule.

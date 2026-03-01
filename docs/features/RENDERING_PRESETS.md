@@ -45,11 +45,11 @@ A YAML-configurable preset system that:
 - [x] **R18: `max_width` (truncate without padding)** — Layout entries have an optional `max_width` field. Unlike `width` (which pads short values with spaces to a fixed column), `max_width` only truncates values exceeding the limit. Short values are unchanged. `width` and `max_width` are mutually exclusive (compile error if both set).
 - [x] **R19: Compound styles** — `style` accepts a list of style names. `style: [bold, cyan]` applies both BOLD modifier and cyan foreground. Resolved at compile time into `SegmentStyle::Compound { dim, bold, italic, fg }`. Modifiers (dim, bold, italic) combine with one Fg color. Compile error if two Fg colors specified.
 
-### Should Have (Stage 3 — MCP + Formatting)
+### Should Have (Stage 3 — MCP + Formatting) — COMPLETE
 
-- [ ] **R20: MCP integration** — `LineInfo` gains optional `rendered` field with preset-formatted plain text. `content` stays as raw line (backward compatible). MCP `list_sources` exposes available renderer names per source.
-- [ ] **R24: Field formatting** — Built-in formatters: `datetime` (relative/absolute), `duration` (humanize ms/ns), `bytes` (humanize). Applied via `format:` key on layout entries.
-- [ ] **R25: Conditional styling** — Style based on field value comparison: e.g., highlight duration > 1000ms. Uses `style_when` with `{field, op, value, style}` conditions.
+- [x] **R20: MCP integration** — `LineInfo` gains optional `rendered` field with preset-formatted plain text. `content` stays as raw line (backward compatible). MCP `list_sources` exposes available renderer names per source. `PresetRegistry` compiled from config at MCP server startup; `render_line_info()` applies preset chain to every line returned by `get_lines`, `get_tail`, `get_context`. `segments_to_plain_text()` converts styled segments to plain text for the `rendered` field.
+- [x] **R24: Field formatting** — Built-in formatters: `datetime` (relative/absolute), `duration` (humanize ms/ns), `bytes` (humanize). Applied via `format:` key on layout entries. Parsed at compile time into `FieldFormat` enum. Falls back gracefully (returns raw value) when the field value can't be parsed.
+- [x] **R25: Conditional styling** — Style based on field value comparison: e.g., highlight duration > 1000ms. Uses `style_when` with `{field, op, value, style}` conditions. Supported operators: `eq`, `ne`, `gt`, `lt`, `gte`, `lte`, `contains`, `regex`. First matching condition wins. `style`, `style_map`, and `style_when` are mutually exclusive (compile error if more than one set). Can reference a different field than the one being styled via the `field:` key in the condition.
 
 ### Should Have (Stage 4 — Capture + Theme + External Presets)
 
@@ -93,7 +93,7 @@ renderers:
       - literal: " "
       - field: _rest                 # remaining fields
         style: dim
-        format: key=value            # or: json
+        format: key_value            # or: json
 
   - name: nginx-access
     detect:
@@ -110,6 +110,40 @@ renderers:
       - literal: " "
       - field: status
         style: status_code           # maps HTTP codes to colors
+      - literal: " "
+      - field: response_time
+        format: duration             # humanize ms → "1.5s"
+        style_when:                  # conditional styling
+          - op: gt
+            value: "1000"
+            style: [bold, red]       # slow requests highlighted
+          - op: gt
+            value: "500"
+            style: yellow
+
+  - name: api-metrics
+    detect:
+      parser: json
+    layout:
+      - field: timestamp
+        format: datetime:relative    # "5m ago"
+        style: dim
+      - literal: " "
+      - field: endpoint
+      - literal: " "
+      - field: response_bytes
+        format: bytes                # "1.5 MB"
+        style: dim
+      - literal: " "
+      - field: duration_ms
+        format: duration:ms          # "42ms", "1.5s"
+        style_when:
+          - op: gt
+            value: "1000"
+            style: red
+          - op: gt
+            value: "200"
+            style: yellow
 
   - name: claude-conversation
     detect:
@@ -178,7 +212,7 @@ Combined ($all) view:
 
 Adapters:
   TUI: StyledSegment → ratatui Span (via to_ratatui_style)
-  MCP: StyledSegment → plain text (segments concatenated)
+  MCP: StyledSegment → plain text (via segments_to_plain_text) → LineInfo.rendered
   Web: (out of scope — separate WASM feature)
 ```
 
@@ -189,9 +223,10 @@ src/renderer/
   mod.rs        — PresetRegistry, public API
   segment.rs    — StyledSegment IR (adapter-agnostic)
   preset.rs     — RawPreset (YAML), CompiledPreset, compilation, render()
-  field.rs      — Unified field extraction (wraps query.rs + regex)
+  field.rs      — Unified field extraction (wraps query.rs + regex), JsonValueType
   detect.rs     — Auto-detection (index flags, filename globs)
   builtin.rs    — Built-in default presets (json, logfmt)
+  format.rs     — Field formatters (datetime, duration, bytes)
 ```
 
 ### Key Reuse Points
@@ -199,6 +234,7 @@ src/renderer/
 - `src/filter/query.rs` — `extract_json_field()`, `parse_logfmt()`, `Parser` enum
 - `src/index/flags.rs` — `FLAG_FORMAT_JSON`, `FLAG_FORMAT_LOGFMT` for auto-detection
 - `src/index/reader.rs` — `IndexReader::severity()` for line-number coloring (unchanged)
+- `src/renderer/segment.rs` — `segments_to_plain_text()` used by MCP for `rendered` field
 
 ## Files to Create/Modify
 
@@ -207,10 +243,13 @@ src/renderer/
 | `src/renderer/mod.rs` | Create | PresetRegistry, public API |
 | `src/renderer/segment.rs` | Create | StyledSegment IR |
 | `src/renderer/preset.rs` | Create | RawPreset, CompiledPreset, compile + render |
-| `src/renderer/field.rs` | Create | Unified field extraction |
+| `src/renderer/field.rs` | Create | Unified field extraction, JsonValueType |
 | `src/renderer/detect.rs` | Create | Auto-detection logic |
 | `src/renderer/builtin.rs` | Create | Built-in default presets |
+| `src/renderer/format.rs` | Create | Field formatters (datetime, duration, bytes) |
 | `src/config/types.rs` | Modify | Optional path, `renderers` list on source, `renderers` preset defs on root |
+| `src/mcp/tools.rs` | Modify | Preset registry, `render_line_info()`, `rendered` field population |
+| `src/mcp/types.rs` | Modify | `LineInfo.rendered`, `SourceInfo.renderer_names` |
 | `src/config/loader.rs` | Modify | Handle optional path, pass through renderers |
 | `src/config/error.rs` | Modify | Add new known fields for typo detection |
 | `src/filter/query.rs` | Modify | Promote `extract_json_field` + `parse_logfmt` to `pub` |
@@ -237,6 +276,12 @@ src/renderer/
 | `style_map` vs `style` | Mutually exclusive | Compile error if both set. Keeps `StyleFn` dispatch simple — either static/dynamic or map lookup, never both. |
 | `max_width` vs `width` | Mutually exclusive | `width` = fixed column (pad + truncate), `max_width` = truncate-only. No overlap in semantics. |
 | Discovered source renderers | `App::source_renderer_map` | Built once from config at startup. Looked up by source name for both initial discovery and runtime dir watcher. Stored on App for event loop access. |
+| MCP rendered field | Optional `rendered` on `LineInfo` | Backward compatible — `content` stays raw, `rendered` is additive. Skipped via `skip_serializing_if` when empty. |
+| MCP renderer resolution | `source_renderer_map` + `renderer_names_for_path()` | Same config-driven resolution as TUI. Map built at MCP server startup from config. |
+| Field format parsing | Compile-time `FieldFormat` enum | Parsed once during preset compilation, not per-line. `apply()` returns `Option<String>` — falls back to raw value on parse failure. |
+| DateTime parser | Custom ISO 8601 parser | No external dependency. Handles Z, +HH:MM offsets, fractional seconds, space separators. |
+| `style_when` evaluation | First-match-wins, ordered conditions | Consistent with renderer chain semantics. Cross-field conditions allow checking one field to style another. |
+| `style_when` operators | Numeric comparison via f64 parse | `gt`/`lt`/`gte`/`lte` parse both sides as f64. Falls back gracefully (no match) if values aren't numeric. `contains` and `regex` operate on strings. |
 
 ## Implementation Progress
 
@@ -270,14 +315,15 @@ src/renderer/
 - [x] R18: `max_width` — truncate without padding (mutual exclusivity with `width`)
 - [x] R19: Compound styles (`style: [bold, cyan]` → `SegmentStyle::Compound`, single Fg color enforced)
 
-### Stage 3: MCP + Formatting (next)
+### Stage 3: MCP + Formatting — COMPLETE
 
-- [ ] R20: MCP `rendered` field in LineInfo + renderer names in `list_sources`
-- [ ] R20: Preset registry in MCP server
-- [ ] R24: Field formatters (datetime, duration, bytes)
-- [ ] R25: Conditional styling (`style_when` conditions)
+- [x] R20: MCP `rendered` field in `LineInfo` — preset-formatted plain text via `segments_to_plain_text()`
+- [x] R20: MCP `list_sources` exposes `renderer_names` per source (via `SourceInfo.renderer_names`)
+- [x] R20: `PresetRegistry` compiled from config in MCP server, `render_line_info()` applies to all line-returning tools (`get_lines`, `get_tail`, `get_context`)
+- [x] R24: Field formatters (`src/renderer/format.rs`) — `datetime` (relative: "5m ago" / absolute: "2024-01-15 10:30:00"), `duration` (ms/ns humanized: "42ms", "1.5s", "1m 5s"), `bytes` ("1.0 KB", "1.5 MB"). ISO 8601 parser with timezone support.
+- [x] R25: Conditional styling (`style_when`) — operators: `eq`, `ne`, `gt`, `lt`, `gte`, `lte`, `contains`, `regex`. First match wins. Cross-field conditions supported (check one field, style another). Mutually exclusive with `style` and `style_map`.
 
-### Stage 4: Capture + Theme + External Presets
+### Stage 4: Capture + Theme + External Presets (next)
 
 - [ ] R21: Capture passthrough rendering (`lazytail -n` applies preset to stdout)
 - [ ] R22: `--raw` flag to bypass passthrough formatting

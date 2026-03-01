@@ -76,6 +76,44 @@ pub fn get_field(source: &FieldSource, field_name: &str) -> Option<String> {
     }
 }
 
+/// JSON value types for explicit `value_type` matching in layout entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonValueType {
+    String,
+    Number,
+    Bool,
+    Array,
+    Object,
+}
+
+/// Returns the JSON value type at the given field path, or `None` if the
+/// path doesn't resolve. Only meaningful for JSON sources; always returns
+/// `None` for logfmt/regex.
+pub fn json_value_type(source: &FieldSource, field_name: &str) -> Option<JsonValueType> {
+    let val = match source {
+        FieldSource::Json(val) => val,
+        _ => return None,
+    };
+    let mut current = val;
+    for part in field_name.split('.') {
+        if current.is_array() {
+            if let Ok(index) = part.parse::<usize>() {
+                current = current.get(index)?;
+                continue;
+            }
+        }
+        current = current.get(part)?;
+    }
+    Some(match current {
+        serde_json::Value::String(_) => JsonValueType::String,
+        serde_json::Value::Number(_) => JsonValueType::Number,
+        serde_json::Value::Bool(_) => JsonValueType::Bool,
+        serde_json::Value::Array(_) => JsonValueType::Array,
+        serde_json::Value::Object(_) => JsonValueType::Object,
+        serde_json::Value::Null => return None,
+    })
+}
+
 /// Returns all fields NOT in the consumed set, sorted by key.
 pub fn get_rest_fields(source: &FieldSource, consumed: &HashSet<String>) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = match source {
@@ -196,6 +234,58 @@ mod tests {
     fn test_extract_auto_neither_flag() {
         let source = extract_fields("plain text line", &PresetParser::Auto, None, Some(0));
         assert!(source.is_none());
+    }
+
+    #[test]
+    fn test_json_value_type_scalars() {
+        let source = extract_fields(
+            r#"{"name":"alice","age":30,"active":true}"#,
+            &PresetParser::Json,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            json_value_type(&source, "name"),
+            Some(JsonValueType::String)
+        );
+        assert_eq!(json_value_type(&source, "age"), Some(JsonValueType::Number));
+        assert_eq!(
+            json_value_type(&source, "active"),
+            Some(JsonValueType::Bool)
+        );
+        assert_eq!(json_value_type(&source, "missing"), None);
+    }
+
+    #[test]
+    fn test_json_value_type_complex() {
+        let source = extract_fields(
+            r#"{"message":{"content":[{"type":"text"}]}}"#,
+            &PresetParser::Json,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            json_value_type(&source, "message"),
+            Some(JsonValueType::Object)
+        );
+        assert_eq!(
+            json_value_type(&source, "message.content"),
+            Some(JsonValueType::Array)
+        );
+        assert_eq!(
+            json_value_type(&source, "message.content.0.type"),
+            Some(JsonValueType::String)
+        );
+    }
+
+    #[test]
+    fn test_json_value_type_non_json_source() {
+        let source =
+            extract_fields("level=info msg=hello", &PresetParser::Logfmt, None, None).unwrap();
+        // json_value_type always returns None for non-JSON sources
+        assert_eq!(json_value_type(&source, "level"), None);
     }
 
     #[test]

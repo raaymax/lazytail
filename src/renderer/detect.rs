@@ -155,6 +155,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();

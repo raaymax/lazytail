@@ -52,6 +52,7 @@ impl PresetRegistry {
                                 })
                                 .collect()
                         }),
+                        value_type: e.value_type.clone(),
                     })
                     .collect(),
             };
@@ -169,6 +170,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -225,6 +227,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         })
         .unwrap();
@@ -264,6 +267,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         }];
 
@@ -296,6 +300,7 @@ mod tests {
                 style_map: None,
                 max_width: None,
                 style_when: None,
+                value_type: None,
             }],
         }];
 
