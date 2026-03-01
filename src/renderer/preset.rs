@@ -337,6 +337,9 @@ fn resolve_style_string(style: Option<&str>) -> SegmentStyle {
         Some("cyan") => SegmentStyle::Fg(SegmentColor::Cyan),
         Some("white") => SegmentStyle::Fg(SegmentColor::White),
         Some("gray") => SegmentStyle::Fg(SegmentColor::Gray),
+        Some(s) if s.starts_with("palette.") => {
+            SegmentStyle::Fg(SegmentColor::Palette(s["palette.".len()..].to_string()))
+        }
         _ => SegmentStyle::Default,
     }
 }
@@ -364,16 +367,20 @@ fn resolve_compound_style(names: &[String]) -> Result<SegmentStyle, String> {
             "bold" => bold = true,
             "italic" => italic = true,
             color_name => {
-                let color = match color_name {
-                    "red" => SegmentColor::Red,
-                    "green" => SegmentColor::Green,
-                    "yellow" => SegmentColor::Yellow,
-                    "blue" => SegmentColor::Blue,
-                    "magenta" => SegmentColor::Magenta,
-                    "cyan" => SegmentColor::Cyan,
-                    "white" => SegmentColor::White,
-                    "gray" => SegmentColor::Gray,
-                    _ => return Err(format!("unknown style name: {}", name)),
+                let color = if let Some(suffix) = color_name.strip_prefix("palette.") {
+                    SegmentColor::Palette(suffix.to_string())
+                } else {
+                    match color_name {
+                        "red" => SegmentColor::Red,
+                        "green" => SegmentColor::Green,
+                        "yellow" => SegmentColor::Yellow,
+                        "blue" => SegmentColor::Blue,
+                        "magenta" => SegmentColor::Magenta,
+                        "cyan" => SegmentColor::Cyan,
+                        "white" => SegmentColor::White,
+                        "gray" => SegmentColor::Gray,
+                        _ => return Err(format!("unknown style name: {}", name)),
+                    }
                 };
                 if fg.is_some() {
                     return Err(format!(
@@ -2158,6 +2165,116 @@ mod tests {
         match result {
             Err(msg) => assert!(msg.contains("unknown value_type"), "got: {}", msg),
             Ok(_) => panic!("expected error for invalid value_type"),
+        }
+    }
+
+    #[test]
+    fn test_compile_palette_style() {
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "palette-test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: Some(StyleValue::Single("palette.foreground".to_string())),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: None,
+            }],
+        })
+        .unwrap();
+
+        // Check the compiled layout has the expected style
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Static(SegmentStyle::Fg(SegmentColor::Palette(name))) => {
+                    assert_eq!(name, "foreground");
+                }
+                other => panic!("expected Static(Fg(Palette)), got: {:?}", other),
+            },
+            _ => panic!("expected Field layout entry"),
+        }
+    }
+
+    #[test]
+    fn test_compile_compound_palette_style() {
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "compound-palette-test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: Some(StyleValue::List(vec![
+                    "bold".to_string(),
+                    "palette.cyan".to_string(),
+                ])),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: None,
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Static(SegmentStyle::Compound {
+                    bold,
+                    fg: Some(SegmentColor::Palette(name)),
+                    ..
+                }) => {
+                    assert!(*bold);
+                    assert_eq!(name, "cyan");
+                }
+                other => panic!("expected Compound with Palette, got: {:?}", other),
+            },
+            _ => panic!("expected Field layout entry"),
+        }
+    }
+
+    #[test]
+    fn test_compile_palette_two_colors_error() {
+        let result = compile(RawPreset {
+            parser: None,
+            name: "two-palette-test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: Some(StyleValue::List(vec![
+                    "palette.red".to_string(),
+                    "palette.cyan".to_string(),
+                ])),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: None,
+            }],
+        });
+        match result {
+            Err(msg) => assert!(msg.contains("two colors"), "got: {}", msg),
+            Ok(_) => panic!("expected error for two palette colors"),
         }
     }
 }

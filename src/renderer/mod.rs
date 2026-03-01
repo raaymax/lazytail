@@ -7,6 +7,7 @@ pub mod segment;
 
 use preset::CompiledPreset;
 use segment::StyledSegment;
+use std::path::{Path, PathBuf};
 
 /// Holds all compiled presets (user + builtins).
 pub struct PresetRegistry {
@@ -16,11 +17,16 @@ pub struct PresetRegistry {
 impl PresetRegistry {
     /// Compile renderer definitions from config into a registry.
     /// Returns the registry and a list of compilation error messages.
+    ///
+    /// Priority: inline config presets > external file presets > builtins.
     pub fn compile_from_config(
         renderers: &[crate::config::types::RawRendererDef],
+        project_root: Option<&Path>,
     ) -> (Self, Vec<String>) {
         let mut compiled = Vec::new();
         let mut errors = Vec::new();
+
+        // 1. Compile inline presets (highest priority)
         for raw in renderers {
             let raw_preset = preset::RawPreset {
                 name: raw.name.clone(),
@@ -61,6 +67,23 @@ impl PresetRegistry {
                 Err(e) => errors.push(format!("Renderer '{}': {}", raw.name, e)),
             }
         }
+
+        // 2. Load and compile external presets (skip names already defined inline)
+        let inline_names: std::collections::HashSet<String> =
+            compiled.iter().map(|p| p.name.clone()).collect();
+        let dirs = collect_renderers_dirs(project_root);
+        let (external_presets, external_errors) = load_external_presets(&dirs);
+        errors.extend(external_errors);
+        for raw_preset in external_presets {
+            if inline_names.contains(&raw_preset.name) {
+                continue;
+            }
+            match preset::compile(raw_preset) {
+                Ok(preset) => compiled.push(preset),
+                Err(e) => errors.push(format!("External renderer: {}", e)),
+            }
+        }
+
         (Self::new(compiled), errors)
     }
 
@@ -123,6 +146,79 @@ impl PresetRegistry {
         }
         None
     }
+}
+
+/// Build the list of renderer directories from project root and global config dir.
+///
+/// Returns only directories that exist on disk. Mirrors `collect_themes_dirs()`.
+fn collect_renderers_dirs(project_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(root) = project_root {
+        let project_renderers = root.join(".lazytail").join("renderers");
+        if project_renderers.is_dir() {
+            dirs.push(project_renderers);
+        }
+
+        let repo_renderers = root.join("renderers");
+        if repo_renderers.is_dir() {
+            dirs.push(repo_renderers);
+        }
+    }
+
+    if let Some(lazytail_dir) = crate::source::lazytail_dir() {
+        let global_renderers = lazytail_dir.join("renderers");
+        if global_renderers.is_dir() {
+            dirs.push(global_renderers);
+        }
+    }
+
+    dirs
+}
+
+/// Load external preset files from the given directories.
+///
+/// Each `.yaml` file is parsed as a `RawPreset`. Parse errors are collected,
+/// not fatal — other presets still load.
+fn load_external_presets(dirs: &[PathBuf]) -> (Vec<preset::RawPreset>, Vec<String>) {
+    let mut presets = Vec::new();
+    let mut errors = Vec::new();
+
+    for dir in dirs {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!(
+                        "Failed to read renderer file {}: {}",
+                        path.display(),
+                        e
+                    ));
+                    continue;
+                }
+            };
+            match serde_saphyr::from_str::<preset::RawPreset>(&content) {
+                Ok(raw) => presets.push(raw),
+                Err(e) => {
+                    errors.push(format!(
+                        "Failed to parse renderer file {}: {}",
+                        path.display(),
+                        e
+                    ));
+                }
+            }
+        }
+    }
+
+    (presets, errors)
 }
 
 #[cfg(test)]
@@ -271,7 +367,7 @@ mod tests {
             }],
         }];
 
-        let (registry, errors) = PresetRegistry::compile_from_config(&renderers);
+        let (registry, errors) = PresetRegistry::compile_from_config(&renderers, None);
         assert!(errors.is_empty());
         // User preset exists
         assert!(registry.get_by_name("my-json").is_some());
@@ -304,7 +400,7 @@ mod tests {
             }],
         }];
 
-        let (_, errors) = PresetRegistry::compile_from_config(&renderers);
+        let (_, errors) = PresetRegistry::compile_from_config(&renderers, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("bad-regex"));
         assert!(errors[0].contains("invalid regex"));
@@ -317,5 +413,140 @@ mod tests {
         // Should have builtins
         assert!(names.contains(&"json"));
         assert!(names.contains(&"logfmt"));
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_collect_renderers_dirs_project_scoped() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let renderers_dir = temp.path().join(".lazytail").join("renderers");
+        std::fs::create_dir_all(&renderers_dir).unwrap();
+
+        let dirs = collect_renderers_dirs(Some(temp.path()));
+        assert!(dirs.contains(&renderers_dir));
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_collect_renderers_dirs_repo_bundled() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let renderers_dir = temp.path().join("renderers");
+        std::fs::create_dir_all(&renderers_dir).unwrap();
+
+        let dirs = collect_renderers_dirs(Some(temp.path()));
+        assert!(dirs.contains(&renderers_dir));
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_collect_renderers_dirs_priority() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let project_dir = temp.path().join(".lazytail").join("renderers");
+        let repo_dir = temp.path().join("renderers");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&repo_dir).unwrap();
+
+        let dirs = collect_renderers_dirs(Some(temp.path()));
+        let pos_project = dirs.iter().position(|d| d == &project_dir).unwrap();
+        let pos_repo = dirs.iter().position(|d| d == &repo_dir).unwrap();
+        assert!(pos_project < pos_repo);
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_external_presets() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join("renderers");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            dir.join("custom.yaml"),
+            "name: custom\ndetect:\n  parser: json\nlayout:\n  - field: level\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("custom2.yaml"),
+            "name: custom2\ndetect:\n  parser: logfmt\nlayout:\n  - field: msg\n",
+        )
+        .unwrap();
+
+        let (presets, errors) = load_external_presets(&[dir]);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert_eq!(presets.len(), 2);
+        let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"custom"));
+        assert!(names.contains(&"custom2"));
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_inline_shadows_external() {
+        use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join(".lazytail").join("renderers");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // External preset named "json"
+        std::fs::write(
+            dir.join("json.yaml"),
+            "name: json\ndetect:\n  parser: json\nlayout:\n  - field: msg\n",
+        )
+        .unwrap();
+
+        // Inline preset also named "json"
+        let renderers = vec![RawRendererDef {
+            parser: None,
+            name: "json".to_string(),
+            detect: Some(RawDetectDef {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntryDef {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+                value_type: None,
+            }],
+        }];
+
+        let (registry, errors) = PresetRegistry::compile_from_config(&renderers, Some(temp.path()));
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+
+        // Inline "json" should be used (has "level" field), not external (has "msg" field)
+        let result = registry.render_line(
+            r#"{"level":"error","msg":"fail"}"#,
+            &["json".to_string()],
+            None,
+        );
+        let segments = result.unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "error");
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_compile_from_config_with_external() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().join(".lazytail").join("renderers");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            dir.join("custom.yaml"),
+            "name: custom-ext\ndetect:\n  parser: json\nlayout:\n  - field: level\n",
+        )
+        .unwrap();
+
+        let (registry, errors) = PresetRegistry::compile_from_config(&[], Some(temp.path()));
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert!(registry.get_by_name("custom-ext").is_some());
+        // Builtins still present
+        assert!(registry.get_by_name("json").is_some());
     }
 }

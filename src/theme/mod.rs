@@ -133,6 +133,32 @@ impl Palette {
         }
     }
 
+    /// Look up a palette color by name. Returns `None` for unknown names.
+    pub fn get_color(&self, name: &str) -> Option<Color> {
+        match name {
+            "black" => Some(self.black),
+            "red" => Some(self.red),
+            "green" => Some(self.green),
+            "yellow" => Some(self.yellow),
+            "blue" => Some(self.blue),
+            "magenta" => Some(self.magenta),
+            "cyan" => Some(self.cyan),
+            "white" => Some(self.white),
+            "bright_black" => Some(self.bright_black),
+            "bright_red" => Some(self.bright_red),
+            "bright_green" => Some(self.bright_green),
+            "bright_yellow" => Some(self.bright_yellow),
+            "bright_blue" => Some(self.bright_blue),
+            "bright_magenta" => Some(self.bright_magenta),
+            "bright_cyan" => Some(self.bright_cyan),
+            "bright_white" => Some(self.bright_white),
+            "foreground" => Some(self.foreground),
+            "background" => Some(self.background),
+            "selection" => Some(self.selection),
+            _ => None,
+        }
+    }
+
     pub fn light() -> Self {
         Self {
             black: Color::Black,
@@ -471,5 +497,51 @@ mod tests {
                 Color::LightGreen,
             ]
         );
+    }
+
+    #[test]
+    fn test_palette_get_color_standard() {
+        let palette = Palette::dark();
+        assert_eq!(palette.get_color("red"), Some(palette.red));
+        assert_eq!(palette.get_color("green"), Some(palette.green));
+        assert_eq!(palette.get_color("yellow"), Some(palette.yellow));
+        assert_eq!(palette.get_color("blue"), Some(palette.blue));
+        assert_eq!(palette.get_color("magenta"), Some(palette.magenta));
+        assert_eq!(palette.get_color("cyan"), Some(palette.cyan));
+        assert_eq!(palette.get_color("white"), Some(palette.white));
+        assert_eq!(palette.get_color("black"), Some(palette.black));
+        assert_eq!(palette.get_color("bright_red"), Some(palette.bright_red));
+        assert_eq!(
+            palette.get_color("bright_green"),
+            Some(palette.bright_green)
+        );
+        assert_eq!(
+            palette.get_color("bright_yellow"),
+            Some(palette.bright_yellow)
+        );
+        assert_eq!(palette.get_color("bright_blue"), Some(palette.bright_blue));
+        assert_eq!(
+            palette.get_color("bright_magenta"),
+            Some(palette.bright_magenta)
+        );
+        assert_eq!(palette.get_color("bright_cyan"), Some(palette.bright_cyan));
+        assert_eq!(
+            palette.get_color("bright_white"),
+            Some(palette.bright_white)
+        );
+        assert_eq!(
+            palette.get_color("bright_black"),
+            Some(palette.bright_black)
+        );
+        assert_eq!(palette.get_color("foreground"), Some(palette.foreground));
+        assert_eq!(palette.get_color("background"), Some(palette.background));
+        assert_eq!(palette.get_color("selection"), Some(palette.selection));
+    }
+
+    #[test]
+    fn test_palette_get_color_unknown() {
+        let palette = Palette::dark();
+        assert_eq!(palette.get_color("nonexistent"), None);
+        assert_eq!(palette.get_color(""), None);
     }
 }

@@ -11,16 +11,20 @@ use crate::config::DiscoveryResult;
 use crate::index::builder::{now_millis, LineIndexer};
 use crate::index::column::ColumnReader;
 use crate::index::meta::IndexMeta;
+use crate::renderer::segment::segments_to_ansi;
+use crate::renderer::PresetRegistry;
 use crate::signal::setup_shutdown_handlers;
 use crate::source::{
     create_marker_for_context, ensure_directories_for_context, index_dir_for_log,
     remove_marker_for_context, resolve_data_dir, validate_source_name,
 };
+use crate::theme::Palette;
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 /// Run in capture mode: tee stdin to a named log file.
 ///
@@ -37,7 +41,14 @@ use std::sync::atomic::Ordering;
 /// The discovery context determines where files are stored:
 /// - If inside a project (lazytail.yaml found): `.lazytail/data/`
 /// - Otherwise: `~/.config/lazytail/data/`
-pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()> {
+pub fn run_capture_mode(
+    name: String,
+    discovery: &DiscoveryResult,
+    preset_registry: Arc<PresetRegistry>,
+    renderer_names: Vec<String>,
+    palette: &Palette,
+    raw: bool,
+) -> Result<()> {
     // 1. Validate name
     validate_source_name(&name)?;
 
@@ -125,8 +136,24 @@ pub fn run_capture_mode(name: String, discovery: &DiscoveryResult) -> Result<()>
                     }
                 }
 
-                // Echo to stdout (ignore errors - stdout might be closed)
-                let _ = stdout.write_all(line_buf.as_bytes());
+                // Echo to stdout with optional rendering
+                if raw {
+                    let _ = stdout.write_all(line_buf.as_bytes());
+                } else {
+                    let line_content = line_buf.trim_end_matches('\n');
+                    let rendered = if !renderer_names.is_empty() {
+                        preset_registry.render_line(line_content, &renderer_names, None)
+                    } else {
+                        preset_registry.render_line_auto(line_content, None, None)
+                    };
+                    if let Some(segments) = rendered {
+                        let ansi = segments_to_ansi(&segments, Some(palette));
+                        let _ = stdout.write_all(ansi.as_bytes());
+                        let _ = stdout.write_all(b"\n");
+                    } else {
+                        let _ = stdout.write_all(line_buf.as_bytes());
+                    }
+                }
                 let _ = stdout.flush();
             }
             Err(e) => {
@@ -216,5 +243,29 @@ mod tests {
         assert!(validate_source_name("").is_err());
         assert!(validate_source_name("bad/name").is_err());
         assert!(validate_source_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn test_capture_rendering_integration() {
+        use crate::renderer::segment::segments_to_ansi;
+        use crate::renderer::PresetRegistry;
+        use crate::theme::Palette;
+
+        let registry = PresetRegistry::new(Vec::new());
+        let palette = Palette::dark();
+        let line = r#"{"level":"error","message":"fail"}"#;
+
+        // Render through the builtin json preset
+        let segments = registry
+            .render_line(line, &["json".to_string()], None)
+            .expect("json preset should render this line");
+
+        let ansi = segments_to_ansi(&segments, Some(&palette));
+
+        // Should contain ANSI escape codes
+        assert!(ansi.contains("\x1b["));
+        // Should contain the actual text
+        assert!(ansi.contains("error"));
+        assert!(ansi.contains("fail"));
     }
 }

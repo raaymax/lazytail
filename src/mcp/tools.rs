@@ -264,7 +264,10 @@ impl LazyTailMcp {
             Ok(cfg) => {
                 // Compilation errors are intentionally discarded — the MCP server has no
                 // stderr channel. Invalid renderers are simply omitted from the registry.
-                let (registry, _errors) = PresetRegistry::compile_from_config(&cfg.renderers);
+                let (registry, _errors) = PresetRegistry::compile_from_config(
+                    &cfg.renderers,
+                    discovery.project_root.as_deref(),
+                );
                 let map: HashMap<String, Vec<String>> = cfg
                     .project_sources
                     .iter()
@@ -2012,7 +2015,7 @@ plain line with no escapes\n\
             ],
         }];
 
-        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers);
+        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers, None);
         let mut source_renderer_map = HashMap::new();
         source_renderer_map.insert(file_stem.to_string(), vec!["json".to_string()]);
         LazyTailMcp {
@@ -2110,7 +2113,7 @@ plain line with no escapes\n\
             }],
         }];
 
-        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers);
+        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers, None);
         let mut source_renderer_map = HashMap::new();
         source_renderer_map.insert("test-source".to_string(), vec!["my-preset".to_string()]);
 

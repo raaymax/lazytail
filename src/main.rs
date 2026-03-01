@@ -84,6 +84,10 @@ struct Cli {
     #[arg(short = 'n', long = "name", value_name = "NAME")]
     name: Option<String>,
 
+    /// Output raw lines without rendering (only meaningful with -n)
+    #[arg(long = "raw")]
+    raw: bool,
+
     /// Run as MCP (Model Context Protocol) server
     ///
     /// Starts an MCP server using stdio transport for AI assistant integration.
@@ -225,6 +229,14 @@ fn main() -> Result<()> {
         return mcp::run_mcp_server();
     }
 
+    // Compile rendering presets from config (before capture dispatch, needed for R21 capture rendering)
+    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(
+        &cfg.renderers,
+        discovery.project_root.as_deref(),
+    );
+    config_errors.extend(compile_errors);
+    let preset_registry = Arc::new(registry);
+
     // Auto-detect stdin: if nothing is piped and no files given, check for other modes
     let stdin_is_tty = std::io::stdin().is_terminal();
     let has_piped_input = !stdin_is_tty;
@@ -236,7 +248,21 @@ fn main() -> Result<()> {
             eprintln!("Usage: command | lazytail -n <NAME>");
             std::process::exit(1);
         }
-        return capture::run_capture_mode(name, &discovery);
+        let renderer_names: Vec<String> = cfg
+            .project_sources
+            .iter()
+            .chain(cfg.global_sources.iter())
+            .find(|s| s.name == name)
+            .map(|s| s.renderer_names.clone())
+            .unwrap_or_default();
+        return capture::run_capture_mode(
+            name,
+            &discovery,
+            preset_registry,
+            renderer_names,
+            &cfg.theme.palette,
+            cli.raw,
+        );
     }
 
     // Mode 2: Discovery mode (no files, no stdin)
@@ -253,11 +279,6 @@ fn main() -> Result<()> {
         print_update_notice(update_handle);
         return result;
     }
-
-    // Compile rendering presets from config
-    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(&cfg.renderers);
-    config_errors.extend(compile_errors);
-    let preset_registry = Arc::new(registry);
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
@@ -420,7 +441,10 @@ fn run_discovery_mode(
     let watch = !no_watch;
 
     // Compile rendering presets from config
-    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(&cfg.renderers);
+    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(
+        &cfg.renderers,
+        discovery.project_root.as_deref(),
+    );
     config_errors.extend(compile_errors);
     let preset_registry = Arc::new(registry);
 
