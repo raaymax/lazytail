@@ -309,11 +309,12 @@ fn render_sources_list(
         Style::default()
     };
 
-    let list = List::new(items).block(
+    let list = List::new(items).style(ui.bg_style()).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(title),
+            .title(title)
+            .style(ui.bg_style()),
     );
 
     f.render_widget(list, area);
@@ -451,8 +452,12 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App, ui: &UiColors) {
         }
     }
 
-    let stats =
-        Paragraph::new(stats_text).block(Block::default().borders(Borders::ALL).title("Stats"));
+    let stats = Paragraph::new(stats_text).style(ui.bg_style()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Stats")
+            .style(ui.bg_style()),
+    );
 
     f.render_widget(stats, area);
 }

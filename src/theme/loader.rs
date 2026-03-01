@@ -51,7 +51,7 @@ pub fn resolve_theme(
             }
 
             // Apply explicit UI overrides on top of derived colors
-            if let Some(raw_ui) = ui {
+            if let Some(ref raw_ui) = **ui {
                 apply_ui_overrides(&mut theme.ui, raw_ui);
             }
 
@@ -280,6 +280,7 @@ fn apply_ui_overrides(ui: &mut UiColors, raw: &RawUiColors) {
     override_field!(filter_query);
     override_field!(filter_error);
     override_field!(popup_bg);
+    override_field!(bg);
 
     if let Some(ref colors) = raw.source_colors {
         let resolved: Vec<ratatui::style::Color> = colors.iter().map(|c| c.0).collect();
@@ -336,7 +337,7 @@ mod tests {
                 red: Some(ThemeColor(Color::Rgb(255, 0, 0))),
                 ..Default::default()
             }),
-            ui: None,
+            ui: Box::new(None),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         assert_eq!(theme.palette.red, Color::Rgb(255, 0, 0));
@@ -349,15 +350,29 @@ mod tests {
         let raw = Some(RawThemeConfig::Custom {
             base: Some("dark".into()),
             palette: None,
-            ui: Some(RawUiColors {
+            ui: Box::new(Some(RawUiColors {
                 primary: Some(ThemeColor(Color::Cyan)),
                 ..Default::default()
-            }),
+            })),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         assert_eq!(theme.ui.primary, Color::Cyan);
         // Rest should be dark defaults
         assert_eq!(theme.ui.accent, Theme::dark().ui.accent);
+    }
+
+    #[test]
+    fn test_resolve_custom_ui_bg_override() {
+        let raw = Some(RawThemeConfig::Custom {
+            base: Some("dark".into()),
+            palette: None,
+            ui: Box::new(Some(RawUiColors {
+                bg: Some(ThemeColor(Color::Rgb(0x2e, 0x34, 0x40))),
+                ..Default::default()
+            })),
+        });
+        let theme = resolve_theme(&raw, &[]).unwrap();
+        assert_eq!(theme.ui.bg, Color::Rgb(0x2e, 0x34, 0x40));
     }
 
     #[test]
@@ -368,10 +383,10 @@ mod tests {
                 red: Some(ThemeColor(Color::Rgb(200, 50, 50))),
                 ..Default::default()
             }),
-            ui: Some(RawUiColors {
+            ui: Box::new(Some(RawUiColors {
                 severity_error: Some(ThemeColor(Color::Rgb(255, 0, 0))),
                 ..Default::default()
-            }),
+            })),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         // Palette red was overridden

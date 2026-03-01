@@ -1,6 +1,6 @@
 pub mod loader;
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 use serde::Deserialize;
 
 /// A named color suitable for YAML config deserialization.
@@ -128,7 +128,7 @@ impl Palette {
             bright_cyan: Color::LightCyan,
             bright_white: Color::White,
             foreground: Color::White,
-            background: Color::Black,
+            background: Color::Reset,
             selection: Color::DarkGray,
         }
     }
@@ -205,6 +205,7 @@ impl Palette {
             filter_query: self.magenta,
             filter_error: self.red,
             popup_bg,
+            bg: self.background,
             source_colors: vec![
                 self.cyan,
                 self.green,
@@ -261,7 +262,14 @@ pub struct UiColors {
     pub filter_query: Color,
     pub filter_error: Color,
     pub popup_bg: Color,
+    pub bg: Color,
     pub source_colors: Vec<Color>,
+}
+
+impl UiColors {
+    pub fn bg_style(&self) -> Style {
+        Style::default().bg(self.bg)
+    }
 }
 
 /// A complete theme: palette + derived/overridden UI colors.
@@ -301,7 +309,7 @@ pub enum RawThemeConfig {
         #[serde(default)]
         palette: Option<RawPalette>,
         #[serde(default)]
-        ui: Option<RawUiColors>,
+        ui: Box<Option<RawUiColors>>,
     },
 }
 
@@ -358,6 +366,7 @@ pub struct RawUiColors {
     pub filter_query: Option<ThemeColor>,
     pub filter_error: Option<ThemeColor>,
     pub popup_bg: Option<ThemeColor>,
+    pub bg: Option<ThemeColor>,
     pub source_colors: Option<Vec<ThemeColor>>,
 }
 
@@ -412,6 +421,7 @@ mod tests {
         assert_eq!(ui.negative, Color::Red);
         assert_eq!(ui.highlight, Color::Magenta);
         assert_eq!(ui.muted, Color::DarkGray);
+        assert_eq!(ui.bg, Color::Reset);
     }
 
     #[test]
@@ -420,6 +430,7 @@ mod tests {
         let light_ui = Palette::light().derive_ui_colors();
         assert_ne!(dark_ui.fg, light_ui.fg);
         assert_ne!(dark_ui.selection_bg, light_ui.selection_bg);
+        assert_ne!(dark_ui.bg, light_ui.bg);
     }
 
     #[test]
@@ -430,6 +441,7 @@ mod tests {
         assert_eq!(theme.ui.severity_error_bg, Color::Rgb(255, 230, 230));
         assert_eq!(theme.ui.severity_fatal_bg, Color::Rgb(255, 220, 235));
         assert_eq!(theme.ui.popup_bg, Color::White);
+        assert_eq!(theme.ui.bg, Color::White);
     }
 
     #[test]
@@ -440,6 +452,7 @@ mod tests {
         assert_eq!(theme.ui.severity_error_bg, Color::Rgb(55, 10, 10));
         assert_eq!(theme.ui.severity_fatal_bg, Color::Rgb(75, 0, 15));
         assert_eq!(theme.ui.selection_bg, Color::DarkGray);
+        assert_eq!(theme.ui.bg, Color::Reset);
     }
 
     #[test]
