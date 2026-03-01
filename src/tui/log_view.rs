@@ -354,11 +354,12 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         Style::default()
     };
 
-    let list = List::new(items).block(
+    let list = List::new(items).style(ui.bg_style()).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(title),
+            .title(title)
+            .style(ui.bg_style()),
     );
 
     f.render_widget(list, area);

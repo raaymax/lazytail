@@ -84,8 +84,12 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         bottom_line,
     ];
 
-    let paragraph =
-        Paragraph::new(status_lines).block(Block::default().borders(Borders::ALL).title("Status"));
+    let paragraph = Paragraph::new(status_lines).style(ui.bg_style()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Status")
+            .style(ui.bg_style()),
+    );
 
     f.render_widget(paragraph, area);
 }
@@ -119,12 +123,13 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     let title = format!("Live Filter ({}, Enter to close, Esc to clear)", mode_hint);
 
     let input = Paragraph::new(input_text)
-        .style(Style::default().fg(ui.primary))
+        .style(ui.bg_style().fg(ui.primary))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
-                .title(title),
+                .title(title)
+                .style(ui.bg_style()),
         );
 
     f.render_widget(input, area);
@@ -141,11 +146,12 @@ pub(super) fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
     let input_text = format!(":{}", app.get_input());
 
     let input = Paragraph::new(input_text)
-        .style(Style::default().fg(ui.accent))
+        .style(ui.bg_style().fg(ui.accent))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Jump to Line (Enter to jump, Esc to cancel)"),
+                .title("Jump to Line (Enter to jump, Esc to cancel)")
+                .style(ui.bg_style()),
         );
 
     f.render_widget(input, area);
