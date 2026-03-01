@@ -159,6 +159,27 @@ impl Palette {
 
     /// Derive semantic UI colors from this palette.
     pub fn derive_ui_colors(&self) -> UiColors {
+        let light_bg = self.is_background_light();
+
+        let (expanded_bg, severity_warn_bg, severity_error_bg, severity_fatal_bg, popup_bg) =
+            if light_bg {
+                (
+                    Color::Rgb(230, 230, 240),
+                    Color::Rgb(255, 248, 220),
+                    Color::Rgb(255, 230, 230),
+                    Color::Rgb(255, 220, 235),
+                    self.white,
+                )
+            } else {
+                (
+                    Color::Rgb(30, 30, 40),
+                    Color::Rgb(50, 40, 0),
+                    Color::Rgb(55, 10, 10),
+                    Color::Rgb(75, 0, 15),
+                    self.black,
+                )
+            };
+
         UiColors {
             fg: self.foreground,
             muted: self.bright_black,
@@ -169,10 +190,10 @@ impl Palette {
             negative: self.red,
             selection_bg: self.selection,
             selection_fg: self.foreground,
-            expanded_bg: Color::Rgb(30, 30, 40),
-            severity_warn_bg: Color::Rgb(50, 40, 0),
-            severity_error_bg: Color::Rgb(55, 10, 10),
-            severity_fatal_bg: Color::Rgb(75, 0, 15),
+            expanded_bg,
+            severity_warn_bg,
+            severity_error_bg,
+            severity_fatal_bg,
             severity_fatal: self.magenta,
             severity_error: self.red,
             severity_warn: self.yellow,
@@ -183,7 +204,7 @@ impl Palette {
             filter_regex: self.cyan,
             filter_query: self.magenta,
             filter_error: self.red,
-            popup_bg: self.black,
+            popup_bg,
             source_colors: vec![
                 self.cyan,
                 self.green,
@@ -194,6 +215,21 @@ impl Palette {
                 self.bright_cyan,
                 self.bright_green,
             ],
+        }
+    }
+
+    /// Check if the palette background is light (for deriving appropriate UI colors).
+    fn is_background_light(&self) -> bool {
+        match self.background {
+            Color::White
+            | Color::LightYellow
+            | Color::LightGreen
+            | Color::LightBlue
+            | Color::LightCyan
+            | Color::LightMagenta
+            | Color::LightRed => true,
+            Color::Rgb(r, g, b) => (r as u16 + g as u16 + b as u16) > 384,
+            _ => false,
         }
     }
 }
@@ -384,6 +420,16 @@ mod tests {
         let light_ui = Palette::light().derive_ui_colors();
         assert_ne!(dark_ui.fg, light_ui.fg);
         assert_ne!(dark_ui.selection_bg, light_ui.selection_bg);
+    }
+
+    #[test]
+    fn test_light_theme_uses_light_severity_backgrounds() {
+        let theme = Theme::light();
+        assert_eq!(theme.ui.expanded_bg, Color::Rgb(230, 230, 240));
+        assert_eq!(theme.ui.severity_warn_bg, Color::Rgb(255, 248, 220));
+        assert_eq!(theme.ui.severity_error_bg, Color::Rgb(255, 230, 230));
+        assert_eq!(theme.ui.severity_fatal_bg, Color::Rgb(255, 220, 235));
+        assert_eq!(theme.ui.popup_bg, Color::White);
     }
 
     #[test]
