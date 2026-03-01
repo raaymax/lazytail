@@ -153,6 +153,8 @@ pub struct LogSource {
     pub rate_tracker: LineRateTracker,
     /// Aggregation result for grouped query views
     pub aggregation_result: Option<AggregationResult>,
+    /// Renderer preset names for this source (empty = auto-detect)
+    pub renderer_names: Vec<String>,
 }
 
 #[allow(dead_code)]

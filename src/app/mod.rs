@@ -9,9 +9,11 @@ use crate::filter::orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
+use crate::renderer::PresetRegistry;
 use crate::source::{self, SourceStatus};
 #[cfg(test)]
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Debounce delay for live filter preview (milliseconds)
@@ -225,6 +227,12 @@ pub struct App {
 
     /// Cached layout areas from the most recent render pass
     pub layout: LayoutAreas,
+
+    /// Preset registry for rendering structured log lines
+    pub preset_registry: Arc<PresetRegistry>,
+
+    /// Color theme for UI rendering
+    pub theme: crate::theme::Theme,
 }
 
 impl App {
@@ -235,11 +243,14 @@ impl App {
             tabs.push(TabState::new(file, watch)?);
         }
 
-        Ok(Self::with_tabs(tabs))
+        Ok(Self::with_tabs(
+            tabs,
+            Arc::new(PresetRegistry::new(Vec::new())),
+        ))
     }
 
     /// Create an App with pre-created tabs
-    pub fn with_tabs(tabs: Vec<TabState>) -> Self {
+    pub fn with_tabs(tabs: Vec<TabState>, preset_registry: Arc<PresetRegistry>) -> Self {
         assert!(
             !tabs.is_empty(),
             "App must be created with at least one tab"
@@ -270,6 +281,8 @@ impl App {
             first_render_elapsed: None,
             verbose: false,
             layout: LayoutAreas::default(),
+            preset_registry,
+            theme: crate::theme::Theme::dark(),
         }
     }
 
@@ -573,6 +586,7 @@ impl App {
                         .and_then(|p| crate::index::reader::IndexReader::open(p)),
                     source_path: tab.source.source_path.clone(),
                     total_lines: tab.source.total_lines,
+                    renderer_names: tab.source.renderer_names.clone(),
                 })
                 .collect();
 
@@ -617,6 +631,7 @@ impl App {
                     .and_then(|p| crate::index::reader::IndexReader::open(p)),
                 source_path: tab.source.source_path.clone(),
                 total_lines: tab.source.total_lines,
+                renderer_names: tab.source.renderer_names.clone(),
             })
             .collect();
 

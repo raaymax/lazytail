@@ -1,20 +1,26 @@
 use crate::app::tab::TabState;
+use crate::theme::UiColors;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
     Frame,
 };
 
-pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &mut TabState) {
+pub(super) fn render_aggregation_view(
+    f: &mut Frame,
+    area: Rect,
+    tab: &mut TabState,
+    ui: &UiColors,
+) {
     let result = match &tab.source.aggregation_result {
         Some(r) => r,
         None => {
             // No result yet — show empty block
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Magenta))
+                .border_style(Style::default().fg(ui.highlight))
                 .title("Aggregation: computing...");
             f.render_widget(block, area);
             return;
@@ -46,7 +52,7 @@ pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &mut TabSt
         .max(1);
 
     // Build header
-    let header_spans = build_header(&result.aggregation.fields, inner_width);
+    let header_spans = build_header(&result.aggregation.fields, inner_width, ui);
     let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(header_spans))];
 
     // Build data rows
@@ -59,12 +65,12 @@ pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &mut TabSt
 
     for (idx, group) in visible_groups {
         let is_selected = idx == selected;
-        let spans = build_row(group, max_count, inner_width, is_selected);
+        let spans = build_row(group, max_count, inner_width, ui);
         let mut item = ListItem::new(Line::from(spans));
         if is_selected {
             item = item.style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(ui.selection_bg)
                     .add_modifier(Modifier::BOLD),
             );
         }
@@ -73,30 +79,26 @@ pub(super) fn render_aggregation_view(f: &mut Frame, area: Rect, tab: &mut TabSt
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta))
+        .border_style(Style::default().fg(ui.highlight))
         .title(title);
 
     let list = List::new(items).block(block);
     f.render_widget(list, area);
 }
 
-fn build_header(fields: &[String], width: usize) -> Vec<Span<'static>> {
+fn build_header(fields: &[String], width: usize, ui: &UiColors) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for field in fields {
         spans.push(Span::styled(
             format!(" {:<15}", field),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         ));
     }
     // Count column
     let remaining = width.saturating_sub(fields.len() * 16 + 8);
     spans.push(Span::styled(
         format!(" {:>7}", "Count"),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
     ));
     // Bar header (empty space)
     if remaining > 0 {
@@ -109,7 +111,7 @@ fn build_row(
     group: &crate::filter::aggregation::AggregationGroup,
     max_count: usize,
     width: usize,
-    _is_selected: bool,
+    ui: &UiColors,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let field_cols = group.key.len() * 16;
@@ -121,13 +123,13 @@ fn build_row(
         } else {
             format!(" {:<14}", value)
         };
-        spans.push(Span::styled(display, Style::default().fg(Color::White)));
+        spans.push(Span::styled(display, Style::default().fg(ui.fg)));
         spans.push(Span::raw(" "));
     }
 
     // Count
     let count_str = format!("{:>7}", group.count);
-    spans.push(Span::styled(count_str, Style::default().fg(Color::Yellow)));
+    spans.push(Span::styled(count_str, Style::default().fg(ui.primary)));
 
     // Bar chart
     let bar_space = width.saturating_sub(field_cols + 8 + 1);
@@ -139,14 +141,8 @@ fn build_row(
         let bar_filled: String = "\u{2588}".repeat(filled);
         let bar_empty: String = "\u{2591}".repeat(empty);
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            bar_filled,
-            Style::default().fg(Color::Magenta),
-        ));
-        spans.push(Span::styled(
-            bar_empty,
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled(bar_filled, Style::default().fg(ui.highlight)));
+        spans.push(Span::styled(bar_empty, Style::default().fg(ui.muted)));
     }
 
     spans

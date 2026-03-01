@@ -66,11 +66,18 @@ fn load_file(path: &Path) -> Result<RawConfig, ConfigError> {
 fn validate_sources(raw: Vec<RawSource>) -> Vec<Source> {
     raw.into_iter()
         .map(|raw_source| {
-            let expanded_path = expand_path(&raw_source.path);
-            let exists = expanded_path.try_exists().unwrap_or(false);
+            let (expanded_path, exists) = match raw_source.path {
+                Some(p) => {
+                    let expanded = expand_path(&p);
+                    let exists = expanded.try_exists().unwrap_or(false);
+                    (Some(expanded), exists)
+                }
+                None => (None, false),
+            };
             Source {
                 name: raw_source.name,
                 path: expanded_path,
+                renderer_names: raw_source.renderers,
                 exists,
             }
         })
@@ -99,21 +106,31 @@ pub fn load_single_file(path: &Path) -> Result<SingleFileConfig, ConfigError> {
 /// Returns an empty Config if no config files exist (graceful degradation).
 pub fn load(discovery: &DiscoveryResult) -> Result<Config, ConfigError> {
     let mut config = Config::default();
+    let mut theme_raw: Option<crate::theme::RawThemeConfig> = None;
+
+    // Load global config if it exists (loaded first so project can override)
+    if let Some(global_path) = &discovery.global_config {
+        let raw = load_file(global_path)?;
+        config.global_sources = validate_sources(raw.sources);
+        config.update_check = raw.update_check;
+        theme_raw = raw.theme;
+        // Note: global name is ignored, project name takes precedence
+    }
 
     // Load project config if it exists
     if let Some(project_path) = &discovery.project_config {
         let raw = load_file(project_path)?;
         config.name = raw.name;
         config.project_sources = validate_sources(raw.sources);
+        config.renderers = raw.renderers;
+        // Project theme overrides global theme (full override, not merge)
+        if raw.theme.is_some() {
+            theme_raw = raw.theme;
+        }
     }
 
-    // Load global config if it exists
-    if let Some(global_path) = &discovery.global_config {
-        let raw = load_file(global_path)?;
-        config.global_sources = validate_sources(raw.sources);
-        config.update_check = raw.update_check;
-        // Note: global name is ignored, project name takes precedence
-    }
+    // Resolve theme
+    config.theme = crate::theme::loader::resolve_theme(&theme_raw, &[])?;
 
     Ok(config)
 }
@@ -208,12 +225,15 @@ sources:
         assert_eq!(config.project_sources[0].name, "api");
         assert_eq!(
             config.project_sources[0].path,
-            PathBuf::from("/var/log/api.log")
+            Some(PathBuf::from("/var/log/api.log"))
         );
         assert_eq!(config.project_sources[1].name, "web");
         // Tilde should be expanded
         if let Some(home) = dirs::home_dir() {
-            assert_eq!(config.project_sources[1].path, home.join("logs/web.log"));
+            assert_eq!(
+                config.project_sources[1].path,
+                Some(home.join("logs/web.log"))
+            );
         }
         assert!(config.global_sources.is_empty());
     }
@@ -416,6 +436,152 @@ sources:
             }
             _ => panic!("Expected Io error"),
         }
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_config_with_renderers() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+name: "Renderer Test"
+renderers:
+  - name: json-structured
+    detect:
+      parser: json
+    layout:
+      - field: level
+        style: severity
+        width: 5
+      - literal: " "
+      - field: message
+sources: []
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let config = load(&discovery).unwrap();
+
+        assert_eq!(config.renderers.len(), 1);
+        assert_eq!(config.renderers[0].name, "json-structured");
+        assert_eq!(config.renderers[0].layout.len(), 3);
+        assert_eq!(
+            config.renderers[0].detect.as_ref().unwrap().parser,
+            Some("json".to_string())
+        );
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_source_optional_path() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+sources:
+  - name: metadata-only
+    renderers:
+      - json-structured
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let config = load(&discovery).unwrap();
+
+        assert_eq!(config.project_sources.len(), 1);
+        assert_eq!(config.project_sources[0].name, "metadata-only");
+        assert!(config.project_sources[0].path.is_none());
+        assert!(!config.project_sources[0].exists);
+        assert_eq!(
+            config.project_sources[0].renderer_names,
+            vec!["json-structured"]
+        );
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_source_with_renderers() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+sources:
+  - name: api
+    path: /var/log/api.log
+    renderers:
+      - json-structured
+      - logfmt
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let config = load(&discovery).unwrap();
+
+        assert_eq!(config.project_sources.len(), 1);
+        assert_eq!(config.project_sources[0].name, "api");
+        assert!(config.project_sources[0].path.is_some());
+        assert_eq!(
+            config.project_sources[0].renderer_names,
+            vec!["json-structured", "logfmt"]
+        );
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_unknown_renderer_field_error() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+renderers:
+  - name: bad
+    layyout:
+      - field: level
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let result = load(&discovery);
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        let display = error.to_string();
+
+        // Should mention the unknown field
+        assert!(display.contains("layyout"));
     }
 
     #[test]

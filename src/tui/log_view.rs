@@ -1,6 +1,8 @@
 use crate::app::{App, FilterState, InputMode, TabState, ViewMode};
 use crate::index::flags::Severity;
 use crate::reader::combined_reader::CombinedReader;
+use crate::renderer::segment::{to_ratatui_style, StyledSegment};
+use crate::theme::UiColors;
 use anyhow::Result;
 use ratatui::{
     layout::Rect,
@@ -12,34 +14,29 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 // Line rendering constants
-const SELECTED_BG: Color = Color::DarkGray;
-const EXPANDED_BG: Color = Color::Rgb(30, 30, 40);
-const SEVERITY_WARN_BG: Color = Color::Rgb(50, 40, 0);
-const SEVERITY_ERROR_BG: Color = Color::Rgb(55, 10, 10);
-const SEVERITY_FATAL_BG: Color = Color::Rgb(75, 0, 15);
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 /// Extra prefix width for combined view: "[tag] " before the line number
 const MAX_SOURCE_TAG_WIDTH: usize = 8; // e.g. "[api-sv] "
 const TAB_SIZE: usize = 4;
 
 /// Map severity to a subtle background color for line highlighting.
-fn severity_bg(severity: Severity) -> Option<Color> {
+fn severity_bg(severity: Severity, ui: &UiColors) -> Option<Color> {
     match severity {
-        Severity::Warn => Some(SEVERITY_WARN_BG),
-        Severity::Error => Some(SEVERITY_ERROR_BG),
-        Severity::Fatal => Some(SEVERITY_FATAL_BG),
+        Severity::Warn => Some(ui.severity_warn_bg),
+        Severity::Error => Some(ui.severity_error_bg),
+        Severity::Fatal => Some(ui.severity_fatal_bg),
         _ => None,
     }
 }
 
 /// Apply selection styling to a span (dark bg, bold, adjust dark foreground colors)
-fn apply_selection_style(style: Style) -> Style {
-    // Adjust foreground if it's too dark to see against DarkGray background
+fn apply_selection_style(style: Style, ui: &UiColors) -> Style {
+    // Adjust foreground if it's too dark to see against selection background
     let adjusted = match style.fg {
-        Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => style.fg(Color::White),
+        Some(Color::Gray) | Some(Color::DarkGray) | Some(Color::Black) => style.fg(ui.selection_fg),
         _ => style,
     };
-    adjusted.bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+    adjusted.bg(ui.selection_bg).add_modifier(Modifier::BOLD)
 }
 
 /// Expand tabs to spaces for proper rendering
@@ -69,7 +66,17 @@ fn expand_tabs(line: &str) -> String {
 }
 
 pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
-    let tab = app.active_tab_mut();
+    // Clone preset_registry before mutable borrow of app
+    let preset_registry = app.preset_registry.clone();
+
+    let ui = &app.theme.ui;
+    let tab = if let Some(cat) = app.active_combined {
+        app.combined_tabs[cat as usize]
+            .as_mut()
+            .expect("active_combined set but no combined tab for category")
+    } else {
+        &mut app.tabs[app.active_tab]
+    };
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
     // During filtering, preserve anchor so selection doesn't jump when partial results arrive
@@ -95,6 +102,14 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         LINE_PREFIX_WIDTH
     };
     let content_width = available_width.saturating_sub(prefix_width);
+
+    // Preset rendering setup
+    let tab_renderer_names = tab.source.renderer_names.clone();
+    let tab_filename = tab
+        .source
+        .source_path
+        .as_ref()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
     // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.source.reader.lock().unwrap();
@@ -158,7 +173,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let (source_tag, severity) = if is_combined {
                 let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
                 let tag = combined.and_then(|c| {
-                    c.source_info(line_number)
+                    c.source_info(line_number, &ui.source_colors)
                         .map(|(name, color)| (name.to_string(), color))
                 });
                 let sev = combined
@@ -179,7 +194,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             if let Some(wrapped_lines) = wrapped {
                 let mut item_lines: Vec<Line<'static>> = Vec::new();
 
-                let severity_color = severity_bg(severity);
+                let severity_color = severity_bg(severity, ui);
 
                 for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
                     if wrap_idx == 0 {
@@ -209,7 +224,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     // Apply styling based on selection/expansion state
                     if is_selected {
                         for span in &mut wrapped_line.spans {
-                            span.style = apply_selection_style(span.style);
+                            span.style = apply_selection_style(span.style, ui);
                         }
                     } else {
                         // Expanded but not selected: subtle dark background for content spans
@@ -224,25 +239,25 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                             1
                         };
                         for span in wrapped_line.spans.iter_mut().skip(skip) {
-                            span.style = span.style.bg(EXPANDED_BG);
+                            span.style = span.style.bg(ui.expanded_bg);
                         }
                         // Separator gets expanded bg on first line
                         if wrap_idx == 0 {
                             let sep_idx = if source_tag.is_some() { 2 } else { 1 };
                             if let Some(sep_span) = wrapped_line.spans.get_mut(sep_idx) {
-                                sep_span.style = sep_span.style.bg(EXPANDED_BG);
+                                sep_span.style = sep_span.style.bg(ui.expanded_bg);
                             }
                             // Number part gets expanded bg only if no severity color
                             let num_idx = if source_tag.is_some() { 1 } else { 0 };
                             if severity_color.is_none() {
                                 if let Some(num_span) = wrapped_line.spans.get_mut(num_idx) {
-                                    num_span.style = num_span.style.bg(EXPANDED_BG);
+                                    num_span.style = num_span.style.bg(ui.expanded_bg);
                                 }
                             }
                         } else {
                             // Continuation indent gets expanded bg
                             if let Some(indent_span) = wrapped_line.spans.first_mut() {
-                                indent_span.style = indent_span.style.bg(EXPANDED_BG);
+                                indent_span.style = indent_span.style.bg(ui.expanded_bg);
                             }
                         }
                     }
@@ -253,8 +268,28 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 items.push(ListItem::new(item_lines));
             } else {
                 // Not expanded: single line (truncated if too long)
-                let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
-                    .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+
+                // Try preset rendering first
+                let line_flags: Option<u32> = if is_combined {
+                    None // Combined view doesn't have per-line flags yet
+                } else {
+                    index_reader.and_then(|ir| ir.flags(line_number))
+                };
+
+                let renderer_names = if is_combined {
+                    let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
+                    combined
+                        .map(|c| c.renderer_names(line_number))
+                        .unwrap_or(&[])
+                } else {
+                    &tab_renderer_names
+                };
+
+                let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty() {
+                    preset_registry.render_line(&raw_line, renderer_names, line_flags)
+                } else {
+                    preset_registry.render_line_auto(&raw_line, tab_filename.as_deref(), line_flags)
+                };
 
                 let mut final_line = Line::default();
 
@@ -269,20 +304,32 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 final_line.spans.push(Span::raw(line_num_part.clone()));
                 final_line.spans.push(Span::raw(line_sep_part));
 
-                if let Some(first_line) = parsed_text.lines.first() {
-                    for span in &first_line.spans {
+                if let Some(segments) = preset_segments {
+                    // Use preset-rendered spans
+                    for seg in &segments {
                         final_line
                             .spans
-                            .push(Span::styled(span.content.to_string(), span.style));
+                            .push(Span::styled(seg.text.clone(), to_ratatui_style(&seg.style)));
+                    }
+                } else {
+                    // Fallback to ANSI parsing
+                    let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+                        .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+                    if let Some(first_line) = parsed_text.lines.first() {
+                        for span in &first_line.spans {
+                            final_line
+                                .spans
+                                .push(Span::styled(span.content.to_string(), span.style));
+                        }
                     }
                 }
 
                 // Apply line styling: selection takes priority, then severity on number only
                 if is_selected {
                     for span in &mut final_line.spans {
-                        span.style = apply_selection_style(span.style);
+                        span.style = apply_selection_style(span.style, ui);
                     }
-                } else if let Some(bg) = severity_bg(severity) {
+                } else if let Some(bg) = severity_bg(severity, ui) {
                     // Color only the line number background, not the separator or content
                     let num_idx = if source_tag.is_some() { 1 } else { 0 };
                     if let Some(num_span) = final_line.spans.get_mut(num_idx) {
@@ -302,7 +349,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     let title = build_title(tab);
     let is_log_focused = app.input_mode != InputMode::SourcePanel;
     let border_style = if is_log_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(ui.primary)
     } else {
         Style::default()
     };

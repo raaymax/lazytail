@@ -12,6 +12,7 @@ pub struct SourceEntry {
     pub index_reader: Option<IndexReader>,
     pub source_path: Option<PathBuf>,
     pub total_lines: usize,
+    pub renderer_names: Vec<String>,
 }
 
 /// A merged line reference: which source, which line in that source.
@@ -21,18 +22,6 @@ pub struct MergedLine {
     pub file_line: usize,
     pub timestamp: u64,
 }
-
-/// Color palette index for source tagging in the UI.
-const SOURCE_COLORS: [ratatui::style::Color; 8] = [
-    ratatui::style::Color::Cyan,
-    ratatui::style::Color::Green,
-    ratatui::style::Color::Yellow,
-    ratatui::style::Color::Magenta,
-    ratatui::style::Color::Blue,
-    ratatui::style::Color::Red,
-    ratatui::style::Color::LightCyan,
-    ratatui::style::Color::LightGreen,
-];
 
 /// A reader that merges lines from multiple sources in chronological order.
 ///
@@ -88,11 +77,23 @@ impl CombinedReader {
     }
 
     /// Get source info for a virtual line index (for rendering source prefix).
-    pub fn source_info(&self, virtual_idx: usize) -> Option<(&str, ratatui::style::Color)> {
+    pub fn source_info(
+        &self,
+        virtual_idx: usize,
+        source_colors: &[ratatui::style::Color],
+    ) -> Option<(&str, ratatui::style::Color)> {
         let m = self.merged.get(virtual_idx)?;
         let name = &self.sources[m.source_id].name;
-        let color = SOURCE_COLORS[m.source_id % SOURCE_COLORS.len()];
+        let color = source_colors[m.source_id % source_colors.len()];
         Some((name, color))
+    }
+
+    /// Get the renderer_names for the source that owns a given virtual line.
+    pub fn renderer_names(&self, virtual_idx: usize) -> &[String] {
+        let Some(m) = self.merged.get(virtual_idx) else {
+            return &[];
+        };
+        &self.sources[m.source_id].renderer_names
     }
 
     /// Get severity for a virtual line from the originating source's IndexReader.
@@ -161,6 +162,7 @@ mod tests {
             index_reader: None,
             source_path: None,
             total_lines,
+            renderer_names: Vec::new(),
         }
     }
 
@@ -191,17 +193,20 @@ mod tests {
 
     #[test]
     fn test_combined_reader_source_info() {
+        let colors = [ratatui::style::Color::Cyan, ratatui::style::Color::Green];
         let sources = vec![
             make_source("api", vec!["line1"]),
             make_source("web", vec!["line2"]),
         ];
         let reader = CombinedReader::new(sources);
 
-        let (name, _color) = reader.source_info(0).unwrap();
+        let (name, color) = reader.source_info(0, &colors).unwrap();
         assert_eq!(name, "api");
-        let (name, _color) = reader.source_info(1).unwrap();
+        assert_eq!(color, ratatui::style::Color::Cyan);
+        let (name, color) = reader.source_info(1, &colors).unwrap();
         assert_eq!(name, "web");
-        assert!(reader.source_info(2).is_none());
+        assert_eq!(color, ratatui::style::Color::Green);
+        assert!(reader.source_info(2, &colors).is_none());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use crate::app::App;
 use crate::source::SourceStatus;
+use crate::theme::UiColors;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
@@ -12,7 +13,7 @@ use ratatui::{
 const HELP_POPUP_WIDTH_PERCENT: f32 = 0.6;
 const HELP_POPUP_HEIGHT_PERCENT: f32 = 0.8;
 
-pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usize) {
+pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usize, ui: &UiColors) {
     // Calculate centered popup area
     let popup_width = (area.width as f32 * HELP_POPUP_WIDTH_PERCENT) as u16;
     let popup_height = (area.height as f32 * HELP_POPUP_HEIGHT_PERCENT) as u16;
@@ -30,16 +31,12 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
     let help_lines = vec![
         Line::from(vec![Span::styled(
             "LazyTail - Quick Reference",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.primary).add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Navigation",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  j/k, ↑/↓      Move selection up/down"),
         Line::from("  g / G         Jump to start / end"),
@@ -50,9 +47,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "Filtering",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  /             Start filter (live preview)"),
         Line::from("  Tab           Cycle Plain → Regex → Query"),
@@ -64,18 +59,14 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "Tabs",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  1-9           Jump to tab"),
         Line::from("  x, Ctrl+W     Close tab"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Source Panel",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  Tab           Toggle panel focus"),
         Line::from("  j/k, ↑/↓      Navigate tree"),
@@ -87,9 +78,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "View",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  Space         Expand/collapse line"),
         Line::from("  c             Collapse all"),
@@ -98,9 +87,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "Mouse",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from("  Click source     Switch to tab"),
         Line::from("  Click log line   Select line"),
@@ -109,27 +96,25 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "Side Panel Indicators",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD),
         )]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("F", Style::default().fg(Color::Green)),
+            Span::styled("F", Style::default().fg(ui.positive)),
             Span::raw("  Follow mode    "),
-            Span::styled("*", Style::default().fg(Color::Cyan)),
+            Span::styled("*", Style::default().fg(ui.accent)),
             Span::raw("  Filter active"),
         ]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("●", Style::default().fg(Color::Green)),
+            Span::styled("●", Style::default().fg(ui.positive)),
             Span::raw("  Source active  "),
-            Span::styled("○", Style::default().fg(Color::DarkGray)),
+            Span::styled("○", Style::default().fg(ui.muted)),
             Span::raw("  Source ended"),
         ]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("⟳", Style::default().fg(Color::Magenta)),
+            Span::styled("⟳", Style::default().fg(ui.highlight)),
             Span::raw("  Loading"),
         ]),
         Line::from(""),
@@ -137,9 +122,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from(""),
         Line::from(vec![Span::styled(
             "j/k to scroll, any other key to close",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(ui.muted).add_modifier(Modifier::ITALIC),
         )]),
     ];
 
@@ -166,9 +149,9 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
             Block::default()
                 .borders(Borders::ALL)
                 .title(title)
-                .style(Style::default().bg(Color::Black)),
+                .style(Style::default().bg(ui.popup_bg)),
         )
-        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .style(Style::default().bg(ui.popup_bg).fg(ui.fg))
         .scroll((scroll as u16, 0));
 
     // Clear the area first to remove background content
@@ -177,6 +160,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
 }
 
 pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
+    let ui = &app.theme.ui;
     let tab_index = match &app.pending_close_tab {
         Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].source.name == *name => *idx,
         _ => return,
@@ -204,9 +188,7 @@ pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) 
             Span::raw("  Close "),
             Span::styled(
                 &display_name,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(ui.primary).add_modifier(Modifier::BOLD),
             ),
             Span::raw("?"),
         ]),
@@ -216,12 +198,12 @@ pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) 
     if will_delete {
         lines.push(Line::from(vec![Span::styled(
             "  Source file will be deleted",
-            Style::default().fg(Color::Red),
+            Style::default().fg(ui.negative),
         )]));
     } else if is_last {
         lines.push(Line::from(vec![Span::styled(
             "  This will quit the application",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ui.muted),
         )]));
     } else {
         lines.push(Line::from(""));
@@ -229,9 +211,9 @@ pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) 
 
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled("y/Enter", Style::default().fg(Color::Green)),
+        Span::styled("y/Enter", Style::default().fg(ui.positive)),
         Span::raw(" confirm  "),
-        Span::styled("n/Esc", Style::default().fg(Color::Red)),
+        Span::styled("n/Esc", Style::default().fg(ui.negative)),
         Span::raw(" cancel"),
     ]));
 
@@ -252,9 +234,9 @@ pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) 
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Close Source ")
-                .style(Style::default().bg(Color::Black)),
+                .style(Style::default().bg(ui.popup_bg)),
         )
-        .style(Style::default().bg(Color::Black).fg(Color::White));
+        .style(Style::default().bg(ui.popup_bg).fg(ui.fg));
 
     f.render_widget(Clear, popup_area);
     f.render_widget(paragraph, popup_area);
