@@ -225,6 +225,9 @@ pub struct App {
 
     /// Cached layout areas from the most recent render pass
     pub layout: LayoutAreas,
+
+    /// Color theme for UI rendering
+    pub theme: crate::theme::Theme,
 }
 
 impl App {
@@ -270,6 +273,7 @@ impl App {
             first_render_elapsed: None,
             verbose: false,
             layout: LayoutAreas::default(),
+            theme: crate::theme::Theme::dark(),
         }
     }
 

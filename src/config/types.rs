@@ -20,6 +20,9 @@ pub struct RawConfig {
     /// Whether to check for updates on TUI startup (default: true).
     #[serde(default)]
     pub update_check: Option<bool>,
+    /// Theme configuration (name or custom struct).
+    #[serde(default)]
+    pub theme: Option<crate::theme::RawThemeConfig>,
 }
 
 /// Raw source from config file.
@@ -62,6 +65,8 @@ pub struct Config {
     pub global_sources: Vec<Source>,
     /// Whether to check for updates on TUI startup (from global config).
     pub update_check: Option<bool>,
+    /// Resolved theme.
+    pub theme: crate::theme::Theme,
 }
 
 impl Config {
