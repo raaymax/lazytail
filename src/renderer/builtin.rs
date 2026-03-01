@@ -1,156 +1,55 @@
-use super::detect::CompiledDetect;
-use super::preset::{CompiledLayoutEntry, CompiledPreset, PresetParser, RestFormat, StyleFn};
-use super::segment::SegmentStyle;
-use std::collections::HashSet;
+use super::preset::CompiledPreset;
+
+const BUILTIN_JSON: &str = r#"
+name: json
+detect:
+  parser: json
+layout:
+  - field: timestamp
+    style: dim
+  - literal: " "
+  - field: level
+    style: severity
+    width: 5
+  - literal: " | "
+    style: dim
+  - field: message
+  - field: msg
+  - literal: " "
+  - field: _rest
+    style: dim
+"#;
+
+const BUILTIN_LOGFMT: &str = r#"
+name: logfmt
+detect:
+  parser: logfmt
+layout:
+  - field: ts
+    style: dim
+  - literal: " "
+  - field: level
+    style: severity
+    width: 5
+  - literal: " "
+  - field: msg
+  - literal: " "
+  - field: _rest
+    style: dim
+"#;
+
+fn compile_builtin(yaml: &str) -> CompiledPreset {
+    let raw: super::preset::RawPreset =
+        serde_saphyr::from_str(yaml).expect("builtin preset YAML is malformed");
+    super::preset::compile(raw).expect("builtin preset failed to compile")
+}
 
 /// Returns the two built-in presets: `json` and `logfmt`.
 pub fn builtin_presets() -> Vec<CompiledPreset> {
-    vec![builtin_json(), builtin_logfmt()]
-}
-
-fn builtin_json() -> CompiledPreset {
-    let consumed_fields: HashSet<String> = ["timestamp", "level", "message", "msg"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    CompiledPreset {
-        name: "json".to_string(),
-        parser: PresetParser::Json,
-        detect: Some(CompiledDetect {
-            filename_pattern: None,
-            parser: Some(PresetParser::Json),
-        }),
-        regex: None,
-        layout: vec![
-            CompiledLayoutEntry::Field {
-                name: "timestamp".to_string(),
-                style_fn: StyleFn::Static(SegmentStyle::Dim),
-                width: None,
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " ".to_string(),
-                style: SegmentStyle::Default,
-            },
-            CompiledLayoutEntry::Field {
-                name: "level".to_string(),
-                style_fn: StyleFn::Severity,
-                width: Some(5),
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " | ".to_string(),
-                style: SegmentStyle::Dim,
-            },
-            CompiledLayoutEntry::Field {
-                name: "message".to_string(),
-                style_fn: StyleFn::None,
-                width: None,
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Field {
-                name: "msg".to_string(),
-                style_fn: StyleFn::None,
-                width: None,
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " ".to_string(),
-                style: SegmentStyle::Default,
-            },
-            CompiledLayoutEntry::Field {
-                name: "_rest".to_string(),
-                style_fn: StyleFn::Static(SegmentStyle::Dim),
-                width: None,
-                max_width: None,
-                is_rest: true,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-        ],
-        consumed_fields,
-    }
-}
-
-fn builtin_logfmt() -> CompiledPreset {
-    let consumed_fields: HashSet<String> = ["ts", "level", "msg"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    CompiledPreset {
-        name: "logfmt".to_string(),
-        parser: PresetParser::Logfmt,
-        detect: Some(CompiledDetect {
-            filename_pattern: None,
-            parser: Some(PresetParser::Logfmt),
-        }),
-        regex: None,
-        layout: vec![
-            CompiledLayoutEntry::Field {
-                name: "ts".to_string(),
-                style_fn: StyleFn::Static(SegmentStyle::Dim),
-                width: None,
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " ".to_string(),
-                style: SegmentStyle::Default,
-            },
-            CompiledLayoutEntry::Field {
-                name: "level".to_string(),
-                style_fn: StyleFn::Severity,
-                width: Some(5),
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " ".to_string(),
-                style: SegmentStyle::Default,
-            },
-            CompiledLayoutEntry::Field {
-                name: "msg".to_string(),
-                style_fn: StyleFn::None,
-                width: None,
-                max_width: None,
-                is_rest: false,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-            CompiledLayoutEntry::Literal {
-                text: " ".to_string(),
-                style: SegmentStyle::Default,
-            },
-            CompiledLayoutEntry::Field {
-                name: "_rest".to_string(),
-                style_fn: StyleFn::Static(SegmentStyle::Dim),
-                width: None,
-                max_width: None,
-                is_rest: true,
-                rest_format: RestFormat::KeyValue,
-                field_format: None,
-            },
-        ],
-        consumed_fields,
-    }
+    vec![
+        compile_builtin(BUILTIN_JSON),
+        compile_builtin(BUILTIN_LOGFMT),
+    ]
 }
 
 #[cfg(test)]
