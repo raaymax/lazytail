@@ -20,12 +20,15 @@ use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filt
 use crate::index::flags::Severity;
 use crate::index::reader::IndexReader;
 use crate::reader::{file_reader::FileReader, LogReader};
+use crate::renderer::segment::segments_to_plain_text;
+use crate::renderer::PresetRegistry;
 use crate::source;
 use memchr::memchr_iter;
 use memmap2::Mmap;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_box, ServerHandler};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::Receiver;
@@ -134,6 +137,11 @@ fn truncate_lines_response(resp: &mut GetLinesResponse) {
         if line.content.len() > MAX_LINE_LEN {
             line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
         }
+        if let Some(ref rendered) = line.rendered {
+            if rendered.len() > MAX_LINE_LEN {
+                line.rendered = Some(truncate_line(rendered, MAX_LINE_LEN).into_owned());
+            }
+        }
     }
 }
 
@@ -158,19 +166,22 @@ fn truncate_search_response(resp: &mut SearchResponse) {
 
 /// Truncate all content in a GetContextResponse.
 fn truncate_context_response(resp: &mut GetContextResponse) {
+    fn truncate_line_info(line: &mut LineInfo) {
+        if line.content.len() > MAX_LINE_LEN {
+            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
+        }
+        if let Some(ref rendered) = line.rendered {
+            if rendered.len() > MAX_LINE_LEN {
+                line.rendered = Some(truncate_line(rendered, MAX_LINE_LEN).into_owned());
+            }
+        }
+    }
     for line in &mut resp.before_lines {
-        if line.content.len() > MAX_LINE_LEN {
-            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
-        }
+        truncate_line_info(line);
     }
-    if resp.target_line.content.len() > MAX_LINE_LEN {
-        resp.target_line.content =
-            truncate_line(&resp.target_line.content, MAX_LINE_LEN).into_owned();
-    }
+    truncate_line_info(&mut resp.target_line);
     for line in &mut resp.after_lines {
-        if line.content.len() > MAX_LINE_LEN {
-            line.content = truncate_line(&line.content, MAX_LINE_LEN).into_owned();
-        }
+        truncate_line_info(line);
     }
 }
 
@@ -210,17 +221,65 @@ fn format_stats(resp: &GetStatsResponse, output: OutputFormat) -> String {
     }
 }
 
+/// Rendering context passed to _impl methods for preset rendering.
+struct RenderContext<'a> {
+    registry: &'a PresetRegistry,
+    renderer_names: &'a [String],
+}
+
+/// Attempt preset rendering on a LineInfo, setting `rendered` if a preset matches.
+/// Must be called before ANSI stripping since the raw content is needed for field parsing.
+fn render_line_info(
+    line_info: &mut LineInfo,
+    raw_content: &str,
+    flags: Option<u32>,
+    ctx: &RenderContext<'_>,
+) {
+    if ctx.renderer_names.is_empty() {
+        return;
+    }
+    if let Some(segments) = ctx
+        .registry
+        .render_line(raw_content, ctx.renderer_names, flags)
+    {
+        line_info.rendered = Some(segments_to_plain_text(&segments));
+    }
+}
+
 /// LazyTail MCP server providing log file analysis tools.
 #[derive(Clone)]
 pub struct LazyTailMcp {
     /// Config discovery result for project-aware source resolution.
     discovery: DiscoveryResult,
+    /// Compiled rendering presets.
+    preset_registry: Arc<PresetRegistry>,
+    /// Source name → renderer preset names mapping.
+    source_renderer_map: HashMap<String, Vec<String>>,
 }
 
 impl LazyTailMcp {
     pub fn new() -> Self {
+        let discovery = config::discover();
+        let (registry, source_renderer_map) = match config::load(&discovery) {
+            Ok(cfg) => {
+                // Compilation errors are intentionally discarded — the MCP server has no
+                // stderr channel. Invalid renderers are simply omitted from the registry.
+                let (registry, _errors) = PresetRegistry::compile_from_config(&cfg.renderers);
+                let map: HashMap<String, Vec<String>> = cfg
+                    .project_sources
+                    .iter()
+                    .chain(cfg.global_sources.iter())
+                    .filter(|s| !s.renderer_names.is_empty())
+                    .map(|s| (s.name.clone(), s.renderer_names.clone()))
+                    .collect();
+                (registry, map)
+            }
+            Err(_) => (PresetRegistry::new(Vec::new()), HashMap::new()),
+        };
         Self {
-            discovery: config::discover(),
+            discovery,
+            preset_registry: Arc::new(registry),
+            source_renderer_map,
         }
     }
 }
@@ -235,7 +294,17 @@ impl Default for LazyTailMcp {
 /// These are called by the thin `#[tool]` wrappers after source name resolution,
 /// and are also used directly by tests (which work with temp files, not real sources).
 impl LazyTailMcp {
+    /// Resolve renderer names for a source by matching the file stem against the source_renderer_map.
+    fn renderer_names_for_path(&self, path: &Path) -> Vec<String> {
+        let source_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        self.source_renderer_map
+            .get(source_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub(crate) fn get_lines_impl(
+        &self,
         path: &Path,
         start: usize,
         count: usize,
@@ -252,19 +321,29 @@ impl LazyTailMcp {
         };
 
         let index_reader = IndexReader::open(path);
+        let renderer_names = self.renderer_names_for_path(path);
+        let ctx = RenderContext {
+            registry: &self.preset_registry,
+            renderer_names: &renderer_names,
+        };
 
         let total = reader.total_lines();
         let mut lines = Vec::new();
         for i in start..(start + count).min(total) {
             if let Ok(Some(content)) = reader.get_line(i) {
-                lines.push(LineInfo {
+                let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let mut info = LineInfo {
                     line_number: i,
                     content,
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
                         .and_then(severity_string),
-                });
+                    rendered: None,
+                };
+                let raw_content = info.content.clone();
+                render_line_info(&mut info, &raw_content, flags, &ctx);
+                lines.push(info);
             }
         }
 
@@ -283,6 +362,7 @@ impl LazyTailMcp {
     }
 
     pub(crate) fn get_tail_impl(
+        &self,
         path: &Path,
         count: usize,
         since_line: Option<usize>,
@@ -299,6 +379,11 @@ impl LazyTailMcp {
         };
 
         let index_reader = IndexReader::open(path);
+        let renderer_names = self.renderer_names_for_path(path);
+        let ctx = RenderContext {
+            registry: &self.preset_registry,
+            renderer_names: &renderer_names,
+        };
 
         let total = reader.total_lines();
 
@@ -315,14 +400,19 @@ impl LazyTailMcp {
         let mut lines = Vec::new();
         for i in start..end {
             if let Ok(Some(content)) = reader.get_line(i) {
-                lines.push(LineInfo {
+                let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let mut info = LineInfo {
                     line_number: i,
                     content,
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
                         .and_then(severity_string),
-                });
+                    rendered: None,
+                };
+                let raw_content = info.content.clone();
+                render_line_info(&mut info, &raw_content, flags, &ctx);
+                lines.push(info);
             }
         }
 
@@ -672,6 +762,7 @@ impl LazyTailMcp {
     }
 
     pub(crate) fn get_context_impl(
+        &self,
         path: &Path,
         line_number: usize,
         before: usize,
@@ -690,6 +781,11 @@ impl LazyTailMcp {
         };
 
         let index_reader = IndexReader::open(path);
+        let renderer_names = self.renderer_names_for_path(path);
+        let ctx = RenderContext {
+            registry: &self.preset_registry,
+            renderer_names: &renderer_names,
+        };
 
         let total = reader.total_lines();
 
@@ -705,14 +801,19 @@ impl LazyTailMcp {
         let mut before_lines = Vec::new();
         for i in start_before..line_number {
             if let Ok(Some(content)) = reader.get_line(i) {
-                before_lines.push(LineInfo {
+                let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let mut info = LineInfo {
                     line_number: i,
                     content,
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
                         .and_then(severity_string),
-                });
+                    rendered: None,
+                };
+                let raw_content = info.content.clone();
+                render_line_info(&mut info, &raw_content, flags, &ctx);
+                before_lines.push(info);
             }
         }
 
@@ -721,28 +822,37 @@ impl LazyTailMcp {
             Ok(Some(c)) => c,
             _ => return error_response("Failed to read target line"),
         };
-        let target_line = LineInfo {
+        let target_flags = index_reader.as_ref().and_then(|ir| ir.flags(line_number));
+        let mut target_line = LineInfo {
             line_number,
             content: target_content,
             severity: index_reader
                 .as_ref()
                 .map(|ir| ir.severity(line_number))
                 .and_then(severity_string),
+            rendered: None,
         };
+        let raw_target = target_line.content.clone();
+        render_line_info(&mut target_line, &raw_target, target_flags, &ctx);
 
         // Get after lines
         let end_after = (line_number + 1 + after_count).min(total);
         let mut after_lines = Vec::new();
         for i in (line_number + 1)..end_after {
             if let Ok(Some(content)) = reader.get_line(i) {
-                after_lines.push(LineInfo {
+                let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let mut info = LineInfo {
                     line_number: i,
                     content,
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
                         .and_then(severity_string),
-                });
+                    rendered: None,
+                };
+                let raw_content = info.content.clone();
+                render_line_info(&mut info, &raw_content, flags, &ctx);
+                after_lines.push(info);
             }
         }
 
@@ -773,7 +883,7 @@ impl LazyTailMcp {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        Self::get_lines_impl(&path, req.start, req.count, req.raw, req.output)
+        self.get_lines_impl(&path, req.start, req.count, req.raw, req.output)
     }
 
     /// Fetch the last N lines from a lazytail source.
@@ -785,7 +895,7 @@ impl LazyTailMcp {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        Self::get_tail_impl(&path, req.count, req.since_line, req.raw, req.output)
+        self.get_tail_impl(&path, req.count, req.since_line, req.raw, req.output)
     }
 
     /// Search for patterns in a lazytail source using plain text, regex, or structured query.
@@ -829,7 +939,7 @@ impl LazyTailMcp {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        Self::get_context_impl(
+        self.get_context_impl(
             &path,
             req.line_number,
             req.before,
@@ -871,12 +981,19 @@ impl LazyTailMcp {
                 .map(|m| m.len())
                 .unwrap_or(0);
 
+            let renderer_names = self
+                .source_renderer_map
+                .get(&ds.name)
+                .cloned()
+                .unwrap_or_default();
+
             sources.push(SourceInfo {
                 name: ds.name,
                 path: ds.log_path,
                 status,
                 size_bytes,
                 location,
+                renderer_names,
             });
         }
 
@@ -950,6 +1067,15 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    /// Create a test MCP instance with empty registry (no renderers).
+    fn test_mcp() -> LazyTailMcp {
+        LazyTailMcp {
+            discovery: config::discover(),
+            preset_registry: Arc::new(PresetRegistry::new(Vec::new())),
+            source_renderer_map: HashMap::new(),
+        }
+    }
+
     /// Lines with ANSI escape codes for testing.
     const ANSI_LINES: &str = "\
 \x1b[1;32m[INFO]\x1b[0m Server started\n\
@@ -970,7 +1096,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "[INFO] Server started");
         assert_eq!(resp.lines[1].content, "[ERROR] Connection failed");
@@ -981,7 +1107,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b[1;32m"));
         assert!(resp.lines[1].content.contains("\x1b[1;31m"));
@@ -992,7 +1118,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_tail_impl(f.path(), 2, None, false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines.len(), 2);
         assert_eq!(resp.lines[0].content, "plain line with no escapes");
@@ -1002,7 +1128,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_tail_impl(f.path(), 5, None, true, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 5, None, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b["));
     }
@@ -1015,7 +1141,7 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_tail_impl(f.path(), 100, Some(2), false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 100, Some(2), false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines.len(), 2);
@@ -1035,7 +1161,7 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_tail_impl(f.path(), 2, Some(5), false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 2, Some(5), false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines.len(), 2);
@@ -1054,7 +1180,7 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_tail_impl(f.path(), 100, Some(4), false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 100, Some(4), false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert!(resp.lines.is_empty());
@@ -1070,8 +1196,7 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result =
-            LazyTailMcp::get_tail_impl(f.path(), 100, Some(100), false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 100, Some(100), false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert!(resp.lines.is_empty());
@@ -1127,7 +1252,7 @@ plain line with no escapes\n\
     #[test]
     fn get_context_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_context_impl(f.path(), 2, 1, 1, false, OutputFormat::Json);
+        let result = test_mcp().get_context_impl(f.path(), 2, 1, 1, false, OutputFormat::Json);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.target_line.content, "[DEBUG] Processing request");
         assert_eq!(resp.before_lines[0].content, "[ERROR] Connection failed");
@@ -1137,7 +1262,7 @@ plain line with no escapes\n\
     #[test]
     fn get_context_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_context_impl(f.path(), 0, 0, 0, true, OutputFormat::Json);
+        let result = test_mcp().get_context_impl(f.path(), 0, 0, 0, true, OutputFormat::Json);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.target_line.content.contains("\x1b[1;32m"));
     }
@@ -1159,7 +1284,7 @@ plain line with no escapes\n\
         writeln!(f, "{line2_ansi}").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines[0].content, line0);
@@ -1200,12 +1325,12 @@ plain line with no escapes\n\
         f.flush().unwrap();
 
         // Raw mode should preserve ESC bytes
-        let raw_result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let raw_result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let raw_resp: GetLinesResponse = serde_json::from_str(&raw_result).unwrap();
         assert!(raw_resp.lines[0].content.contains('\x1b'));
 
         // Stripped mode (default)
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         // Line 0: ANSI stripped, nested JSON intact
@@ -1241,7 +1366,7 @@ plain line with no escapes\n\
         writeln!(f, "{}", ansi_wrap("33", line)).unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         // Raw should keep ANSI and JSON intact
         assert!(resp.lines[0].content.contains("\x1b[33m"));
@@ -1285,7 +1410,7 @@ plain line with no escapes\n\
         writeln!(f, "just plain text").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "no ansi here");
         assert_eq!(resp.lines[1].content, "just plain text");
@@ -1301,7 +1426,7 @@ plain line with no escapes\n\
         writeln!(f, "plain log line").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
@@ -1320,7 +1445,7 @@ plain line with no escapes\n\
         writeln!(f, "line 2").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_tail_impl(f.path(), 2, None, false, OutputFormat::Text);
+        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
         assert!(result.contains("[L1] line 1\n"));
@@ -1369,7 +1494,7 @@ plain line with no escapes\n\
         writeln!(f, "line 4").unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
+        let result = test_mcp().get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 5\n"));
         assert!(result.contains("  [L0] line 0\n"));
@@ -1382,7 +1507,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_text_format_strips_ansi() {
         let f = write_ansi_tempfile();
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
         assert!(result.starts_with("--- "));
         // ANSI should be stripped
         assert!(result.contains("[L0] [INFO] Server started\n"));
@@ -1428,8 +1553,7 @@ plain line with no escapes\n\
         // Verify the source field deserializes correctly
         assert_eq!(req.source, "myapp");
         // Use _impl to verify default output format is text
-        let result =
-            LazyTailMcp::get_lines_impl(f.path(), req.start, req.count, req.raw, req.output);
+        let result = test_mcp().get_lines_impl(f.path(), req.start, req.count, req.raw, req.output);
         // Default should be text format (starts with ---)
         assert!(result.starts_with("--- "));
     }
@@ -1788,7 +1912,7 @@ plain line with no escapes\n\
         writeln!(f, "{}", "x".repeat(1000)).unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "short");
         assert!(resp.lines[1].content.len() < 1000);
@@ -1829,10 +1953,169 @@ plain line with no escapes\n\
         writeln!(f, "{}", "c".repeat(1000)).unwrap();
         f.flush().unwrap();
 
-        let result = LazyTailMcp::get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json);
+        let result = test_mcp().get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.before_lines[0].content.contains("…[+"));
         assert!(resp.target_line.content.contains("…[+"));
         assert!(resp.after_lines[0].content.contains("…[+"));
+    }
+
+    // -- Rendering integration tests --
+
+    /// Create a test MCP with a JSON renderer that formats level + message,
+    /// with the given file stem mapped to the "json" renderer.
+    fn test_mcp_with_renderer_for(file_stem: &str) -> LazyTailMcp {
+        use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef, StyleValue};
+
+        let renderers = vec![RawRendererDef {
+            name: "json".to_string(),
+            detect: Some(RawDetectDef {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![
+                RawLayoutEntryDef {
+                    field: Some("level".to_string()),
+                    literal: None,
+                    style: Some(StyleValue::Single("severity".to_string())),
+                    width: Some(5),
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+                RawLayoutEntryDef {
+                    field: None,
+                    literal: Some(" ".to_string()),
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+                RawLayoutEntryDef {
+                    field: Some("message".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+            ],
+        }];
+
+        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers);
+        let mut source_renderer_map = HashMap::new();
+        source_renderer_map.insert(file_stem.to_string(), vec!["json".to_string()]);
+        LazyTailMcp {
+            discovery: config::discover(),
+            preset_registry: Arc::new(registry),
+            source_renderer_map,
+        }
+    }
+
+    fn write_json_tempfile() -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, r#"{{"level":"error","message":"something failed"}}"#).unwrap();
+        writeln!(f, r#"{{"level":"info","message":"server started"}}"#).unwrap();
+        writeln!(f, "plain text line").unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn file_stem(f: &NamedTempFile) -> String {
+        f.path().file_stem().unwrap().to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn get_lines_with_rendered() {
+        let f = write_json_tempfile();
+        let mcp = test_mcp_with_renderer_for(&file_stem(&f));
+        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+
+        // JSON lines get rendered field
+        assert!(resp.lines[0].rendered.is_some());
+        let rendered = resp.lines[0].rendered.as_ref().unwrap();
+        assert!(rendered.contains("error"));
+        assert!(rendered.contains("something failed"));
+
+        // Plain text line has no rendered field
+        assert!(resp.lines[2].rendered.is_none());
+    }
+
+    #[test]
+    fn get_lines_plain_text_no_rendered() {
+        // No renderer for plain text → rendered stays None
+        let mcp = test_mcp();
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "just a plain line").unwrap();
+        f.flush().unwrap();
+
+        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert!(resp.lines[0].rendered.is_none());
+    }
+
+    #[test]
+    fn get_tail_with_rendered() {
+        let f = write_json_tempfile();
+        let mcp = test_mcp_with_renderer_for(&file_stem(&f));
+        let result = mcp.get_tail_impl(f.path(), 10, None, false, OutputFormat::Json);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        // At least one JSON line should have rendered
+        assert!(resp.lines[0].rendered.is_some());
+    }
+
+    #[test]
+    fn get_context_with_rendered() {
+        let f = write_json_tempfile();
+        let mcp = test_mcp_with_renderer_for(&file_stem(&f));
+        let result = mcp.get_context_impl(f.path(), 0, 0, 1, false, OutputFormat::Json);
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        // Target line is JSON → rendered
+        assert!(resp.target_line.rendered.is_some());
+    }
+
+    #[test]
+    fn list_sources_renderer_names() {
+        use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef};
+
+        let renderers = vec![RawRendererDef {
+            name: "my-preset".to_string(),
+            detect: Some(RawDetectDef {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntryDef {
+                field: Some("msg".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        }];
+
+        let (registry, _) = crate::renderer::PresetRegistry::compile_from_config(&renderers);
+        let mut source_renderer_map = HashMap::new();
+        source_renderer_map.insert("test-source".to_string(), vec!["my-preset".to_string()]);
+
+        let mcp = LazyTailMcp {
+            discovery: config::discover(),
+            preset_registry: Arc::new(registry),
+            source_renderer_map,
+        };
+
+        // The renderer_names_for_path function should resolve names
+        let names = mcp.renderer_names_for_path(std::path::Path::new("/some/test-source.log"));
+        assert!(names.contains(&"my-preset".to_string()));
     }
 }

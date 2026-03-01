@@ -653,4 +653,65 @@ renderers:
         assert_eq!(map.get("warn"), Some(&"yellow".to_string()));
         assert_eq!(entry.max_width, Some(10));
     }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_config_with_style_when() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+renderers:
+  - name: custom
+    detect:
+      parser: json
+    layout:
+      - field: latency
+        style_when:
+          - op: gt
+            value: "1000"
+            style: red
+          - op: lt
+            value: "100"
+            style: green
+      - field: message
+        style_when:
+          - field: level
+            op: eq
+            value: error
+            style: red
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let config = load(&discovery).unwrap();
+
+        assert_eq!(config.renderers.len(), 1);
+        let renderer = &config.renderers[0];
+        assert_eq!(renderer.name, "custom");
+
+        // First entry has style_when with 2 conditions
+        let entry0 = &renderer.layout[0];
+        let conditions = entry0.style_when.as_ref().unwrap();
+        assert_eq!(conditions.len(), 2);
+        assert_eq!(conditions[0].op, "gt");
+        assert_eq!(conditions[0].value, "1000");
+        assert!(conditions[0].field.is_none());
+
+        // Second entry has cross-field style_when
+        let entry1 = &renderer.layout[1];
+        let conditions = entry1.style_when.as_ref().unwrap();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0].field.as_deref(), Some("level"));
+        assert_eq!(conditions[0].op, "eq");
+        assert_eq!(conditions[0].value, "error");
+    }
 }

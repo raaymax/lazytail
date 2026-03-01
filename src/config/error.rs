@@ -21,7 +21,11 @@ const LAYOUT_FIELDS: &[&str] = &[
     "format",
     "style_map",
     "max_width",
+    "style_when",
 ];
+
+/// Known fields for style condition entries.
+const STYLE_CONDITION_FIELDS: &[&str] = &["field", "op", "value", "style"];
 
 /// Known fields for renderer entries.
 const RENDERER_FIELDS: &[&str] = &["name", "detect", "regex", "layout"];
@@ -185,7 +189,8 @@ fn find_suggestion(unknown_field: &str) -> Option<String> {
         .chain(SOURCE_FIELDS.iter())
         .chain(LAYOUT_FIELDS.iter())
         .chain(RENDERER_FIELDS.iter())
-        .chain(DETECT_FIELDS.iter());
+        .chain(DETECT_FIELDS.iter())
+        .chain(STYLE_CONDITION_FIELDS.iter());
 
     let mut best_match: Option<(&str, f64)> = None;
 

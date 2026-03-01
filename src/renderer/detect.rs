@@ -153,6 +153,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();

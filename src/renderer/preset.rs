@@ -2,7 +2,8 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
-use super::field::{extract_fields, get_field, get_rest_fields};
+use super::field::{extract_fields, get_field, get_rest_fields, FieldSource};
+use super::format::FieldFormat;
 use super::segment::{
     resolve_severity_style, resolve_status_code_style, SegmentColor, SegmentStyle, StyledSegment,
 };
@@ -35,6 +36,16 @@ pub struct RawLayoutEntry {
     pub format: Option<String>,
     pub style_map: Option<HashMap<String, String>>,
     pub max_width: Option<usize>,
+    pub style_when: Option<Vec<RawStyleCondition>>,
+}
+
+/// A single conditional style rule (used by preset compilation).
+#[derive(Debug, Deserialize)]
+pub struct RawStyleCondition {
+    pub field: Option<String>,
+    pub op: String,
+    pub value: String,
+    pub style: StyleValue,
 }
 
 /// Parser type for a preset.
@@ -55,6 +66,7 @@ pub enum CompiledLayoutEntry {
         max_width: Option<usize>,
         is_rest: bool,
         rest_format: RestFormat,
+        field_format: Option<FieldFormat>,
     },
     Literal {
         text: String,
@@ -70,7 +82,44 @@ pub enum StyleFn {
     Severity,
     StatusCode,
     Map(HashMap<String, SegmentStyle>),
+    Conditional(Vec<CompiledCondition>),
 }
+
+/// Comparison operator for conditional styling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
+    Contains,
+    Regex,
+}
+
+/// A compiled conditional style rule.
+#[derive(Debug, Clone)]
+pub struct CompiledCondition {
+    pub field: Option<String>,
+    pub op: CompareOp,
+    pub value: String,
+    pub compiled_regex: Option<Regex>,
+    pub style: SegmentStyle,
+}
+
+/// `compiled_regex` is excluded — it's deterministically derived from `value`
+/// when `op == Regex`, so equal `(op, value)` implies equivalent regex behavior.
+impl PartialEq for CompiledCondition {
+    fn eq(&self, other: &Self) -> bool {
+        self.field == other.field
+            && self.op == other.op
+            && self.value == other.value
+            && self.style == other.style
+    }
+}
+
+impl Eq for CompiledCondition {}
 
 /// Format for the `_rest` pseudo-field.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,10 +189,13 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
                 style,
             });
         } else if let Some(field) = entry.field {
-            // Validate mutual exclusivity
-            if entry.style.is_some() && entry.style_map.is_some() {
+            // Validate mutual exclusivity of style, style_map, style_when
+            let style_count = entry.style.is_some() as u8
+                + entry.style_map.is_some() as u8
+                + entry.style_when.is_some() as u8;
+            if style_count > 1 {
                 return Err(format!(
-                    "field '{}': `style` and `style_map` are mutually exclusive",
+                    "field '{}': `style`, `style_map`, and `style_when` are mutually exclusive",
                     field
                 ));
             }
@@ -155,7 +207,43 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
             }
 
             let is_rest = field == "_rest";
-            let style_fn = if let Some(ref map) = entry.style_map {
+            let style_fn = if let Some(ref conditions) = entry.style_when {
+                let mut compiled = Vec::new();
+                for cond in conditions {
+                    let op = match cond.op.as_str() {
+                        "eq" => CompareOp::Eq,
+                        "ne" => CompareOp::Ne,
+                        "gt" => CompareOp::Gt,
+                        "lt" => CompareOp::Lt,
+                        "gte" => CompareOp::Gte,
+                        "lte" => CompareOp::Lte,
+                        "contains" => CompareOp::Contains,
+                        "regex" => CompareOp::Regex,
+                        other => {
+                            return Err(format!(
+                                "field '{}': unknown style_when operator: {}",
+                                field, other
+                            ))
+                        }
+                    };
+                    let compiled_regex = if op == CompareOp::Regex {
+                        Some(Regex::new(&cond.value).map_err(|e| {
+                            format!("field '{}': invalid regex in style_when: {}", field, e)
+                        })?)
+                    } else {
+                        None
+                    };
+                    let style = resolve_style_value(Some(&cond.style))?;
+                    compiled.push(CompiledCondition {
+                        field: cond.field.clone(),
+                        op,
+                        value: cond.value.clone(),
+                        compiled_regex,
+                        style,
+                    });
+                }
+                StyleFn::Conditional(compiled)
+            } else if let Some(ref map) = entry.style_map {
                 let mut compiled_map = HashMap::new();
                 for (k, v) in map {
                     compiled_map.insert(k.clone(), resolve_style_string(Some(v)));
@@ -178,6 +266,12 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
                 Some("json") => RestFormat::Json,
                 _ => RestFormat::KeyValue,
             };
+            // Parse field format for non-rest fields
+            let field_format = if !is_rest {
+                entry.format.as_deref().and_then(FieldFormat::parse)
+            } else {
+                None
+            };
             if !is_rest {
                 consumed_fields.insert(field.clone());
             }
@@ -188,6 +282,7 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
                 max_width: entry.max_width,
                 is_rest,
                 rest_format,
+                field_format,
             });
         }
     }
@@ -320,6 +415,7 @@ impl CompiledPreset {
                     max_width,
                     is_rest,
                     rest_format,
+                    field_format,
                 } => {
                     if *is_rest {
                         let rest = get_rest_fields(&source, &self.consumed_fields);
@@ -338,16 +434,21 @@ impl CompiledPreset {
                                     serde_json::Value::Object(map).to_string()
                                 }
                             };
-                            let style = resolve_style_fn(style_fn, &text);
+                            let style = resolve_style_fn(style_fn, &text, Some(&source));
                             segments.push(StyledSegment { text, style });
                         }
                     } else if let Some(value) = get_field(&source, name) {
+                        // Apply field format if present, falling back to raw value
+                        let display_value = field_format
+                            .as_ref()
+                            .and_then(|ff| ff.apply(&value))
+                            .unwrap_or_else(|| value.clone());
                         let formatted = match (*width, *max_width) {
-                            (Some(w), _) => apply_width(&value, Some(w)),
-                            (_, Some(mw)) => apply_max_width(&value, mw),
-                            _ => value.to_string(),
+                            (Some(w), _) => apply_width(&display_value, Some(w)),
+                            (_, Some(mw)) => apply_max_width(&display_value, mw),
+                            _ => display_value,
                         };
-                        let style = resolve_style_fn(style_fn, &value);
+                        let style = resolve_style_fn(style_fn, &value, Some(&source));
                         segments.push(StyledSegment {
                             text: formatted,
                             style,
@@ -362,7 +463,7 @@ impl CompiledPreset {
     }
 }
 
-fn resolve_style_fn(style_fn: &StyleFn, value: &str) -> SegmentStyle {
+fn resolve_style_fn(style_fn: &StyleFn, value: &str, source: Option<&FieldSource>) -> SegmentStyle {
     match style_fn {
         StyleFn::None => SegmentStyle::Default,
         StyleFn::Static(s) => s.clone(),
@@ -373,6 +474,59 @@ fn resolve_style_fn(style_fn: &StyleFn, value: &str) -> SegmentStyle {
             .or_else(|| map.get("_default"))
             .cloned()
             .unwrap_or(SegmentStyle::Default),
+        StyleFn::Conditional(conditions) => {
+            for cond in conditions {
+                let check_value = if let Some(ref field_name) = cond.field {
+                    source.and_then(|s| get_field(s, field_name))
+                } else {
+                    Some(value.to_string())
+                };
+                let check_value = match check_value {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if eval_condition(
+                    &cond.op,
+                    &check_value,
+                    &cond.value,
+                    cond.compiled_regex.as_ref(),
+                ) {
+                    return cond.style.clone();
+                }
+            }
+            SegmentStyle::Default
+        }
+    }
+}
+
+fn eval_condition(
+    op: &CompareOp,
+    field_value: &str,
+    cond_value: &str,
+    regex: Option<&Regex>,
+) -> bool {
+    match op {
+        CompareOp::Eq => field_value == cond_value,
+        CompareOp::Ne => field_value != cond_value,
+        CompareOp::Contains => field_value.contains(cond_value),
+        CompareOp::Regex => regex.is_some_and(|re| re.is_match(field_value)),
+        CompareOp::Gt | CompareOp::Lt | CompareOp::Gte | CompareOp::Lte => {
+            let fv: f64 = match field_value.parse() {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            let cv: f64 = match cond_value.parse() {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            match op {
+                CompareOp::Gt => fv > cv,
+                CompareOp::Lt => fv < cv,
+                CompareOp::Gte => fv >= cv,
+                CompareOp::Lte => fv <= cv,
+                _ => unreachable!(),
+            }
+        }
     }
 }
 
@@ -412,6 +566,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -421,6 +576,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: Some("message".to_string()),
@@ -430,6 +586,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -439,6 +596,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
@@ -448,6 +606,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
             ],
         })
@@ -479,6 +638,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -544,6 +704,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -553,6 +714,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: Some("msg".to_string()),
@@ -562,6 +724,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
             ],
         })
@@ -590,6 +753,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -599,6 +763,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: Some("request".to_string()),
@@ -608,6 +773,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
             ],
         })
@@ -662,6 +828,7 @@ mod tests {
                     format: None,
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
@@ -671,6 +838,7 @@ mod tests {
                     format: Some("json".to_string()),
                     style_map: None,
                     max_width: None,
+                    style_when: None,
                 },
             ],
         })
@@ -706,6 +874,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -731,6 +900,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -797,6 +967,7 @@ mod tests {
                 format: None,
                 style_map: Some(style_map),
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -836,6 +1007,7 @@ mod tests {
                 format: None,
                 style_map: Some(style_map),
                 max_width: None,
+                style_when: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -859,6 +1031,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: Some(10),
+                style_when: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -885,6 +1058,7 @@ mod tests {
                 format: None,
                 style_map: Some(style_map),
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -913,6 +1087,7 @@ mod tests {
                 format: None,
                 style_map: Some(style_map),
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -942,6 +1117,7 @@ mod tests {
                 format: None,
                 style_map: Some(style_map),
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -971,6 +1147,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: Some(5),
+                style_when: None,
             }],
         })
         .unwrap();
@@ -996,6 +1173,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: Some(20),
+                style_when: None,
             }],
         })
         .unwrap();
@@ -1029,6 +1207,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -1072,6 +1251,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         });
         let err = result.err().expect("expected compile error");
@@ -1098,6 +1278,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -1135,6 +1316,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -1146,5 +1328,414 @@ mod tests {
             )
             .unwrap();
         assert_eq!(segments[0].text, "hello world");
+    }
+
+    // -- Field format tests --
+
+    #[test]
+    fn test_compile_field_format_datetime() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("ts".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: Some("datetime".to_string()),
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { field_format, .. } => {
+                assert!(field_format.is_some());
+            }
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_compile_field_format_duration_ns() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("elapsed".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: Some("duration:ns".to_string()),
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { field_format, .. } => {
+                assert!(field_format.is_some());
+            }
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_render_field_format_duration() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("duration_ms".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: Some("duration".to_string()),
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"duration_ms":"42"}"#, None).unwrap();
+        assert_eq!(segments[0].text, "42ms");
+    }
+
+    // -- style_when tests --
+
+    #[test]
+    fn test_compile_style_when() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("latency".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![
+                    RawStyleCondition {
+                        field: None,
+                        op: "gt".to_string(),
+                        value: "1000".to_string(),
+                        style: StyleValue::Single("red".to_string()),
+                    },
+                    RawStyleCondition {
+                        field: None,
+                        op: "lt".to_string(),
+                        value: "100".to_string(),
+                        style: StyleValue::Single("green".to_string()),
+                    },
+                ]),
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Conditional(conds) => {
+                    assert_eq!(conds.len(), 2);
+                    assert_eq!(conds[0].op, CompareOp::Gt);
+                    assert_eq!(conds[1].op, CompareOp::Lt);
+                }
+                other => panic!("expected Conditional, got {:?}", other),
+            },
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_compile_style_when_regex() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("path".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "regex".to_string(),
+                    value: r"^/api/v\d+".to_string(),
+                    style: StyleValue::Single("blue".to_string()),
+                }]),
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Conditional(conds) => {
+                    assert!(conds[0].compiled_regex.is_some());
+                }
+                other => panic!("expected Conditional, got {:?}", other),
+            },
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_compile_style_and_style_when_error() {
+        let result = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: Some(StyleValue::Single("red".to_string())),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "eq".to_string(),
+                    value: "error".to_string(),
+                    style: StyleValue::Single("red".to_string()),
+                }]),
+            }],
+        });
+
+        let err = result.err().expect("expected compile error");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_compile_style_map_and_style_when_error() {
+        let mut map = HashMap::new();
+        map.insert("error".to_string(), "red".to_string());
+
+        let result = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: Some(map),
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "eq".to_string(),
+                    value: "error".to_string(),
+                    style: StyleValue::Single("red".to_string()),
+                }]),
+            }],
+        });
+
+        let err = result.err().expect("expected compile error");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_render_style_when_gt_match() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("latency".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "gt".to_string(),
+                    value: "500".to_string(),
+                    style: StyleValue::Single("red".to_string()),
+                }]),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"latency":"1000"}"#, None).unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Red));
+    }
+
+    #[test]
+    fn test_render_style_when_gt_no_match() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("latency".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "gt".to_string(),
+                    value: "500".to_string(),
+                    style: StyleValue::Single("red".to_string()),
+                }]),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"latency":"100"}"#, None).unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Default);
+    }
+
+    #[test]
+    fn test_render_style_when_first_match_wins() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![
+                    RawStyleCondition {
+                        field: None,
+                        op: "eq".to_string(),
+                        value: "error".to_string(),
+                        style: StyleValue::Single("red".to_string()),
+                    },
+                    RawStyleCondition {
+                        field: None,
+                        op: "eq".to_string(),
+                        value: "error".to_string(),
+                        style: StyleValue::Single("yellow".to_string()),
+                    },
+                ]),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"level":"error"}"#, None).unwrap();
+        // First condition matches — gets red, not yellow
+        assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Red));
+    }
+
+    #[test]
+    fn test_render_style_when_contains() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: None,
+                    op: "contains".to_string(),
+                    value: "timeout".to_string(),
+                    style: StyleValue::Single("yellow".to_string()),
+                }]),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset
+            .render(r#"{"message":"connection timeout after 30s"}"#, None)
+            .unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Yellow));
+    }
+
+    #[test]
+    fn test_render_style_when_cross_field() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: Some(vec![RawStyleCondition {
+                    field: Some("level".to_string()),
+                    op: "eq".to_string(),
+                    value: "error".to_string(),
+                    style: StyleValue::Single("red".to_string()),
+                }]),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset
+            .render(r#"{"level":"error","message":"something failed"}"#, None)
+            .unwrap();
+        // Message field styled red because level == "error"
+        assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Red));
+        assert_eq!(segments[0].text, "something failed");
     }
 }

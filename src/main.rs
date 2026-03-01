@@ -255,7 +255,9 @@ fn main() -> Result<()> {
     }
 
     // Compile rendering presets from config
-    let preset_registry = compile_preset_registry(&cfg, &mut config_errors);
+    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(&cfg.renderers);
+    config_errors.extend(compile_errors);
+    let preset_registry = Arc::new(registry);
 
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
@@ -418,7 +420,9 @@ fn run_discovery_mode(
     let watch = !no_watch;
 
     // Compile rendering presets from config
-    let preset_registry = compile_preset_registry(&cfg, &mut config_errors);
+    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(&cfg.renderers);
+    config_errors.extend(compile_errors);
+    let preset_registry = Arc::new(registry);
 
     // Build source name → renderer_names map from config sources
     let source_renderer_map: std::collections::HashMap<String, Vec<String>> = cfg
@@ -543,42 +547,6 @@ fn run_discovery_mode(
     }
 
     Ok(())
-}
-
-/// Compile rendering presets from config, returning an Arc<PresetRegistry>.
-fn compile_preset_registry(
-    cfg: &config::Config,
-    config_errors: &mut Vec<String>,
-) -> Arc<renderer::PresetRegistry> {
-    let mut compiled = Vec::new();
-    for raw in &cfg.renderers {
-        let raw_preset = renderer::preset::RawPreset {
-            name: raw.name.clone(),
-            detect: raw.detect.as_ref().map(|d| renderer::preset::RawDetect {
-                parser: d.parser.clone(),
-                filename: d.filename.clone(),
-            }),
-            regex: raw.regex.clone(),
-            layout: raw
-                .layout
-                .iter()
-                .map(|e| renderer::preset::RawLayoutEntry {
-                    field: e.field.clone(),
-                    literal: e.literal.clone(),
-                    style: e.style.clone(),
-                    width: e.width,
-                    format: e.format.clone(),
-                    style_map: e.style_map.clone(),
-                    max_width: e.max_width,
-                })
-                .collect(),
-        };
-        match renderer::preset::compile(raw_preset) {
-            Ok(preset) => compiled.push(preset),
-            Err(e) => config_errors.push(format!("Renderer '{}': {}", raw.name, e)),
-        }
-    }
-    Arc::new(renderer::PresetRegistry::new(compiled))
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {

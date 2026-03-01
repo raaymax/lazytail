@@ -22,10 +22,11 @@ pub fn format_lines_text(resp: &GetLinesResponse) -> String {
     out.push('\n');
 
     for line in &resp.lines {
+        let display = line.rendered.as_deref().unwrap_or(&line.content);
         if let Some(ref sev) = line.severity {
-            writeln!(out, "[L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+            writeln!(out, "[L{}] [{}] {}", line.line_number, sev, display).unwrap();
         } else {
-            writeln!(out, "[L{}] {}", line.line_number, line.content).unwrap();
+            writeln!(out, "[L{}] {}", line.line_number, display).unwrap();
         }
     }
 
@@ -79,34 +80,41 @@ pub fn format_context_text(resp: &GetContextResponse) -> String {
     out.push('\n');
 
     for line in &resp.before_lines {
+        let display = line.rendered.as_deref().unwrap_or(&line.content);
         if let Some(ref sev) = line.severity {
-            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, display).unwrap();
         } else {
-            writeln!(out, "  [L{}] {}", line.line_number, line.content).unwrap();
+            writeln!(out, "  [L{}] {}", line.line_number, display).unwrap();
         }
     }
 
+    let target_display = resp
+        .target_line
+        .rendered
+        .as_deref()
+        .unwrap_or(&resp.target_line.content);
     if let Some(ref sev) = resp.target_line.severity {
         writeln!(
             out,
             "> [L{}] [{}] {}",
-            resp.target_line.line_number, sev, resp.target_line.content
+            resp.target_line.line_number, sev, target_display
         )
         .unwrap();
     } else {
         writeln!(
             out,
             "> [L{}] {}",
-            resp.target_line.line_number, resp.target_line.content
+            resp.target_line.line_number, target_display
         )
         .unwrap();
     }
 
     for line in &resp.after_lines {
+        let display = line.rendered.as_deref().unwrap_or(&line.content);
         if let Some(ref sev) = line.severity {
-            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, line.content).unwrap();
+            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, display).unwrap();
         } else {
-            writeln!(out, "  [L{}] {}", line.line_number, line.content).unwrap();
+            writeln!(out, "  [L{}] {}", line.line_number, display).unwrap();
         }
     }
 
@@ -187,11 +195,13 @@ mod tests {
                     line_number: 0,
                     content: "first line".into(),
                     severity: None,
+                    rendered: None,
                 },
                 LineInfo {
                     line_number: 1,
                     content: "second line".into(),
                     severity: None,
+                    rendered: None,
                 },
             ],
             total_lines: 100,
@@ -227,6 +237,7 @@ mod tests {
                 line_number: 42,
                 content: json_line.into(),
                 severity: None,
+                rendered: None,
             }],
             total_lines: 100,
             has_more: false,
@@ -244,6 +255,7 @@ mod tests {
                 line_number: 5,
                 content: "data | more | pipes".into(),
                 severity: None,
+                rendered: None,
             }],
             total_lines: 10,
             has_more: false,
@@ -346,28 +358,33 @@ mod tests {
                     line_number: 40,
                     content: "before line 1".into(),
                     severity: None,
+                    rendered: None,
                 },
                 LineInfo {
                     line_number: 41,
                     content: "before line 2".into(),
                     severity: None,
+                    rendered: None,
                 },
             ],
             target_line: LineInfo {
                 line_number: 42,
                 content: "target line content".into(),
                 severity: None,
+                rendered: None,
             },
             after_lines: vec![
                 LineInfo {
                     line_number: 43,
                     content: "after line 1".into(),
                     severity: None,
+                    rendered: None,
                 },
                 LineInfo {
                     line_number: 44,
                     content: "after line 2".into(),
                     severity: None,
+                    rendered: None,
                 },
             ],
             total_lines: 1000,
@@ -389,6 +406,7 @@ mod tests {
                 line_number: 0,
                 content: "only line".into(),
                 severity: None,
+                rendered: None,
             },
             after_lines: vec![],
             total_lines: 1,
@@ -452,5 +470,68 @@ mod tests {
         let text = format_search_text(&resp);
         assert!(!text.contains("output_truncated_at_bytes"));
         assert!(text.contains("=== match"));
+    }
+
+    #[test]
+    fn lines_text_prefers_rendered() {
+        let resp = GetLinesResponse {
+            lines: vec![LineInfo {
+                line_number: 0,
+                content: r#"{"level":"error","msg":"fail"}"#.into(),
+                severity: None,
+                rendered: Some("ERROR fail".into()),
+            }],
+            total_lines: 1,
+            has_more: false,
+        };
+        let text = format_lines_text(&resp);
+        assert!(text.contains("[L0] ERROR fail"));
+        assert!(!text.contains(r#"{"level""#));
+    }
+
+    #[test]
+    fn lines_text_falls_back_to_content() {
+        let resp = GetLinesResponse {
+            lines: vec![LineInfo {
+                line_number: 0,
+                content: "plain text".into(),
+                severity: None,
+                rendered: None,
+            }],
+            total_lines: 1,
+            has_more: false,
+        };
+        let text = format_lines_text(&resp);
+        assert!(text.contains("[L0] plain text"));
+    }
+
+    #[test]
+    fn context_text_prefers_rendered() {
+        let resp = GetContextResponse {
+            target_line: LineInfo {
+                line_number: 5,
+                content: r#"{"level":"error"}"#.into(),
+                severity: None,
+                rendered: Some("ERROR target".into()),
+            },
+            before_lines: vec![LineInfo {
+                line_number: 4,
+                content: r#"{"level":"info"}"#.into(),
+                severity: None,
+                rendered: Some("INFO before".into()),
+            }],
+            after_lines: vec![LineInfo {
+                line_number: 6,
+                content: r#"{"level":"debug"}"#.into(),
+                severity: None,
+                rendered: Some("DEBUG after".into()),
+            }],
+            total_lines: 100,
+        };
+        let text = format_context_text(&resp);
+        assert!(text.contains("ERROR target"));
+        assert!(text.contains("INFO before"));
+        assert!(text.contains("DEBUG after"));
+        assert!(!text.contains(r#"{"level""#));
     }
 }
