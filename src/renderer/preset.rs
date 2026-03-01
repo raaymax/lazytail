@@ -1,11 +1,13 @@
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::field::{extract_fields, get_field, get_rest_fields};
 use super::segment::{
-    resolve_severity_style, resolve_status_code_style, SegmentStyle, StyledSegment,
+    resolve_severity_style, resolve_status_code_style, SegmentColor, SegmentStyle, StyledSegment,
 };
+
+pub use crate::config::types::StyleValue;
 
 /// Serde-deserializable YAML preset.
 #[derive(Debug, Deserialize)]
@@ -28,9 +30,11 @@ pub struct RawDetect {
 pub struct RawLayoutEntry {
     pub field: Option<String>,
     pub literal: Option<String>,
-    pub style: Option<String>,
+    pub style: Option<StyleValue>,
     pub width: Option<usize>,
     pub format: Option<String>,
+    pub style_map: Option<HashMap<String, String>>,
+    pub max_width: Option<usize>,
 }
 
 /// Parser type for a preset.
@@ -48,6 +52,7 @@ pub enum CompiledLayoutEntry {
         name: String,
         style_fn: StyleFn,
         width: Option<usize>,
+        max_width: Option<usize>,
         is_rest: bool,
         rest_format: RestFormat,
     },
@@ -64,6 +69,7 @@ pub enum StyleFn {
     Static(SegmentStyle),
     Severity,
     StatusCode,
+    Map(HashMap<String, SegmentStyle>),
 }
 
 /// Format for the `_rest` pseudo-field.
@@ -128,18 +134,45 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
 
     for entry in raw.layout {
         if let Some(literal) = entry.literal {
-            let style = resolve_style_string(entry.style.as_deref());
+            let style = resolve_style_value(entry.style.as_ref())?;
             layout.push(CompiledLayoutEntry::Literal {
                 text: literal,
                 style,
             });
         } else if let Some(field) = entry.field {
+            // Validate mutual exclusivity
+            if entry.style.is_some() && entry.style_map.is_some() {
+                return Err(format!(
+                    "field '{}': `style` and `style_map` are mutually exclusive",
+                    field
+                ));
+            }
+            if entry.width.is_some() && entry.max_width.is_some() {
+                return Err(format!(
+                    "field '{}': `width` and `max_width` are mutually exclusive",
+                    field
+                ));
+            }
+
             let is_rest = field == "_rest";
-            let style_fn = match entry.style.as_deref() {
-                Some("severity") => StyleFn::Severity,
-                Some("status_code") | Some("statuscode") => StyleFn::StatusCode,
-                Some(s) => StyleFn::Static(resolve_style_string(Some(s))),
-                None => StyleFn::None,
+            let style_fn = if let Some(ref map) = entry.style_map {
+                let mut compiled_map = HashMap::new();
+                for (k, v) in map {
+                    compiled_map.insert(k.clone(), resolve_style_string(Some(v)));
+                }
+                StyleFn::Map(compiled_map)
+            } else {
+                match &entry.style {
+                    Some(StyleValue::Single(s)) => match s.as_str() {
+                        "severity" => StyleFn::Severity,
+                        "status_code" | "statuscode" => StyleFn::StatusCode,
+                        _ => StyleFn::Static(resolve_style_string(Some(s))),
+                    },
+                    Some(StyleValue::List(names)) => {
+                        StyleFn::Static(resolve_compound_style(names)?)
+                    }
+                    None => StyleFn::None,
+                }
             };
             let rest_format = match entry.format.as_deref() {
                 Some("json") => RestFormat::Json,
@@ -152,6 +185,7 @@ pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
                 name: field,
                 style_fn,
                 width: entry.width,
+                max_width: entry.max_width,
                 is_rest,
                 rest_format,
             });
@@ -173,15 +207,76 @@ fn resolve_style_string(style: Option<&str>) -> SegmentStyle {
         Some("dim") => SegmentStyle::Dim,
         Some("bold") => SegmentStyle::Bold,
         Some("italic") => SegmentStyle::Italic,
-        Some("red") => SegmentStyle::Fg(super::segment::SegmentColor::Red),
-        Some("green") => SegmentStyle::Fg(super::segment::SegmentColor::Green),
-        Some("yellow") => SegmentStyle::Fg(super::segment::SegmentColor::Yellow),
-        Some("blue") => SegmentStyle::Fg(super::segment::SegmentColor::Blue),
-        Some("magenta") => SegmentStyle::Fg(super::segment::SegmentColor::Magenta),
-        Some("cyan") => SegmentStyle::Fg(super::segment::SegmentColor::Cyan),
-        Some("white") => SegmentStyle::Fg(super::segment::SegmentColor::White),
-        Some("gray") => SegmentStyle::Fg(super::segment::SegmentColor::Gray),
+        Some("red") => SegmentStyle::Fg(SegmentColor::Red),
+        Some("green") => SegmentStyle::Fg(SegmentColor::Green),
+        Some("yellow") => SegmentStyle::Fg(SegmentColor::Yellow),
+        Some("blue") => SegmentStyle::Fg(SegmentColor::Blue),
+        Some("magenta") => SegmentStyle::Fg(SegmentColor::Magenta),
+        Some("cyan") => SegmentStyle::Fg(SegmentColor::Cyan),
+        Some("white") => SegmentStyle::Fg(SegmentColor::White),
+        Some("gray") => SegmentStyle::Fg(SegmentColor::Gray),
         _ => SegmentStyle::Default,
+    }
+}
+
+fn resolve_style_value(style: Option<&StyleValue>) -> Result<SegmentStyle, String> {
+    match style {
+        Some(StyleValue::Single(s)) => Ok(resolve_style_string(Some(s))),
+        Some(StyleValue::List(names)) => resolve_compound_style(names),
+        None => Ok(SegmentStyle::Default),
+    }
+}
+
+fn resolve_compound_style(names: &[String]) -> Result<SegmentStyle, String> {
+    if names.is_empty() {
+        return Ok(SegmentStyle::Default);
+    }
+    let mut dim = false;
+    let mut bold = false;
+    let mut italic = false;
+    let mut fg: Option<SegmentColor> = None;
+
+    for name in names {
+        match name.as_str() {
+            "dim" => dim = true,
+            "bold" => bold = true,
+            "italic" => italic = true,
+            color_name => {
+                let color = match color_name {
+                    "red" => SegmentColor::Red,
+                    "green" => SegmentColor::Green,
+                    "yellow" => SegmentColor::Yellow,
+                    "blue" => SegmentColor::Blue,
+                    "magenta" => SegmentColor::Magenta,
+                    "cyan" => SegmentColor::Cyan,
+                    "white" => SegmentColor::White,
+                    "gray" => SegmentColor::Gray,
+                    _ => return Err(format!("unknown style name: {}", name)),
+                };
+                if fg.is_some() {
+                    return Err(format!(
+                        "compound style has two colors: cannot combine '{}' with existing color",
+                        name
+                    ));
+                }
+                fg = Some(color);
+            }
+        }
+    }
+
+    Ok(SegmentStyle::Compound {
+        dim,
+        bold,
+        italic,
+        fg,
+    })
+}
+
+fn apply_max_width(value: &str, max_width: usize) -> String {
+    if value.chars().count() > max_width {
+        value.chars().take(max_width).collect()
+    } else {
+        value.to_string()
     }
 }
 
@@ -222,6 +317,7 @@ impl CompiledPreset {
                     name,
                     style_fn,
                     width,
+                    max_width,
                     is_rest,
                     rest_format,
                 } => {
@@ -246,7 +342,11 @@ impl CompiledPreset {
                             segments.push(StyledSegment { text, style });
                         }
                     } else if let Some(value) = get_field(&source, name) {
-                        let formatted = apply_width(&value, *width);
+                        let formatted = match (*width, *max_width) {
+                            (Some(w), _) => apply_width(&value, Some(w)),
+                            (_, Some(mw)) => apply_max_width(&value, mw),
+                            _ => value.to_string(),
+                        };
                         let style = resolve_style_fn(style_fn, &value);
                         segments.push(StyledSegment {
                             text: formatted,
@@ -268,6 +368,11 @@ fn resolve_style_fn(style_fn: &StyleFn, value: &str) -> SegmentStyle {
         StyleFn::Static(s) => s.clone(),
         StyleFn::Severity => resolve_severity_style(value),
         StyleFn::StatusCode => resolve_status_code_style(value),
+        StyleFn::Map(map) => map
+            .get(value)
+            .or_else(|| map.get("_default"))
+            .cloned()
+            .unwrap_or(SegmentStyle::Default),
     }
 }
 
@@ -302,9 +407,11 @@ mod tests {
                 RawLayoutEntry {
                     field: Some("level".to_string()),
                     literal: None,
-                    style: Some("severity".to_string()),
+                    style: Some(StyleValue::Single("severity".to_string())),
                     width: Some(5),
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -312,6 +419,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: Some("message".to_string()),
@@ -319,6 +428,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -326,13 +437,17 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
                     literal: None,
-                    style: Some("dim".to_string()),
+                    style: Some(StyleValue::Single("dim".to_string())),
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
             ],
         })
@@ -362,6 +477,8 @@ mod tests {
                 style: None,
                 width: None,
                 format: None,
+                style_map: None,
+                max_width: None,
             }],
         })
         .unwrap();
@@ -422,9 +539,11 @@ mod tests {
                 RawLayoutEntry {
                     field: Some("level".to_string()),
                     literal: None,
-                    style: Some("severity".to_string()),
+                    style: Some(StyleValue::Single("severity".to_string())),
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -432,6 +551,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: Some("msg".to_string()),
@@ -439,6 +560,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
             ],
         })
@@ -465,6 +588,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: None,
@@ -472,6 +597,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: Some("request".to_string()),
@@ -479,6 +606,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
             ],
         })
@@ -531,6 +660,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: None,
+                    style_map: None,
+                    max_width: None,
                 },
                 RawLayoutEntry {
                     field: Some("_rest".to_string()),
@@ -538,6 +669,8 @@ mod tests {
                     style: None,
                     width: None,
                     format: Some("json".to_string()),
+                    style_map: None,
+                    max_width: None,
                 },
             ],
         })
@@ -571,6 +704,8 @@ mod tests {
                 style: None,
                 width: Some(5),
                 format: None,
+                style_map: None,
+                max_width: None,
             }],
         })
         .unwrap();
@@ -594,6 +729,8 @@ mod tests {
                 style: None,
                 width: Some(5),
                 format: None,
+                style_map: None,
+                max_width: None,
             }],
         })
         .unwrap();
@@ -633,5 +770,381 @@ mod tests {
             Some(FLAG_FORMAT_LOGFMT),
         );
         assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // Style Map Tests (R17)
+    // ========================================================================
+
+    #[test]
+    fn test_compile_style_map() {
+        let mut style_map = HashMap::new();
+        style_map.insert("error".to_string(), "red".to_string());
+        style_map.insert("warn".to_string(), "yellow".to_string());
+
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: Some(style_map),
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Map(map) => {
+                    assert_eq!(map.get("error"), Some(&SegmentStyle::Fg(SegmentColor::Red)));
+                    assert_eq!(
+                        map.get("warn"),
+                        Some(&SegmentStyle::Fg(SegmentColor::Yellow))
+                    );
+                }
+                other => panic!("expected StyleFn::Map, got {:?}", other),
+            },
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_compile_style_and_style_map_error() {
+        let mut style_map = HashMap::new();
+        style_map.insert("error".to_string(), "red".to_string());
+
+        let result = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: Some(StyleValue::Single("bold".to_string())),
+                width: None,
+                format: None,
+                style_map: Some(style_map),
+                max_width: None,
+            }],
+        });
+        let err = result.err().expect("expected compile error");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_compile_width_and_max_width_error() {
+        let result = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: Some(5),
+                format: None,
+                style_map: None,
+                max_width: Some(10),
+            }],
+        });
+        let err = result.err().expect("expected compile error");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_render_style_map_match() {
+        let mut style_map = HashMap::new();
+        style_map.insert("error".to_string(), "red".to_string());
+
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: Some(style_map),
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"level":"error"}"#, None).unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Red));
+    }
+
+    #[test]
+    fn test_render_style_map_no_match() {
+        let mut style_map = HashMap::new();
+        style_map.insert("error".to_string(), "red".to_string());
+
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: Some(style_map),
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"level":"unknown"}"#, None).unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Default);
+    }
+
+    #[test]
+    fn test_render_style_map_default_fallback() {
+        let mut style_map = HashMap::new();
+        style_map.insert("error".to_string(), "red".to_string());
+        style_map.insert("_default".to_string(), "dim".to_string());
+
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("level".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: Some(style_map),
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"level":"info"}"#, None).unwrap();
+        assert_eq!(segments[0].style, SegmentStyle::Dim);
+    }
+
+    // ========================================================================
+    // Max Width Tests (R18)
+    // ========================================================================
+
+    #[test]
+    fn test_render_max_width_truncates() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: Some(5),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"message":"hello world"}"#, None).unwrap();
+        assert_eq!(segments[0].text, "hello");
+    }
+
+    #[test]
+    fn test_render_max_width_no_pad() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("message".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: Some(20),
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"message":"short"}"#, None).unwrap();
+        // Should NOT be padded — max_width only truncates
+        assert_eq!(segments[0].text, "short");
+    }
+
+    // ========================================================================
+    // Compound Style Tests (R19)
+    // ========================================================================
+
+    #[test]
+    fn test_compile_compound_style() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("status".to_string()),
+                literal: None,
+                style: Some(StyleValue::List(vec![
+                    "bold".to_string(),
+                    "cyan".to_string(),
+                ])),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        match &preset.layout[0] {
+            CompiledLayoutEntry::Field { style_fn, .. } => match style_fn {
+                StyleFn::Static(SegmentStyle::Compound {
+                    dim,
+                    bold,
+                    italic,
+                    fg,
+                }) => {
+                    assert!(!dim);
+                    assert!(*bold);
+                    assert!(!italic);
+                    assert_eq!(fg, &Some(SegmentColor::Cyan));
+                }
+                other => panic!("expected Static(Compound), got {:?}", other),
+            },
+            _ => panic!("expected Field"),
+        }
+    }
+
+    #[test]
+    fn test_compile_compound_two_colors_error() {
+        let result = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("status".to_string()),
+                literal: None,
+                style: Some(StyleValue::List(vec![
+                    "red".to_string(),
+                    "cyan".to_string(),
+                ])),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+            }],
+        });
+        let err = result.err().expect("expected compile error");
+        assert!(err.contains("two colors"));
+    }
+
+    #[test]
+    fn test_render_compound_style() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("status".to_string()),
+                literal: None,
+                style: Some(StyleValue::List(vec![
+                    "bold".to_string(),
+                    "cyan".to_string(),
+                ])),
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset.render(r#"{"status":"ok"}"#, None).unwrap();
+        assert_eq!(
+            segments[0].style,
+            SegmentStyle::Compound {
+                dim: false,
+                bold: true,
+                italic: false,
+                fg: Some(SegmentColor::Cyan),
+            }
+        );
+    }
+
+    // ========================================================================
+    // Array Index Field Path Test (R16, end-to-end)
+    // ========================================================================
+
+    #[test]
+    fn test_render_array_index_field() {
+        let preset = compile(RawPreset {
+            name: "test".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntry {
+                field: Some("content.0.text".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+            }],
+        })
+        .unwrap();
+
+        let segments = preset
+            .render(
+                r#"{"content":[{"type":"text","text":"hello world"}]}"#,
+                None,
+            )
+            .unwrap();
+        assert_eq!(segments[0].text, "hello world");
     }
 }

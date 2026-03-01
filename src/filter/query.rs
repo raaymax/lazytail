@@ -715,6 +715,12 @@ pub fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<Strin
     let mut current = json;
 
     for part in field.split('.') {
+        if current.is_array() {
+            if let Ok(index) = part.parse::<usize>() {
+                current = current.get(index)?;
+                continue;
+            }
+        }
         current = current.get(part)?;
     }
 
@@ -1873,5 +1879,46 @@ mod tests {
         let json = r#"{"parser": "json"}"#;
         let query: FilterQuery = serde_json::from_str(json).unwrap();
         assert!(query.aggregate.is_none());
+    }
+
+    // ========================================================================
+    // Array Index Field Access Tests (R16)
+    // ========================================================================
+
+    #[test]
+    fn test_extract_json_field_array_index() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"content":[{"type":"text","text":"hello"}]}"#).unwrap();
+        assert_eq!(
+            extract_json_field(&json, "content.0.text"),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_json_field_array_index_nested() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"message":{"content":[{"type":"tool_use","name":"grep"}]}}"#)
+                .unwrap();
+        assert_eq!(
+            extract_json_field(&json, "message.content.0.type"),
+            Some("tool_use".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_json_field_array_index_out_of_bounds() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"content":[{"type":"text","text":"hello"}]}"#).unwrap();
+        assert_eq!(extract_json_field(&json, "content.5.text"), None);
+    }
+
+    #[test]
+    fn test_extract_json_field_numeric_key_on_object() {
+        let json: serde_json::Value = serde_json::from_str(r#"{"items":{"0":"first"}}"#).unwrap();
+        assert_eq!(
+            extract_json_field(&json, "items.0"),
+            Some("first".to_string())
+        );
     }
 }

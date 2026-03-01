@@ -109,6 +109,8 @@ mod tests {
                 style: None,
                 width: None,
                 format: None,
+                style_map: None,
+                max_width: None,
             }],
         })
         .unwrap();
@@ -161,6 +163,8 @@ mod tests {
                 style: None,
                 width: None,
                 format: None,
+                style_map: None,
+                max_width: None,
             }],
         })
         .unwrap();

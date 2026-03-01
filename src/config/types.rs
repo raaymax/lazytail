@@ -3,6 +3,7 @@
 //! Defines structures for parsing and representing configuration files.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Raw config file structure (used for parsing).
@@ -46,15 +47,25 @@ pub struct RawDetectDef {
     pub filename: Option<String>,
 }
 
+/// Style value: either a single string or a list of strings (compound style).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum StyleValue {
+    Single(String),
+    List(Vec<String>),
+}
+
 /// Raw layout entry for a renderer.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawLayoutEntryDef {
     pub field: Option<String>,
     pub literal: Option<String>,
-    pub style: Option<String>,
+    pub style: Option<StyleValue>,
     pub width: Option<usize>,
     pub format: Option<String>,
+    pub style_map: Option<HashMap<String, String>>,
+    pub max_width: Option<usize>,
 }
 
 /// Raw source from config file.

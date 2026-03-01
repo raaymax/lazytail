@@ -608,4 +608,49 @@ renderers:
             e => panic!("Expected Parse error, got: {:?}", e),
         }
     }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory and files
+    fn test_load_config_with_style_map_and_max_width() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("lazytail.yaml");
+
+        fs::write(
+            &config_path,
+            r#"
+renderers:
+  - name: custom
+    detect:
+      parser: json
+    layout:
+      - field: level
+        style_map:
+          error: red
+          warn: yellow
+        max_width: 10
+      - field: message
+"#,
+        )
+        .unwrap();
+
+        let discovery = DiscoveryResult {
+            project_root: Some(temp.path().to_path_buf()),
+            project_config: Some(config_path),
+            global_config: None,
+        };
+
+        let config = load(&discovery).unwrap();
+
+        assert_eq!(config.renderers.len(), 1);
+        let renderer = &config.renderers[0];
+        assert_eq!(renderer.name, "custom");
+
+        // First layout entry has style_map and max_width
+        let entry = &renderer.layout[0];
+        assert!(entry.style_map.is_some());
+        let map = entry.style_map.as_ref().unwrap();
+        assert_eq!(map.get("error"), Some(&"red".to_string()));
+        assert_eq!(map.get("warn"), Some(&"yellow".to_string()));
+        assert_eq!(entry.max_width, Some(10));
+    }
 }

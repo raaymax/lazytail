@@ -568,6 +568,8 @@ fn compile_preset_registry(
                     style: e.style.clone(),
                     width: e.width,
                     format: e.format.clone(),
+                    style_map: e.style_map.clone(),
+                    max_width: e.max_width,
                 })
                 .collect(),
         };
