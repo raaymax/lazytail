@@ -1,5 +1,6 @@
 use crate::app::{App, InputMode, SourceType, TabState, TreeSelection};
 use crate::source::SourceStatus;
+use crate::theme::UiColors;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -14,6 +15,7 @@ pub(super) fn render_side_panel(
     area: Rect,
     app: &App,
 ) -> (Rect, Option<(Line<'static>, Rect)>) {
+    let ui = &app.theme.ui;
     // Stats panel height: 2 (borders) + 1 (line count) + 1 if filtered + 1 if index + severity rows
     let tab = app.active_tab();
     let is_filtered = tab.source.filter.pattern.is_some();
@@ -43,10 +45,10 @@ pub(super) fn render_side_panel(
     let sources_area = chunks[0];
 
     // Render sources list
-    let overflow = render_sources_list(f, sources_area, app);
+    let overflow = render_sources_list(f, sources_area, app, ui);
 
     // Render stats panel
-    render_stats_panel(f, chunks[1], app);
+    render_stats_panel(f, chunks[1], app, ui);
 
     (sources_area, overflow)
 }
@@ -58,6 +60,7 @@ fn build_source_line(
     indicator: &str,
     name: &str,
     style: Style,
+    ui: &UiColors,
 ) -> Line<'static> {
     let mut line = Line::from(vec![Span::styled(
         format!("  {}{} {}", number, indicator, name),
@@ -66,20 +69,20 @@ fn build_source_line(
 
     if tab.stream_receiver.is_some() {
         line.spans
-            .push(Span::styled(" ⟳", Style::default().fg(Color::Magenta)));
+            .push(Span::styled(" ⟳", Style::default().fg(ui.highlight)));
     }
     if tab.source.filter.pattern.is_some() {
         line.spans
-            .push(Span::styled(" *", Style::default().fg(Color::Cyan)));
+            .push(Span::styled(" *", Style::default().fg(ui.accent)));
     }
     if tab.source.follow_mode {
         line.spans
-            .push(Span::styled(" F", Style::default().fg(Color::Green)));
+            .push(Span::styled(" F", Style::default().fg(ui.positive)));
     }
     if let Some(status) = tab.source.source_status {
         let (status_ind, color) = match status {
-            SourceStatus::Active => ("●", Color::Green),
-            SourceStatus::Ended => ("○", Color::DarkGray),
+            SourceStatus::Active => ("●", ui.positive),
+            SourceStatus::Ended => ("○", ui.muted),
         };
         line.spans.push(Span::styled(
             format!(" {}", status_ind),
@@ -103,7 +106,12 @@ fn format_source_meta(tab: &TabState) -> String {
     }
 }
 
-fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'static>, Rect)> {
+fn render_sources_list(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    ui: &UiColors,
+) -> Option<(Line<'static>, Rect)> {
     let mut items: Vec<ListItem> = Vec::new();
     let categories = app.tabs_by_category();
     let is_panel_focused = app.input_mode == InputMode::SourcePanel;
@@ -136,13 +144,11 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
         let cat_style = if is_cat_selected {
             Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::Cyan)
+                .bg(ui.selection_bg)
+                .fg(ui.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(ui.accent).add_modifier(Modifier::BOLD)
         };
 
         items.push(ListItem::new(Line::from(vec![Span::styled(
@@ -166,10 +172,10 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                 let indicator = if is_active { ">" } else { " " };
 
                 let mut style = Style::default()
-                    .fg(Color::Magenta)
+                    .fg(ui.highlight)
                     .add_modifier(Modifier::BOLD);
                 if is_tree_selected {
-                    style = style.bg(Color::DarkGray);
+                    style = style.bg(ui.selection_bg);
                 }
 
                 let mut line =
@@ -190,10 +196,8 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                 let remaining = panel_inner.saturating_sub(used_width);
                 if remaining > 0 {
                     let truncated: String = meta.chars().take(remaining).collect();
-                    line.spans.push(Span::styled(
-                        truncated,
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    line.spans
+                        .push(Span::styled(truncated, Style::default().fg(ui.muted)));
                 }
 
                 if is_tree_selected {
@@ -201,7 +205,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                         Line::from(vec![Span::styled(format!("   {} $all", indicator), style)]);
                     full_line
                         .spans
-                        .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
+                        .push(Span::styled(meta, Style::default().fg(ui.muted)));
                     selected_line_content = Some(full_line);
                 }
 
@@ -241,22 +245,20 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
                 let item_style = if tab.source.disabled {
                     // Disabled sources (file doesn't exist) shown grayed out
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(ui.muted)
                 } else if is_tree_selected {
                     Style::default()
-                        .bg(Color::DarkGray)
-                        .fg(Color::White)
+                        .bg(ui.selection_bg)
+                        .fg(ui.fg)
                         .add_modifier(Modifier::BOLD)
                 } else if is_active {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(ui.primary).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(ui.fg)
                 };
 
                 // Build line with indicators and metadata
-                let mut line = build_source_line(tab, &number, indicator, &name, item_style);
+                let mut line = build_source_line(tab, &number, indicator, &name, item_style, ui);
 
                 // Inline metadata (line count · file size) - show whatever fits
                 let meta = format_source_meta(tab);
@@ -265,19 +267,23 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
                 let remaining = panel_inner.saturating_sub(used_width);
                 if remaining > 0 {
                     let truncated: String = meta.chars().take(remaining).collect();
-                    line.spans.push(Span::styled(
-                        truncated,
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    line.spans
+                        .push(Span::styled(truncated, Style::default().fg(ui.muted)));
                 }
 
                 if is_tree_selected {
                     // Build full untruncated line for overflow overlay
-                    let mut full_line =
-                        build_source_line(tab, &number, indicator, &tab.source.name, item_style);
+                    let mut full_line = build_source_line(
+                        tab,
+                        &number,
+                        indicator,
+                        &tab.source.name,
+                        item_style,
+                        ui,
+                    );
                     full_line
                         .spans
-                        .push(Span::styled(meta, Style::default().fg(Color::DarkGray)));
+                        .push(Span::styled(meta, Style::default().fg(ui.muted)));
                     selected_line_content = Some(full_line);
                 }
 
@@ -298,7 +304,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
         "Sources"
     };
     let border_style = if is_panel_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(ui.primary)
     } else {
         Style::default()
     };
@@ -326,7 +332,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
 
             if overlay_y < area.y + area.height.saturating_sub(1) {
                 for span in &mut line_content.spans {
-                    span.style = span.style.bg(Color::Black);
+                    span.style = span.style.bg(ui.popup_bg);
                 }
                 return Some((
                     line_content,
@@ -344,7 +350,7 @@ fn render_sources_list(f: &mut Frame, area: Rect, app: &App) -> Option<(Line<'st
     None
 }
 
-fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_stats_panel(f: &mut Frame, area: Rect, app: &App, ui: &UiColors) {
     let tab = app.active_tab();
 
     let total_lines = tab.source.total_lines;
@@ -358,7 +364,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     if is_loading {
         stats_text.push(Line::from(vec![Span::styled(
             " Loading... ",
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(ui.highlight),
         )]));
     }
 
@@ -366,25 +372,19 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     if is_filtered {
         stats_text.push(Line::from(vec![
             Span::raw(" Lines:    "),
-            Span::styled(
-                format!("{}", total_lines),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(format!("{}", total_lines), Style::default().fg(ui.fg)),
         ]));
         stats_text.push(Line::from(vec![
             Span::raw(" Filtered: "),
             Span::styled(
                 format!("{}", filtered_lines),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(ui.accent),
             ),
         ]));
     } else {
         stats_text.push(Line::from(vec![
             Span::raw(" Lines: "),
-            Span::styled(
-                format!("{}", total_lines),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(format!("{}", total_lines), Style::default().fg(ui.fg)),
         ]));
     }
 
@@ -392,10 +392,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
     if let Some(index_size) = tab.source.index_size {
         stats_text.push(Line::from(vec![
             Span::raw(" Index: "),
-            Span::styled(
-                format_file_size(index_size),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format_file_size(index_size), Style::default().fg(ui.muted)),
         ]));
     }
 
@@ -407,7 +404,7 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
                 Span::raw(" Speed: "),
                 Span::styled(
                     format!("{:.1} {}", value, unit),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(ui.positive),
                 ),
             ]));
         }
@@ -421,12 +418,12 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
         .map(|ir| ir.severity_counts())
     {
         let entries: &[(u32, &str, Color)] = &[
-            (counts.fatal, "Fatal", Color::Magenta),
-            (counts.error, "Error", Color::Red),
-            (counts.warn, "Warn", Color::Yellow),
-            (counts.info, "Info", Color::Green),
-            (counts.debug, "Debug", Color::Cyan),
-            (counts.trace, "Trace", Color::DarkGray),
+            (counts.fatal, "Fatal", ui.severity_fatal),
+            (counts.error, "Error", ui.severity_error),
+            (counts.warn, "Warn", ui.severity_warn),
+            (counts.info, "Info", ui.severity_info),
+            (counts.debug, "Debug", ui.severity_debug),
+            (counts.trace, "Trace", ui.severity_trace),
         ];
 
         let max_count = entries.iter().map(|&(c, _, _)| c).max().unwrap_or(1).max(1);
@@ -446,9 +443,9 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
                 stats_text.push(Line::from(vec![
                     Span::raw(format!(" {:<5} ", label)),
                     Span::styled(bar_filled, Style::default().fg(color)),
-                    Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                    Span::styled(bar_empty, Style::default().fg(ui.muted)),
                     Span::raw(" "),
-                    Span::styled(count_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(count_str, Style::default().fg(ui.muted)),
                 ]));
             }
         }

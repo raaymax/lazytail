@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use strsim::jaro_winkler;
 
 /// Known fields for root config.
-const ROOT_FIELDS: &[&str] = &["name", "sources", "update_check", "renderers"];
+const ROOT_FIELDS: &[&str] = &["name", "sources", "update_check", "renderers", "theme"];
 
 /// Known fields for source entries.
 const SOURCE_FIELDS: &[&str] = &["name", "path", "renderers"];

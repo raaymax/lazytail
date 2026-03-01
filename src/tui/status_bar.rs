@@ -1,13 +1,14 @@
 use crate::app::{App, FilterState, ViewMode};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
 pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
+    let ui = &app.theme.ui;
     let tab = app.active_tab();
 
     let status_text = format!(
@@ -52,19 +53,19 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                     tab.aggregation_view.selected_row + 1,
                     result.groups.len()
                 ),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(ui.highlight),
             )])
         } else {
             Line::from(vec![Span::styled(
                 " Computing aggregation...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ui.muted),
             )])
         }
     } else if show_status_msg {
         let msg = &app.status_message.as_ref().unwrap().0;
         Line::from(vec![Span::styled(
             format!(" {}", msg),
-            Style::default().fg(Color::Green),
+            Style::default().fg(ui.positive),
         )])
     } else {
         let help_text = if app.tab_count() > 1 {
@@ -72,10 +73,7 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         } else {
             " q - Quit | j/k - Navigate | g/G - Start/End | / - Filter | ? - Help"
         };
-        Line::from(vec![Span::styled(
-            help_text,
-            Style::default().fg(Color::DarkGray),
-        )])
+        Line::from(vec![Span::styled(help_text, Style::default().fg(ui.muted))])
     };
 
     let status_lines = vec![
@@ -93,6 +91,7 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
+    let ui = &app.theme.ui;
     let input = app.get_input();
 
     let label = app.current_filter_mode.prompt_label();
@@ -100,13 +99,13 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
 
     // Determine border color based on mode and validation state
     let border_color = if app.query_error.is_some() || app.regex_error.is_some() {
-        Color::Red
+        ui.filter_error
     } else if app.current_filter_mode.is_query() {
-        Color::Magenta
+        ui.filter_query
     } else if app.current_filter_mode.is_regex() {
-        Color::Cyan
+        ui.filter_regex
     } else {
-        Color::White
+        ui.filter_plain
     };
 
     // Build help text with mode hint showing next mode Tab will switch to
@@ -120,7 +119,7 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     let title = format!("Live Filter ({}, Enter to close, Esc to clear)", mode_hint);
 
     let input = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::Yellow))
+        .style(Style::default().fg(ui.primary))
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -138,10 +137,11 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(super) fn render_line_jump_prompt(f: &mut Frame, area: Rect, app: &App) {
+    let ui = &app.theme.ui;
     let input_text = format!(":{}", app.get_input());
 
     let input = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(ui.accent))
         .block(
             Block::default()
                 .borders(Borders::ALL)

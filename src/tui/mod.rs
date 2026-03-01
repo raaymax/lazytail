@@ -41,7 +41,15 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     app.layout.log_view = rect_to_layout(content_chunks[0]);
 
     if app.active_tab().source.mode == ViewMode::Aggregation {
-        aggregation_view::render_aggregation_view(f, content_chunks[0], app.active_tab_mut());
+        let ui = &app.theme.ui;
+        let tab = if let Some(cat) = app.active_combined {
+            app.combined_tabs[cat as usize]
+                .as_mut()
+                .expect("active_combined set but no combined tab for category")
+        } else {
+            &mut app.tabs[app.active_tab]
+        };
+        aggregation_view::render_aggregation_view(f, content_chunks[0], tab, ui);
     } else {
         log_view::render_log_view(f, content_chunks[0], app)?;
     }
@@ -61,7 +69,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 
     // Render help overlay on top of everything if active
     if let Some(scroll_offset) = app.help_scroll_offset {
-        help::render_help_overlay(f, f.area(), scroll_offset);
+        help::render_help_overlay(f, f.area(), scroll_offset, &app.theme.ui);
     }
 
     // Render close confirmation dialog on top of everything if active

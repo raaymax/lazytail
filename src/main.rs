@@ -14,6 +14,7 @@ mod reader;
 mod renderer;
 mod signal;
 mod source;
+mod theme;
 mod tui;
 #[cfg(feature = "self-update")]
 mod update;
@@ -339,6 +340,7 @@ fn main() -> Result<()> {
     let mut app = App::with_tabs(tabs, preset_registry);
     app.startup_time = Some(startup);
     app.verbose = verbose;
+    app.theme = cfg.theme;
     app.ensure_combined_tabs();
 
     // Setup terminal
@@ -463,6 +465,7 @@ fn run_discovery_mode(
     let mut app = App::with_tabs(tabs, preset_registry);
     app.startup_time = Some(startup);
     app.verbose = verbose;
+    app.theme = cfg.theme;
     app.ensure_combined_tabs();
 
     // Optionally set up directory watcher for new sources

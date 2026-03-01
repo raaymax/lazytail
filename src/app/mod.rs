@@ -230,6 +230,9 @@ pub struct App {
 
     /// Preset registry for rendering structured log lines
     pub preset_registry: Arc<PresetRegistry>,
+
+    /// Color theme for UI rendering
+    pub theme: crate::theme::Theme,
 }
 
 impl App {
@@ -279,6 +282,7 @@ impl App {
             verbose: false,
             layout: LayoutAreas::default(),
             preset_registry,
+            theme: crate::theme::Theme::dark(),
         }
     }
 

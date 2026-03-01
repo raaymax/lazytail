@@ -106,6 +106,16 @@ pub fn load_single_file(path: &Path) -> Result<SingleFileConfig, ConfigError> {
 /// Returns an empty Config if no config files exist (graceful degradation).
 pub fn load(discovery: &DiscoveryResult) -> Result<Config, ConfigError> {
     let mut config = Config::default();
+    let mut theme_raw: Option<crate::theme::RawThemeConfig> = None;
+
+    // Load global config if it exists (loaded first so project can override)
+    if let Some(global_path) = &discovery.global_config {
+        let raw = load_file(global_path)?;
+        config.global_sources = validate_sources(raw.sources);
+        config.update_check = raw.update_check;
+        theme_raw = raw.theme;
+        // Note: global name is ignored, project name takes precedence
+    }
 
     // Load project config if it exists
     if let Some(project_path) = &discovery.project_config {
@@ -113,15 +123,14 @@ pub fn load(discovery: &DiscoveryResult) -> Result<Config, ConfigError> {
         config.name = raw.name;
         config.project_sources = validate_sources(raw.sources);
         config.renderers = raw.renderers;
+        // Project theme overrides global theme (full override, not merge)
+        if raw.theme.is_some() {
+            theme_raw = raw.theme;
+        }
     }
 
-    // Load global config if it exists
-    if let Some(global_path) = &discovery.global_config {
-        let raw = load_file(global_path)?;
-        config.global_sources = validate_sources(raw.sources);
-        config.update_check = raw.update_check;
-        // Note: global name is ignored, project name takes precedence
-    }
+    // Resolve theme
+    config.theme = crate::theme::loader::resolve_theme(&theme_raw, &[])?;
 
     Ok(config)
 }

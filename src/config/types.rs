@@ -23,6 +23,9 @@ pub struct RawConfig {
     /// Rendering preset definitions.
     #[serde(default)]
     pub renderers: Vec<RawRendererDef>,
+    /// Theme configuration (name or custom struct).
+    #[serde(default)]
+    pub theme: Option<crate::theme::RawThemeConfig>,
 }
 
 /// Raw renderer definition from config file.
@@ -101,6 +104,8 @@ pub struct Config {
     pub update_check: Option<bool>,
     /// Raw renderer definitions (passed through to renderer compilation).
     pub renderers: Vec<RawRendererDef>,
+    /// Resolved theme.
+    pub theme: crate::theme::Theme,
 }
 
 impl Config {
