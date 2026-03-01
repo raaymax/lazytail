@@ -330,6 +330,23 @@ impl App {
         }
     }
 
+    /// Map a sidebar shortcut number (0-based) to the real tab index.
+    /// The sidebar assigns numbers in category order (via `tabs_by_category`),
+    /// skipping combined ($all) entries — this resolves the mapping.
+    pub fn tab_index_for_shortcut(&self, shortcut: usize) -> Option<usize> {
+        let categories = self.tabs_by_category();
+        let mut count = 0;
+        for (_, tab_indices) in &categories {
+            for &tab_idx in tab_indices {
+                if count == shortcut {
+                    return Some(tab_idx);
+                }
+                count += 1;
+            }
+        }
+        None
+    }
+
     /// Get the number of tabs
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
@@ -1208,7 +1225,11 @@ impl App {
             AppEvent::ViewportUp => self.viewport_up(),
 
             // Tab navigation events
-            AppEvent::SelectTab(index) => self.select_tab(index),
+            AppEvent::SelectTab(shortcut) => {
+                if let Some(tab_idx) = self.tab_index_for_shortcut(shortcut) {
+                    self.select_tab(tab_idx);
+                }
+            }
             AppEvent::CloseCurrentTab => {
                 if self.active_combined.is_none() {
                     let idx = self.active_tab;
@@ -2789,5 +2810,92 @@ mod tests {
         // Confirm should NOT close because name doesn't match
         app.apply_event(AppEvent::ConfirmCloseTab);
         assert_eq!(app.tabs.len(), 3);
+    }
+
+    #[test]
+    fn test_tab_index_for_shortcut_same_type() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let file3 = create_temp_log_file(&["c"]);
+
+        let app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        // All tabs are File type, so shortcut order matches insertion order
+        assert_eq!(app.tab_index_for_shortcut(0), Some(0));
+        assert_eq!(app.tab_index_for_shortcut(1), Some(1));
+        assert_eq!(app.tab_index_for_shortcut(2), Some(2));
+        assert_eq!(app.tab_index_for_shortcut(3), None);
+    }
+
+    #[test]
+    fn test_tab_index_for_shortcut_mixed_types() {
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let file3 = create_temp_log_file(&["c"]);
+
+        let mut app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        // tabs[0] = File (default), tabs[1] = ProjectSource, tabs[2] = GlobalSource
+        // Insertion order: [File, ProjectSource, GlobalSource]
+        app.tabs[1].config_source_type = Some(SourceType::ProjectSource);
+        app.tabs[2].config_source_type = Some(SourceType::GlobalSource);
+
+        // Category order: ProjectSource, GlobalSource, Global, File, Pipe
+        // So shortcut 0 → tabs[1] (ProjectSource), shortcut 1 → tabs[2] (GlobalSource),
+        // shortcut 2 → tabs[0] (File)
+        assert_eq!(app.tab_index_for_shortcut(0), Some(1));
+        assert_eq!(app.tab_index_for_shortcut(1), Some(2));
+        assert_eq!(app.tab_index_for_shortcut(2), Some(0));
+        assert_eq!(app.tab_index_for_shortcut(3), None);
+    }
+
+    #[test]
+    fn test_select_tab_uses_shortcut_mapping() {
+        use event::AppEvent;
+
+        let file1 = create_temp_log_file(&["a"]);
+        let file2 = create_temp_log_file(&["b"]);
+        let file3 = create_temp_log_file(&["c"]);
+
+        let mut app = App::new(
+            vec![
+                file1.path().to_path_buf(),
+                file2.path().to_path_buf(),
+                file3.path().to_path_buf(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        // tabs[0] = File, tabs[1] = ProjectSource, tabs[2] = File
+        app.tabs[1].config_source_type = Some(SourceType::ProjectSource);
+
+        // Shortcut 0 → tabs[1] (ProjectSource, first in category order)
+        app.apply_event(AppEvent::SelectTab(0));
+        assert_eq!(app.active_tab, 1);
+
+        // Shortcut 1 → tabs[0] (File, first File tab)
+        app.apply_event(AppEvent::SelectTab(1));
+        assert_eq!(app.active_tab, 0);
+
+        // Shortcut 2 → tabs[2] (File, second File tab)
+        app.apply_event(AppEvent::SelectTab(2));
+        assert_eq!(app.active_tab, 2);
     }
 }
