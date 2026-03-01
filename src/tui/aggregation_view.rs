@@ -21,7 +21,8 @@ pub(super) fn render_aggregation_view(
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ui.highlight))
-                .title("Aggregation: computing...");
+                .title("Aggregation: computing...")
+                .style(ui.bg_style());
             f.render_widget(block, area);
             return;
         }
@@ -80,9 +81,10 @@ pub(super) fn render_aggregation_view(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ui.highlight))
-        .title(title);
+        .title(title)
+        .style(ui.bg_style());
 
-    let list = List::new(items).block(block);
+    let list = List::new(items).style(ui.bg_style()).block(block);
     f.render_widget(list, area);
 }
 

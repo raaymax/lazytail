@@ -8,11 +8,14 @@ use crate::app::{App, InputMode, LayoutRect, ViewMode};
 use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    widgets::Clear,
+    widgets::{Block, Clear},
     Frame,
 };
 
 pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
+    let bg_block = Block::default().style(app.theme.ui.bg_style());
+    f.render_widget(bg_block, f.area());
+
     // Main horizontal layout: side panel + content area
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
