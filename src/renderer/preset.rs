@@ -274,8 +274,9 @@ fn resolve_style_fn(style_fn: &StyleFn, value: &str) -> SegmentStyle {
 fn apply_width(value: &str, width: Option<usize>) -> String {
     match width {
         Some(w) => {
-            if value.len() > w {
-                value[..w].to_string()
+            let char_count = value.chars().count();
+            if char_count > w {
+                value.chars().take(w).collect()
             } else {
                 format!("{:<width$}", value, width = w)
             }
