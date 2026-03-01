@@ -605,8 +605,9 @@ fn restore_last_source(app: &mut App, project_root: Option<&std::path::Path>) {
 
 /// Save the active source name to session.
 fn save_active_source(app: &App, project_root: Option<&std::path::Path>) {
-    let name = &app.tabs[app.active_tab].source.name;
-    session::save_last_source(project_root, name);
+    if let Some(tab) = app.tabs.get(app.active_tab) {
+        session::save_last_source(project_root, &tab.source.name);
+    }
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {

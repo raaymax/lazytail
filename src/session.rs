@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(not(test))]
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(test))]
+use std::path::PathBuf;
 
 /// Maximum number of context entries to keep in the session file.
 const MAX_CONTEXTS: usize = 100;
@@ -19,6 +22,7 @@ struct ContextEntry {
     last_source: String,
 }
 
+#[cfg(not(test))]
 fn session_file_path() -> Option<PathBuf> {
     crate::source::lazytail_dir().map(|p| p.join("session.json"))
 }
