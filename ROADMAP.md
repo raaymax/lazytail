@@ -296,6 +296,7 @@
 
 ### Backlog / Ideas
 
+- [ ] Store per-file indexes in `.lazytail/` (project) or `~/.config/lazytail/` (global) instead of next to the log file — avoids polluting working directories with `.idx/` folders when opening files directly
 - [ ] Memory-only mode with streaming (no file)
 - [ ] Merged chronological view across sources (timestamp parsing + source-colored lines)
 - [ ] Filter across all tabs simultaneously
