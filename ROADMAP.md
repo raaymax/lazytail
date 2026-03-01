@@ -240,6 +240,7 @@
 
 ### Capture Mode
 
+- [ ] Keybinding to rebuild/reindex the current source's columnar index (useful when index is stale or corrupted) 🟡
 - [ ] Truncate log file by default on `lazytail -n` (add `--append`/`-a` to keep old behavior) 🟡
 - [ ] Session ID per capture run (UUID in marker + log boundary marker + filter by session) 🟡
 - [ ] `--file <path>` for custom log file location 🟡

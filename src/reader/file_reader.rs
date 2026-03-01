@@ -97,6 +97,22 @@ impl FileReader {
             _ => return false,
         };
 
+        // Spot-check: verify indexed offsets align with actual newlines in the file.
+        // Catches stale indexes when a log file was deleted and recreated with different content.
+        if indexed_lines >= 2 {
+            if offsets.get(0) != Some(0) {
+                return false;
+            }
+            if let Some(next_offset) = offsets.get(1) {
+                if next_offset > 0 && self.reader.seek(SeekFrom::Start(next_offset - 1)).is_ok() {
+                    let mut buf = [0u8; 1];
+                    if self.reader.read_exact(&mut buf).is_ok() && buf[0] != b'\n' {
+                        return false;
+                    }
+                }
+            }
+        }
+
         // Keep the full mmap-backed offsets column for O(1) line access.
         // For lines beyond the indexed range (file grew), sparse index handles the tail.
         self.columnar_offsets = Some(offsets);
@@ -929,6 +945,54 @@ mod tests {
         assert_eq!(reader.total_lines(), 2);
         assert_eq!(reader.get_line(0)?.unwrap(), "Fresh line 0");
         assert_eq!(reader.get_line(1)?.unwrap(), "Fresh line 1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_stale_index_rejected_on_file_replacement() -> Result<()> {
+        use crate::index::builder::IndexBuilder;
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Write original content and build index
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..50 {
+                writeln!(f, "Original line {}", i)?;
+            }
+            f.flush()?;
+        }
+        let idx_dir = index_dir_for_log(&log_path);
+        IndexBuilder::new().build(&log_path, &idx_dir)?;
+
+        // Replace the file with DIFFERENT content (same or larger size)
+        // This simulates deleting and recreating the log file
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..100 {
+                writeln!(f, "Completely different content line {}", i)?;
+            }
+            f.flush()?;
+        }
+
+        // Open reader — stale index should be rejected, content should be correct
+        let mut reader = FileReader::new(&log_path)?;
+        assert!(
+            reader.columnar_offsets.is_none(),
+            "stale index should be rejected"
+        );
+        assert_eq!(reader.total_lines(), 100);
+        assert_eq!(
+            reader.get_line(0)?.unwrap(),
+            "Completely different content line 0"
+        );
+        assert_eq!(
+            reader.get_line(99)?.unwrap(),
+            "Completely different content line 99"
+        );
 
         Ok(())
     }
