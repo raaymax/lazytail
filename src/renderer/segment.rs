@@ -14,6 +14,12 @@ pub enum SegmentStyle {
     Bold,
     Italic,
     Fg(SegmentColor),
+    Compound {
+        dim: bool,
+        bold: bool,
+        italic: bool,
+        fg: Option<SegmentColor>,
+    },
 }
 
 /// Named colors for segment styling.
@@ -60,6 +66,27 @@ pub fn to_ratatui_style(style: &SegmentStyle) -> Style {
         SegmentStyle::Bold => Style::default().add_modifier(Modifier::BOLD),
         SegmentStyle::Italic => Style::default().add_modifier(Modifier::ITALIC),
         SegmentStyle::Fg(color) => Style::default().fg(segment_color_to_ratatui(color)),
+        SegmentStyle::Compound {
+            dim,
+            bold,
+            italic,
+            fg,
+        } => {
+            let mut style = Style::default();
+            if *dim {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            if *bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if *italic {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if let Some(color) = fg {
+                style = style.fg(segment_color_to_ratatui(color));
+            }
+            style
+        }
     }
 }
 
@@ -130,5 +157,31 @@ mod tests {
     fn test_to_ratatui_style_bold() {
         let style = to_ratatui_style(&SegmentStyle::Bold);
         assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_to_ratatui_style_compound() {
+        let style = to_ratatui_style(&SegmentStyle::Compound {
+            dim: true,
+            bold: true,
+            italic: false,
+            fg: Some(SegmentColor::Cyan),
+        });
+        assert!(style.add_modifier.contains(Modifier::DIM));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(!style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(style.fg, Some(ratatui::style::Color::Cyan));
+    }
+
+    #[test]
+    fn test_to_ratatui_style_compound_no_fg() {
+        let style = to_ratatui_style(&SegmentStyle::Compound {
+            dim: false,
+            bold: true,
+            italic: false,
+            fg: None,
+        });
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(style.fg.is_none());
     }
 }

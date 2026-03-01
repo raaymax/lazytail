@@ -12,6 +12,23 @@ const ROOT_FIELDS: &[&str] = &["name", "sources", "update_check", "renderers", "
 /// Known fields for source entries.
 const SOURCE_FIELDS: &[&str] = &["name", "path", "renderers"];
 
+/// Known fields for layout entries.
+const LAYOUT_FIELDS: &[&str] = &[
+    "field",
+    "literal",
+    "style",
+    "width",
+    "format",
+    "style_map",
+    "max_width",
+];
+
+/// Known fields for renderer entries.
+const RENDERER_FIELDS: &[&str] = &["name", "detect", "regex", "layout"];
+
+/// Known fields for detect entries.
+const DETECT_FIELDS: &[&str] = &["parser", "filename"];
+
 /// Similarity threshold for suggestions (0.0 - 1.0).
 /// 0.8 is a good balance between catching typos and avoiding false positives.
 const SIMILARITY_THRESHOLD: f64 = 0.8;
@@ -163,7 +180,12 @@ fn extract_unknown_field(error_msg: &str) -> Option<String> {
 ///
 /// Checks both root fields and source fields, returning the best match above threshold.
 fn find_suggestion(unknown_field: &str) -> Option<String> {
-    let all_fields = ROOT_FIELDS.iter().chain(SOURCE_FIELDS.iter());
+    let all_fields = ROOT_FIELDS
+        .iter()
+        .chain(SOURCE_FIELDS.iter())
+        .chain(LAYOUT_FIELDS.iter())
+        .chain(RENDERER_FIELDS.iter())
+        .chain(DETECT_FIELDS.iter());
 
     let mut best_match: Option<(&str, f64)> = None;
 
@@ -311,5 +333,17 @@ mod tests {
         let display = error.to_string();
         assert!(display.contains("empty source name"));
         assert!(display.contains("/test/config.yaml"));
+    }
+
+    #[test]
+    fn test_find_suggestion_style_map() {
+        let suggestion = find_suggestion("style_mp");
+        assert_eq!(suggestion, Some("style_map".to_string()));
+    }
+
+    #[test]
+    fn test_find_suggestion_max_width() {
+        let suggestion = find_suggestion("max_wdth");
+        assert_eq!(suggestion, Some("max_width".to_string()));
     }
 }
