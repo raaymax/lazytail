@@ -305,18 +305,7 @@ src/theme/
 
 ## Known Issues
 
-### Light theme: text nearly invisible, background still dark
-
-When using `base: light`, the light palette's `foreground` and `background` colors are set on the `Palette` struct and flow into `UiColors` via `derive_ui_colors()`, but ratatui renders text against the **terminal's own background**, not the palette's `background`. The palette `background` field is never actually applied to any widget — it only influences `is_background_light()` for severity background derivation and `popup_bg` selection.
-
-Result: `base: light` sets `fg` to black and `muted` to dark_gray, but the terminal background stays dark → black-on-dark text is unreadable. The palette `foreground`/`background` create an illusion of control that doesn't match what the terminal actually shows.
-
-**Root cause:** LazyTail doesn't paint its own background — it relies on the terminal's background color. The light palette assumes a light terminal background but can't enforce it.
-
-**Possible fixes:**
-1. Paint explicit `bg()` on all rendered widgets using `palette.background` (invasive, affects every render call)
-2. Remove `background` from palette — don't pretend we control it. Instead, document that `base: light` is for terminals with light backgrounds
-3. Add a `force_background: true` option that paints `palette.background` on the root widget only (ratatui `Clear` with bg color)
+None currently. Previous issue with light theme background was resolved in #58 — `palette.background` is now applied via `UiColors::bg_style()` on all widget blocks and a root-level background block in `src/tui/mod.rs`.
 
 ## Open Questions
 
