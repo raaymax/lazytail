@@ -12,6 +12,7 @@ pub struct SourceEntry {
     pub index_reader: Option<IndexReader>,
     pub source_path: Option<PathBuf>,
     pub total_lines: usize,
+    pub renderer_names: Vec<String>,
 }
 
 /// A merged line reference: which source, which line in that source.
@@ -87,6 +88,14 @@ impl CombinedReader {
         Some((name, color))
     }
 
+    /// Get the renderer_names for the source that owns a given virtual line.
+    pub fn renderer_names(&self, virtual_idx: usize) -> &[String] {
+        let Some(m) = self.merged.get(virtual_idx) else {
+            return &[];
+        };
+        &self.sources[m.source_id].renderer_names
+    }
+
     /// Get severity for a virtual line from the originating source's IndexReader.
     pub fn severity(&self, virtual_idx: usize) -> Severity {
         let Some(m) = self.merged.get(virtual_idx) else {
@@ -153,6 +162,7 @@ mod tests {
             index_reader: None,
             source_path: None,
             total_lines,
+            renderer_names: Vec::new(),
         }
     }
 

@@ -1,6 +1,7 @@
 use crate::app::{App, FilterState, InputMode, TabState, ViewMode};
 use crate::index::flags::Severity;
 use crate::reader::combined_reader::CombinedReader;
+use crate::renderer::segment::{to_ratatui_style, StyledSegment};
 use crate::theme::UiColors;
 use anyhow::Result;
 use ratatui::{
@@ -65,6 +66,9 @@ fn expand_tabs(line: &str) -> String {
 }
 
 pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Result<()> {
+    // Clone preset_registry before mutable borrow of app
+    let preset_registry = app.preset_registry.clone();
+
     let ui = &app.theme.ui;
     let tab = if let Some(cat) = app.active_combined {
         app.combined_tabs[cat as usize]
@@ -98,6 +102,14 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         LINE_PREFIX_WIDTH
     };
     let content_width = available_width.saturating_sub(prefix_width);
+
+    // Preset rendering setup
+    let tab_renderer_names = tab.source.renderer_names.clone();
+    let tab_filename = tab
+        .source
+        .source_path
+        .as_ref()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
     // Get reader access and collect snapshots for rendering
     let mut reader_guard = tab.source.reader.lock().unwrap();
@@ -256,8 +268,28 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 items.push(ListItem::new(item_lines));
             } else {
                 // Not expanded: single line (truncated if too long)
-                let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
-                    .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+
+                // Try preset rendering first
+                let line_flags: Option<u32> = if is_combined {
+                    None // Combined view doesn't have per-line flags yet
+                } else {
+                    index_reader.and_then(|ir| ir.flags(line_number))
+                };
+
+                let renderer_names = if is_combined {
+                    let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
+                    combined
+                        .map(|c| c.renderer_names(line_number))
+                        .unwrap_or(&[])
+                } else {
+                    &tab_renderer_names
+                };
+
+                let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty() {
+                    preset_registry.render_line(&raw_line, renderer_names, line_flags)
+                } else {
+                    preset_registry.render_line_auto(&raw_line, tab_filename.as_deref(), line_flags)
+                };
 
                 let mut final_line = Line::default();
 
@@ -272,11 +304,23 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 final_line.spans.push(Span::raw(line_num_part.clone()));
                 final_line.spans.push(Span::raw(line_sep_part));
 
-                if let Some(first_line) = parsed_text.lines.first() {
-                    for span in &first_line.spans {
+                if let Some(segments) = preset_segments {
+                    // Use preset-rendered spans
+                    for seg in &segments {
                         final_line
                             .spans
-                            .push(Span::styled(span.content.to_string(), span.style));
+                            .push(Span::styled(seg.text.clone(), to_ratatui_style(&seg.style)));
+                    }
+                } else {
+                    // Fallback to ANSI parsing
+                    let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+                        .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+                    if let Some(first_line) = parsed_text.lines.first() {
+                        for span in &first_line.spans {
+                            final_line
+                                .spans
+                                .push(Span::styled(span.content.to_string(), span.style));
+                        }
                     }
                 }
 

@@ -188,6 +188,7 @@ impl TabState {
                     index_size,
                     rate_tracker: LineRateTracker::new(total_lines),
                     aggregation_result: None,
+                    renderer_names: Vec::new(),
                 },
                 scroll_position: 0,
                 selected_line,
@@ -227,6 +228,7 @@ impl TabState {
                     index_size: None,
                     rate_tracker: LineRateTracker::new(0),
                     aggregation_result: None,
+                    renderer_names: Vec::new(),
                 },
                 scroll_position: 0,
                 selected_line: 0,
@@ -269,6 +271,7 @@ impl TabState {
                 index_size: None,
                 rate_tracker: LineRateTracker::new(0),
                 aggregation_result: None,
+                renderer_names: Vec::new(),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -319,6 +322,7 @@ impl TabState {
                 index_size,
                 rate_tracker: LineRateTracker::new(total_lines),
                 aggregation_result: None,
+                renderer_names: Vec::new(),
             },
             scroll_position: 0,
             selected_line,
@@ -340,26 +344,36 @@ impl TabState {
     ///
     /// If the source file doesn't exist, creates a disabled placeholder tab.
     /// Otherwise creates a normal file tab with the config source type set.
+    /// Sources without a path (metadata-only) return None.
     pub fn from_config_source(
         source: &config::Source,
         source_type: SourceType,
         watch: bool,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
+        let path = match &source.path {
+            Some(p) => p,
+            None => return Ok(None), // Metadata-only source, skip tab creation
+        };
+
         // If source doesn't exist, create disabled placeholder tab
         if !source.exists {
-            return Self::disabled_source(source.name.clone(), source.path.clone(), source_type);
+            return Ok(Some(Self::disabled_source(
+                source.name.clone(),
+                path.clone(),
+                source_type,
+            )?));
         }
 
         // Create normal file tab
-        let file_reader = FileReader::new(&source.path)?;
-        let index_reader = IndexReader::open(&source.path);
-        let file_size = std::fs::metadata(&source.path).map(|m| m.len()).ok();
+        let file_reader = FileReader::new(path)?;
+        let index_reader = IndexReader::open(path);
+        let file_size = std::fs::metadata(path).map(|m| m.len()).ok();
         let index_size = index_reader
             .as_ref()
-            .and_then(|_| calculate_index_size(&source.path));
+            .and_then(|_| calculate_index_size(path));
 
         let watcher = if watch {
-            FileWatcher::new(&source.path).ok()
+            FileWatcher::new(path).ok()
         } else {
             None
         };
@@ -368,10 +382,10 @@ impl TabState {
         let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
 
-        Ok(Self {
+        Ok(Some(Self {
             source: LogSource {
                 name: source.name.clone(),
-                source_path: Some(source.path.clone()),
+                source_path: Some(path.clone()),
                 mode: ViewMode::Normal,
                 total_lines,
                 line_indices,
@@ -385,6 +399,7 @@ impl TabState {
                 index_size,
                 rate_tracker: LineRateTracker::new(total_lines),
                 aggregation_result: None,
+                renderer_names: source.renderer_names.clone(),
             },
             scroll_position: 0,
             selected_line,
@@ -396,7 +411,7 @@ impl TabState {
             stream_receiver: None,
             config_source_type: Some(source_type),
             aggregation_view: AggregationViewState::default(),
-        })
+        }))
     }
 
     /// Create a disabled tab for a missing source (shown grayed out in UI).
@@ -422,6 +437,7 @@ impl TabState {
                 index_size: None,
                 rate_tracker: LineRateTracker::new(0),
                 aggregation_result: None,
+                renderer_names: Vec::new(),
             },
             scroll_position: 0,
             selected_line: 0,
@@ -464,6 +480,7 @@ impl TabState {
                 index_size: None,
                 rate_tracker: LineRateTracker::new(total_lines),
                 aggregation_result: None,
+                renderer_names: Vec::new(),
             },
             scroll_position: 0,
             selected_line,

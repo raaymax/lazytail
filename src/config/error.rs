@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use strsim::jaro_winkler;
 
 /// Known fields for root config.
-const ROOT_FIELDS: &[&str] = &["name", "sources", "update_check", "theme"];
+const ROOT_FIELDS: &[&str] = &["name", "sources", "update_check", "renderers", "theme"];
 
 /// Known fields for source entries.
-const SOURCE_FIELDS: &[&str] = &["name", "path"];
+const SOURCE_FIELDS: &[&str] = &["name", "path", "renderers"];
 
 /// Similarity threshold for suggestions (0.0 - 1.0).
 /// 0.8 is a good balance between catching typos and avoiding false positives.
@@ -241,6 +241,12 @@ mod tests {
         // "souces" is similar to "sources"
         let suggestion = find_suggestion("souces");
         assert_eq!(suggestion, Some("sources".to_string()));
+    }
+
+    #[test]
+    fn test_find_suggestion_renderers() {
+        let suggestion = find_suggestion("renderer");
+        assert_eq!(suggestion, Some("renderers".to_string()));
     }
 
     #[test]
