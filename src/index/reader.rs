@@ -198,6 +198,32 @@ impl IndexReader {
         let idx_dir = index_dir_for_log(log_path);
         let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
 
+        // Validate index against actual file — reject stale indexes
+        let file_size = std::fs::metadata(log_path).ok()?.len();
+        if file_size < meta.log_file_size {
+            return None;
+        }
+        if meta.entry_count >= 2 && meta.has_column(ColumnBit::Offsets) {
+            let offsets =
+                ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize)
+                    .ok()?;
+            if offsets.get(0) != Some(0) {
+                return None;
+            }
+            if let Some(next_offset) = offsets.get(1) {
+                if next_offset > 0 {
+                    let mut file = std::fs::File::open(log_path).ok()?;
+                    use std::io::{Read, Seek, SeekFrom};
+                    file.seek(SeekFrom::Start(next_offset - 1)).ok()?;
+                    let mut buf = [0u8; 1];
+                    file.read_exact(&mut buf).ok()?;
+                    if buf[0] != b'\n' {
+                        return None;
+                    }
+                }
+            }
+        }
+
         let column_names = [
             (ColumnBit::Offsets, "offsets"),
             (ColumnBit::Lengths, "lengths"),
@@ -273,6 +299,7 @@ impl IndexReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::column::ColumnWriter;
     use crate::index::flags::*;
 
     fn reader_from(flags_data: &[u32]) -> IndexReader {
@@ -390,5 +417,109 @@ mod tests {
         let bitmap = reader.candidate_bitmap(mask, want, flags_data.len());
 
         assert_eq!(bitmap, vec![true, false, false, true]);
+    }
+
+    // --- stats() stale index validation ---
+
+    /// Helper: create a log file and its index directory with offsets + flags columns.
+    fn create_indexed_log(dir: &Path, content: &str) -> std::path::PathBuf {
+        let log_path = dir.join("test.log");
+        std::fs::write(&log_path, content).unwrap();
+
+        let idx_dir = index_dir_for_log(&log_path);
+        std::fs::create_dir_all(&idx_dir).unwrap();
+
+        let lines: Vec<&str> = content.split('\n').collect();
+        // Don't count trailing empty split
+        let line_count = if content.ends_with('\n') {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+
+        // Write offsets column
+        let mut offsets = ColumnWriter::<u64>::create(idx_dir.join("offsets")).unwrap();
+        let mut offset = 0u64;
+        for i in 0..line_count {
+            offsets.push(offset).unwrap();
+            offset += lines[i].len() as u64 + 1; // +1 for newline
+        }
+        drop(offsets);
+
+        // Write flags column
+        let mut flags = ColumnWriter::<u32>::create(idx_dir.join("flags")).unwrap();
+        for _ in 0..line_count {
+            flags.push(SEVERITY_INFO).unwrap();
+        }
+        drop(flags);
+
+        // Write meta
+        let mut meta = IndexMeta::new();
+        meta.entry_count = line_count as u64;
+        meta.log_file_size = content.len() as u64;
+        meta.set_column(ColumnBit::Offsets);
+        meta.set_column(ColumnBit::Flags);
+        meta.write_to(idx_dir.join("meta")).unwrap();
+
+        log_path
+    }
+
+    #[test]
+    fn test_stats_valid_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "line one\nline two\nline three\n";
+        let log_path = create_indexed_log(dir.path(), content);
+
+        let stats = IndexReader::stats(&log_path);
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        assert_eq!(stats.indexed_lines, 3);
+    }
+
+    #[test]
+    fn test_stats_rejects_stale_index_after_file_shrink() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "line one\nline two\nline three\n";
+        let log_path = create_indexed_log(dir.path(), content);
+
+        // Replace log with shorter content — index is now stale
+        std::fs::write(&log_path, "short\n").unwrap();
+
+        assert!(IndexReader::stats(&log_path).is_none());
+    }
+
+    #[test]
+    fn test_stats_rejects_stale_index_after_content_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "line one\nline two\nline three\n";
+        let log_path = create_indexed_log(dir.path(), content);
+
+        // Replace log with same-size content but no newline at the indexed offset.
+        // Original has '\n' at byte 8; replacement has 'X' there.
+        let replacement = "X".repeat(content.len() - 1) + "\n";
+        assert_eq!(replacement.len(), content.len());
+        std::fs::write(&log_path, &replacement).unwrap();
+
+        assert!(IndexReader::stats(&log_path).is_none());
+    }
+
+    #[test]
+    fn test_stats_accepts_grown_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "line one\nline two\nline three\n";
+        let log_path = create_indexed_log(dir.path(), content);
+
+        // Append more data — file grew, but index is still valid for existing lines
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        write!(f, "line four\n").unwrap();
+        drop(f);
+
+        let stats = IndexReader::stats(&log_path);
+        assert!(stats.is_some());
+        assert_eq!(stats.unwrap().indexed_lines, 3);
     }
 }
