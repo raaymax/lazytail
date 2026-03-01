@@ -200,6 +200,12 @@ pub fn collect_themes_dirs(project_root: Option<&std::path::Path>) -> Vec<PathBu
         if project_themes.is_dir() {
             dirs.push(project_themes);
         }
+
+        // Repo-bundled themes: {project_root}/themes/
+        let repo_themes = root.join("themes");
+        if repo_themes.is_dir() {
+            dirs.push(repo_themes);
+        }
     }
 
     // Global themes dir: ~/.config/lazytail/themes/
@@ -505,5 +511,27 @@ mod tests {
 
         let dirs = collect_themes_dirs(Some(temp.path()));
         assert!(dirs.contains(&themes_dir));
+
+        // Also verify repo-bundled themes/ dir is included
+        let repo_themes = temp.path().join("themes");
+        fs::create_dir_all(&repo_themes).unwrap();
+        let dirs = collect_themes_dirs(Some(temp.path()));
+        assert!(dirs.contains(&themes_dir));
+        assert!(dirs.contains(&repo_themes));
+        // Verify priority: .lazytail/themes/ comes before themes/
+        let pos_project = dirs.iter().position(|d| d == &themes_dir).unwrap();
+        let pos_repo = dirs.iter().position(|d| d == &repo_themes).unwrap();
+        assert!(pos_project < pos_repo);
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp directory
+    fn test_collect_themes_dirs_repo_themes_only() {
+        let temp = TempDir::new().unwrap();
+        let repo_themes = temp.path().join("themes");
+        fs::create_dir_all(&repo_themes).unwrap();
+
+        let dirs = collect_themes_dirs(Some(temp.path()));
+        assert!(dirs.contains(&repo_themes));
     }
 }
