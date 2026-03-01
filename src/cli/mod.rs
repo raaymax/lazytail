@@ -5,6 +5,7 @@
 pub mod bench;
 pub mod config;
 pub mod init;
+pub mod theme;
 #[cfg(feature = "self-update")]
 pub mod update;
 
@@ -27,6 +28,12 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Theme management commands
+    Theme {
+        #[command(subcommand)]
+        action: ThemeAction,
     },
 
     /// Check for and install updates
@@ -94,6 +101,27 @@ pub enum ConfigAction {
     Validate,
     /// Show effective configuration
     Show,
+}
+
+/// Theme subcommand actions.
+#[derive(Subcommand, Debug)]
+pub enum ThemeAction {
+    /// Import a Windows Terminal JSON color scheme
+    Import(ImportArgs),
+    /// List available themes
+    List,
+}
+
+/// Arguments for the theme import subcommand.
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    /// Windows Terminal JSON color scheme file
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// Theme name (defaults to filename stem)
+    #[arg(long)]
+    pub name: Option<String>,
 }
 
 /// Arguments for the web subcommand.

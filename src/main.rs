@@ -134,6 +134,12 @@ fn main() -> Result<()> {
                 cli::ConfigAction::Show => cli::config::show()
                     .map_err(|code| anyhow::anyhow!("config show failed with exit code {}", code)),
             },
+            cli::Commands::Theme { action } => match action {
+                cli::ThemeAction::Import(args) => cli::theme::run_import(args)
+                    .map_err(|code| anyhow::anyhow!("theme import failed with exit code {}", code)),
+                cli::ThemeAction::List => cli::theme::run_list()
+                    .map_err(|code| anyhow::anyhow!("theme list failed with exit code {}", code)),
+            },
             #[cfg(feature = "self-update")]
             cli::Commands::Update(args) => cli::update::run(args.check)
                 .map_err(|code| anyhow::anyhow!("update failed with exit code {}", code)),
