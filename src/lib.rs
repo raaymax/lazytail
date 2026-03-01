@@ -4,3 +4,4 @@
 pub mod config;
 pub mod index;
 pub mod source;
+pub mod theme;
