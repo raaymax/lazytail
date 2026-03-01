@@ -287,7 +287,11 @@ impl TabState {
     }
 
     /// Create a new tab from a discovered source
-    pub fn from_discovered_source(source: DiscoveredSource, watch: bool) -> Result<Self> {
+    pub fn from_discovered_source(
+        source: DiscoveredSource,
+        watch: bool,
+        renderer_names: Vec<String>,
+    ) -> Result<Self> {
         let file_reader = FileReader::new(&source.log_path)?;
         let index_reader = IndexReader::open(&source.log_path);
         let file_size = std::fs::metadata(&source.log_path).map(|m| m.len()).ok();
@@ -322,7 +326,7 @@ impl TabState {
                 index_size,
                 rate_tracker: LineRateTracker::new(total_lines),
                 aggregation_result: None,
-                renderer_names: Vec::new(),
+                renderer_names,
             },
             scroll_position: 0,
             selected_line,

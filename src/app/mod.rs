@@ -11,6 +11,7 @@ use crate::filter::{FilterHistoryEntry, FilterMode};
 use crate::history;
 use crate::renderer::PresetRegistry;
 use crate::source::{self, SourceStatus};
+use std::collections::HashMap;
 #[cfg(test)]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -233,6 +234,10 @@ pub struct App {
 
     /// Color theme for UI rendering
     pub theme: crate::theme::Theme,
+
+    /// Map from source name to renderer preset names (from config).
+    /// Used to assign renderers to dynamically discovered sources.
+    pub source_renderer_map: HashMap<String, Vec<String>>,
 }
 
 impl App {
@@ -283,6 +288,7 @@ impl App {
             layout: LayoutAreas::default(),
             preset_registry,
             theme: crate::theme::Theme::dark(),
+            source_renderer_map: HashMap::new(),
         }
     }
 

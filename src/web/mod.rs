@@ -286,9 +286,11 @@ impl WebState {
                             location: self.watched_location.unwrap_or(SourceLocation::Global),
                         };
 
-                        if let Ok(tab) =
-                            TabState::from_discovered_source(discovered, self.watch_enabled)
-                        {
+                        if let Ok(tab) = TabState::from_discovered_source(
+                            discovered,
+                            self.watch_enabled,
+                            Vec::new(),
+                        ) {
                             self.tabs.push(tab);
                             changed = true;
                         }
@@ -669,7 +671,7 @@ fn build_initial_tabs(files: &[PathBuf], watch: bool, verbose: bool) -> Result<I
         let discovered = source::discover_sources_for_context(&discovery)
             .context("Failed to discover sources")?;
         for src in discovered {
-            if let Ok(tab) = TabState::from_discovered_source(src, watch) {
+            if let Ok(tab) = TabState::from_discovered_source(src, watch, Vec::new()) {
                 tabs.push(tab);
             }
         }

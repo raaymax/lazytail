@@ -414,6 +414,15 @@ fn run_discovery_mode(
     // Compile rendering presets from config
     let preset_registry = compile_preset_registry(&cfg, &mut config_errors);
 
+    // Build source name → renderer_names map from config sources
+    let source_renderer_map: std::collections::HashMap<String, Vec<String>> = cfg
+        .project_sources
+        .iter()
+        .chain(cfg.global_sources.iter())
+        .filter(|s| !s.renderer_names.is_empty())
+        .map(|s| (s.name.clone(), s.renderer_names.clone()))
+        .collect();
+
     // Build tabs from config sources first
     phase = Instant::now();
     let mut tabs = Vec::new();
@@ -436,10 +445,16 @@ fn run_discovery_mode(
         }
     }
 
-    // Add discovered sources
+    // Add discovered sources (with renderer_names from config if available)
     let discovery_tabs: Vec<TabState> = sources
         .into_iter()
-        .filter_map(|s| TabState::from_discovered_source(s, watch).ok())
+        .filter_map(|s| {
+            let renderers = source_renderer_map
+                .get(&s.name)
+                .cloned()
+                .unwrap_or_default();
+            TabState::from_discovered_source(s, watch, renderers).ok()
+        })
         .collect();
     tabs.extend(discovery_tabs);
     if verbose {
@@ -466,6 +481,7 @@ fn run_discovery_mode(
     app.startup_time = Some(startup);
     app.verbose = verbose;
     app.theme = cfg.theme;
+    app.source_renderer_map = source_renderer_map;
     app.ensure_combined_tabs();
 
     // Optionally set up directory watcher for new sources
@@ -623,7 +639,14 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     location: watched_location
                                         .unwrap_or(source::SourceLocation::Global),
                                 };
-                                if let Ok(tab) = TabState::from_discovered_source(source, true) {
+                                let renderers = app
+                                    .source_renderer_map
+                                    .get(&source.name)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                if let Ok(tab) =
+                                    TabState::from_discovered_source(source, true, renderers)
+                                {
                                     app.add_tab(tab);
                                     app.ensure_combined_tabs();
                                 }
