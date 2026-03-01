@@ -1,0 +1,23 @@
+# NightLion v2 — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#4c4c4c"
+  red: "#bb0000"
+  green: "#04f623"
+  yellow: "#f3f167"
+  blue: "#64d0f0"
+  magenta: "#ce6fdb"
+  cyan: "#00dadf"
+  white: "#bbbbbb"
+  bright_black: "#555555"
+  bright_red: "#ff5555"
+  bright_green: "#7df71d"
+  bright_yellow: "#ffff55"
+  bright_blue: "#62cbe8"
+  bright_magenta: "#ff9bf5"
+  bright_cyan: "#00ccd8"
+  bright_white: "#ffffff"
+  foreground: "#bbbbbb"
+  background: "#171717"
+  selection: "#b5d5ff"

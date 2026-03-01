@@ -1,0 +1,23 @@
+# Tomorrow Night Blue — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#ff9da4"
+  green: "#d1f1a9"
+  yellow: "#ffeead"
+  blue: "#bbdaff"
+  magenta: "#ebbbff"
+  cyan: "#99ffff"
+  white: "#ffffff"
+  bright_black: "#000000"
+  bright_red: "#ff9da4"
+  bright_green: "#d1f1a9"
+  bright_yellow: "#ffeead"
+  bright_blue: "#bbdaff"
+  bright_magenta: "#ebbbff"
+  bright_cyan: "#99ffff"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#002451"
+  selection: "#003f8e"

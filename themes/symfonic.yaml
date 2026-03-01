@@ -1,0 +1,23 @@
+# Symfonic — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#dc322f"
+  green: "#56db3a"
+  yellow: "#ff8400"
+  blue: "#0084d4"
+  magenta: "#b729d9"
+  cyan: "#ccccff"
+  white: "#ffffff"
+  bright_black: "#1b1d21"
+  bright_red: "#dc322f"
+  bright_green: "#56db3a"
+  bright_yellow: "#ff8400"
+  bright_blue: "#0084d4"
+  bright_magenta: "#b729d9"
+  bright_cyan: "#ccccff"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#000000"
+  selection: "#073642"

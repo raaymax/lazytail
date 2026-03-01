@@ -1,0 +1,23 @@
+# Solarized Darcula — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#25292a"
+  red: "#f24840"
+  green: "#629655"
+  yellow: "#b68800"
+  blue: "#2075c7"
+  magenta: "#797fd4"
+  cyan: "#15968d"
+  white: "#d2d8d9"
+  bright_black: "#25292a"
+  bright_red: "#f24840"
+  bright_green: "#629655"
+  bright_yellow: "#b68800"
+  bright_blue: "#2075c7"
+  bright_magenta: "#797fd4"
+  bright_cyan: "#15968d"
+  bright_white: "#d2d8d9"
+  foreground: "#d2d8d9"
+  background: "#3d3f41"
+  selection: "#214283"

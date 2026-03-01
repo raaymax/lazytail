@@ -1,0 +1,23 @@
+# Obsidian — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#a60001"
+  green: "#00bb00"
+  yellow: "#fecd22"
+  blue: "#3a9bdb"
+  magenta: "#bb00bb"
+  cyan: "#00bbbb"
+  white: "#bbbbbb"
+  bright_black: "#555555"
+  bright_red: "#ff0003"
+  bright_green: "#93c863"
+  bright_yellow: "#fef874"
+  bright_blue: "#a1d7ff"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#55ffff"
+  bright_white: "#ffffff"
+  foreground: "#cdcdcd"
+  background: "#283033"
+  selection: "#3e4c4f"

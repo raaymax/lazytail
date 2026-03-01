@@ -1,0 +1,23 @@
+# Thayer Bright — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#1b1d1e"
+  red: "#f92672"
+  green: "#4df840"
+  yellow: "#f4fd22"
+  blue: "#2757d6"
+  magenta: "#8c54fe"
+  cyan: "#38c8b5"
+  white: "#ccccc6"
+  bright_black: "#505354"
+  bright_red: "#ff5995"
+  bright_green: "#b6e354"
+  bright_yellow: "#feed6c"
+  bright_blue: "#3f78ff"
+  bright_magenta: "#9e6ffe"
+  bright_cyan: "#23cfd5"
+  bright_white: "#f8f8f2"
+  foreground: "#f8f8f8"
+  background: "#1b1d1e"
+  selection: "#4d4d4d"

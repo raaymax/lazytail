@@ -1,0 +1,23 @@
+# IR_Black — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#4f4f4f"
+  red: "#fa6c60"
+  green: "#a8ff60"
+  yellow: "#fffeb7"
+  blue: "#96cafe"
+  magenta: "#fa73fd"
+  cyan: "#c6c5fe"
+  white: "#efedef"
+  bright_black: "#7b7b7b"
+  bright_red: "#fcb6b0"
+  bright_green: "#cfffab"
+  bright_yellow: "#ffffcc"
+  bright_blue: "#b5dcff"
+  bright_magenta: "#fb9cfe"
+  bright_cyan: "#e0e0fe"
+  bright_white: "#ffffff"
+  foreground: "#f1f1f1"
+  background: "#000000"
+  selection: "#b5d5ff"

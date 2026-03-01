@@ -1,0 +1,23 @@
+# Zenburn — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#4d4d4d"
+  red: "#705050"
+  green: "#60b48a"
+  yellow: "#f0dfaf"
+  blue: "#506070"
+  magenta: "#dc8cc3"
+  cyan: "#8cd0d3"
+  white: "#dcdccc"
+  bright_black: "#709080"
+  bright_red: "#dca3a3"
+  bright_green: "#c3bf9f"
+  bright_yellow: "#e0cf9f"
+  bright_blue: "#94bff3"
+  bright_magenta: "#ec93d3"
+  bright_cyan: "#93e0e3"
+  bright_white: "#ffffff"
+  foreground: "#dcdccc"
+  background: "#3f3f3f"
+  selection: "#21322f"

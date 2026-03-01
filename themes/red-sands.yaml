@@ -1,0 +1,23 @@
+# Red Sands — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#ff3f00"
+  green: "#00bb00"
+  yellow: "#e7b000"
+  blue: "#0072ff"
+  magenta: "#bb00bb"
+  cyan: "#00bbbb"
+  white: "#bbbbbb"
+  bright_black: "#555555"
+  bright_red: "#bb0000"
+  bright_green: "#00bb00"
+  bright_yellow: "#e7b000"
+  bright_blue: "#0072ae"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#55ffff"
+  bright_white: "#ffffff"
+  foreground: "#d7c9a7"
+  background: "#7a251e"
+  selection: "#a4a390"

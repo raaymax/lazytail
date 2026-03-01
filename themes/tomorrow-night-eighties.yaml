@@ -1,0 +1,23 @@
+# Tomorrow Night Eighties — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#f2777a"
+  green: "#99cc99"
+  yellow: "#ffcc66"
+  blue: "#6699cc"
+  magenta: "#cc99cc"
+  cyan: "#66cccc"
+  white: "#ffffff"
+  bright_black: "#000000"
+  bright_red: "#f2777a"
+  bright_green: "#99cc99"
+  bright_yellow: "#ffcc66"
+  bright_blue: "#6699cc"
+  bright_magenta: "#cc99cc"
+  bright_cyan: "#66cccc"
+  bright_white: "#ffffff"
+  foreground: "#cccccc"
+  background: "#2d2d2d"
+  selection: "#515151"

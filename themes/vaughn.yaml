@@ -1,0 +1,23 @@
+# Vaughn — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#25234f"
+  red: "#705050"
+  green: "#60b48a"
+  yellow: "#dfaf8f"
+  blue: "#5555ff"
+  magenta: "#f08cc3"
+  cyan: "#8cd0d3"
+  white: "#709080"
+  bright_black: "#709080"
+  bright_red: "#dca3a3"
+  bright_green: "#60b48a"
+  bright_yellow: "#f0dfaf"
+  bright_blue: "#5555ff"
+  bright_magenta: "#ec93d3"
+  bright_cyan: "#93e0e3"
+  bright_white: "#ffffff"
+  foreground: "#dcdccc"
+  background: "#25234f"
+  selection: "#b5d5ff"

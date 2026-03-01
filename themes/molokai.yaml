@@ -1,0 +1,23 @@
+# Molokai — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#121212"
+  red: "#7325FA"
+  green: "#23E298"
+  yellow: "#60D4DF"
+  blue: "#D08010"
+  magenta: "#FF0087"
+  cyan: "#D0A843"
+  white: "#BBBBBB"
+  bright_black: "#555555"
+  bright_red: "#9D66F6"
+  bright_green: "#5FE0B1"
+  bright_yellow: "#6DF2FF"
+  bright_blue: "#FFAF00"
+  bright_magenta: "#FF87AF"
+  bright_cyan: "#FFCE51"
+  bright_white: "#FFFFFF"
+  foreground: "#BBBBBB"
+  background: "#121212"
+  selection: "#FFD5B5"

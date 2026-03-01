@@ -1,0 +1,23 @@
+# Chalkboard — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#c37372"
+  green: "#72c373"
+  yellow: "#c2c372"
+  blue: "#7372c3"
+  magenta: "#c372c2"
+  cyan: "#72c2c3"
+  white: "#d9d9d9"
+  bright_black: "#323232"
+  bright_red: "#dbaaaa"
+  bright_green: "#aadbaa"
+  bright_yellow: "#dadbaa"
+  bright_blue: "#aaaadb"
+  bright_magenta: "#dbaada"
+  bright_cyan: "#aadadb"
+  bright_white: "#ffffff"
+  foreground: "#d9e6f2"
+  background: "#29262f"
+  selection: "#073642"

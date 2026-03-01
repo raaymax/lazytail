@@ -1,0 +1,23 @@
+# Blazer — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#b87a7a"
+  green: "#7ab87a"
+  yellow: "#b8b87a"
+  blue: "#7a7ab8"
+  magenta: "#b87ab8"
+  cyan: "#7ab8b8"
+  white: "#d9d9d9"
+  bright_black: "#262626"
+  bright_red: "#dbbdbd"
+  bright_green: "#bddbbd"
+  bright_yellow: "#dbdbbd"
+  bright_blue: "#bdbddb"
+  bright_magenta: "#dbbddb"
+  bright_cyan: "#bddbdb"
+  bright_white: "#ffffff"
+  foreground: "#d9e6f2"
+  background: "#0d1926"
+  selection: "#d9e6f2"

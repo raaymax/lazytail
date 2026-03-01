@@ -1,0 +1,23 @@
+# Spring — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#ff4d83"
+  green: "#1f8c3b"
+  yellow: "#1fc95b"
+  blue: "#1dd3ee"
+  magenta: "#8959a8"
+  cyan: "#3e999f"
+  white: "#ffffff"
+  bright_black: "#000000"
+  bright_red: "#ff0021"
+  bright_green: "#1fc231"
+  bright_yellow: "#d5b807"
+  bright_blue: "#15a9fd"
+  bright_magenta: "#8959a8"
+  bright_cyan: "#3e999f"
+  bright_white: "#ffffff"
+  foreground: "#4d4d4c"
+  background: "#ffffff"
+  selection: "#d6d6d6"

@@ -1,0 +1,23 @@
+# WarmNeon — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#e24346"
+  green: "#39b13a"
+  yellow: "#dae145"
+  blue: "#4261c5"
+  magenta: "#f920fb"
+  cyan: "#2abbd4"
+  white: "#d0b8a3"
+  bright_black: "#fefcfc"
+  bright_red: "#e97071"
+  bright_green: "#9cc090"
+  bright_yellow: "#ddda7a"
+  bright_blue: "#7b91d6"
+  bright_magenta: "#f674ba"
+  bright_cyan: "#5ed1e5"
+  bright_white: "#d8c8bb"
+  foreground: "#afdab6"
+  background: "#404040"
+  selection: "#b0ad21"

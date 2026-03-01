@@ -1,0 +1,23 @@
+# Novel — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#cc0000"
+  green: "#009600"
+  yellow: "#d06b00"
+  blue: "#0000cc"
+  magenta: "#cc00cc"
+  cyan: "#0087cc"
+  white: "#cccccc"
+  bright_black: "#808080"
+  bright_red: "#cc0000"
+  bright_green: "#009600"
+  bright_yellow: "#d06b00"
+  bright_blue: "#0000cc"
+  bright_magenta: "#cc00cc"
+  bright_cyan: "#0087cc"
+  bright_white: "#ffffff"
+  foreground: "#3b2322"
+  background: "#dfdbc3"
+  selection: "#a4a390"

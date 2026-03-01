@@ -1,0 +1,23 @@
+# Man Page — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#cc0000"
+  green: "#00a600"
+  yellow: "#999900"
+  blue: "#0000b2"
+  magenta: "#b200b2"
+  cyan: "#00a6b2"
+  white: "#cccccc"
+  bright_black: "#666666"
+  bright_red: "#e50000"
+  bright_green: "#00d900"
+  bright_yellow: "#e5e500"
+  bright_blue: "#0000ff"
+  bright_magenta: "#e500e5"
+  bright_cyan: "#00e5e5"
+  bright_white: "#e5e5e5"
+  foreground: "#000000"
+  background: "#fef49c"
+  selection: "#a4c9cd"

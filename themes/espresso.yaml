@@ -1,0 +1,23 @@
+# Espresso — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#353535"
+  red: "#d25252"
+  green: "#a5c261"
+  yellow: "#ffc66d"
+  blue: "#6c99bb"
+  magenta: "#d197d9"
+  cyan: "#bed6ff"
+  white: "#eeeeec"
+  bright_black: "#535353"
+  bright_red: "#f00c0c"
+  bright_green: "#c2e075"
+  bright_yellow: "#e1e48b"
+  bright_blue: "#8ab7d9"
+  bright_magenta: "#efb5f7"
+  bright_cyan: "#dcf4ff"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#323232"
+  selection: "#5b5b5b"

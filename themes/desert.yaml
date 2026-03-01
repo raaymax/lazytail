@@ -1,0 +1,23 @@
+# Desert — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#4d4d4d"
+  red: "#ff2b2b"
+  green: "#98fb98"
+  yellow: "#f0e68c"
+  blue: "#cd853f"
+  magenta: "#ffdead"
+  cyan: "#ffa0a0"
+  white: "#f5deb3"
+  bright_black: "#555555"
+  bright_red: "#ff5555"
+  bright_green: "#55ff55"
+  bright_yellow: "#ffff55"
+  bright_blue: "#87ceff"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#ffd700"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#333333"
+  selection: "#b5d5ff"

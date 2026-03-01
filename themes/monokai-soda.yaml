@@ -1,0 +1,23 @@
+# Monokai Soda — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#1a1a1a"
+  red: "#f4005f"
+  green: "#98e024"
+  yellow: "#fa8419"
+  blue: "#9d65ff"
+  magenta: "#f4005f"
+  cyan: "#58d1eb"
+  white: "#c4c5b5"
+  bright_black: "#625e4c"
+  bright_red: "#f4005f"
+  bright_green: "#98e024"
+  bright_yellow: "#e0d561"
+  bright_blue: "#9d65ff"
+  bright_magenta: "#f4005f"
+  bright_cyan: "#58d1eb"
+  bright_white: "#f6f6ef"
+  foreground: "#c4c5b5"
+  background: "#1a1a1a"
+  selection: "#343434"

@@ -1,0 +1,23 @@
+# Red Alert — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#d62e4e"
+  green: "#71be6b"
+  yellow: "#beb86b"
+  blue: "#489bee"
+  magenta: "#e979d7"
+  cyan: "#6bbeb8"
+  white: "#d6d6d6"
+  bright_black: "#262626"
+  bright_red: "#e02553"
+  bright_green: "#aff08c"
+  bright_yellow: "#dfddb7"
+  bright_blue: "#65aaf1"
+  bright_magenta: "#ddb7df"
+  bright_cyan: "#b7dfdd"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#762423"
+  selection: "#073642"

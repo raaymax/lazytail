@@ -1,0 +1,23 @@
+# Teerb — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#1c1c1c"
+  red: "#d68686"
+  green: "#aed686"
+  yellow: "#d7af87"
+  blue: "#86aed6"
+  magenta: "#d6aed6"
+  cyan: "#8adbb4"
+  white: "#d0d0d0"
+  bright_black: "#1c1c1c"
+  bright_red: "#d68686"
+  bright_green: "#aed686"
+  bright_yellow: "#e4c9af"
+  bright_blue: "#86aed6"
+  bright_magenta: "#d6aed6"
+  bright_cyan: "#b1e7dd"
+  bright_white: "#efefef"
+  foreground: "#d0d0d0"
+  background: "#262626"
+  selection: "#4d4d4d"

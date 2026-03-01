@@ -1,0 +1,23 @@
+# Tokyo Night — based on folke/tokyonight.nvim (night variant)
+# https://github.com/folke/tokyonight.nvim
+base: dark
+palette:
+  black: "#15161e"
+  red: "#f7768e"
+  green: "#9ece6a"
+  yellow: "#e0af68"
+  blue: "#7aa2f7"
+  magenta: "#bb9af7"
+  cyan: "#7dcfff"
+  white: "#a9b1d6"
+  bright_black: "#414868"
+  bright_red: "#ff899d"
+  bright_green: "#9fe044"
+  bright_yellow: "#faba4a"
+  bright_blue: "#8db0ff"
+  bright_magenta: "#c7a9ff"
+  bright_cyan: "#a4daff"
+  bright_white: "#c0caf5"
+  foreground: "#c0caf5"
+  background: "#1a1b26"
+  selection: "#283457"

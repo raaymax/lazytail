@@ -1,0 +1,23 @@
+# Grass — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#bb0000"
+  green: "#00bb00"
+  yellow: "#e7b000"
+  blue: "#0000a3"
+  magenta: "#950062"
+  cyan: "#00bbbb"
+  white: "#bbbbbb"
+  bright_black: "#555555"
+  bright_red: "#bb0000"
+  bright_green: "#00bb00"
+  bright_yellow: "#e7b000"
+  bright_blue: "#0000bb"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#55ffff"
+  bright_white: "#ffffff"
+  foreground: "#fff0a5"
+  background: "#13773d"
+  selection: "#b64926"

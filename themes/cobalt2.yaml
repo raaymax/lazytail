@@ -1,0 +1,23 @@
+# Cobalt2 — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#ff0000"
+  green: "#38de21"
+  yellow: "#ffe50a"
+  blue: "#1460d2"
+  magenta: "#ff005d"
+  cyan: "#00bbbb"
+  white: "#bbbbbb"
+  bright_black: "#555555"
+  bright_red: "#f40e17"
+  bright_green: "#3bd01d"
+  bright_yellow: "#edc809"
+  bright_blue: "#5555ff"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#6ae3fa"
+  bright_white: "#ffffff"
+  foreground: "#ffffff"
+  background: "#132738"
+  selection: "#18354f"

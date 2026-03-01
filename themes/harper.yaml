@@ -1,0 +1,23 @@
+# Harper — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#010101"
+  red: "#f8b63f"
+  green: "#7fb5e1"
+  yellow: "#d6da25"
+  blue: "#489e48"
+  magenta: "#b296c6"
+  cyan: "#f5bfd7"
+  white: "#a8a49d"
+  bright_black: "#726e6a"
+  bright_red: "#f8b63f"
+  bright_green: "#7fb5e1"
+  bright_yellow: "#d6da25"
+  bright_blue: "#489e48"
+  bright_magenta: "#b296c6"
+  bright_cyan: "#f5bfd7"
+  bright_white: "#fefbea"
+  foreground: "#a8a49d"
+  background: "#010101"
+  selection: "#5a5753"

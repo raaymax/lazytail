@@ -1,0 +1,23 @@
+# Hurtado — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#575757"
+  red: "#ff1b00"
+  green: "#a5e055"
+  yellow: "#fbe74a"
+  blue: "#496487"
+  magenta: "#fd5ff1"
+  cyan: "#86e9fe"
+  white: "#cbcccb"
+  bright_black: "#262626"
+  bright_red: "#d51d00"
+  bright_green: "#a5df55"
+  bright_yellow: "#fbe84a"
+  bright_blue: "#89beff"
+  bright_magenta: "#c001c1"
+  bright_cyan: "#86eafe"
+  bright_white: "#dbdbdb"
+  foreground: "#dbdbdb"
+  background: "#000000"
+  selection: "#b5d5ff"

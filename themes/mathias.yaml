@@ -1,0 +1,23 @@
+# Mathias — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#e52222"
+  green: "#a6e32d"
+  yellow: "#fc951e"
+  blue: "#c48dff"
+  magenta: "#fa2573"
+  cyan: "#67d9f0"
+  white: "#f2f2f2"
+  bright_black: "#555555"
+  bright_red: "#ff5555"
+  bright_green: "#55ff55"
+  bright_yellow: "#ffff55"
+  bright_blue: "#5555ff"
+  bright_magenta: "#ff55ff"
+  bright_cyan: "#55ffff"
+  bright_white: "#ffffff"
+  foreground: "#bbbbbb"
+  background: "#000000"
+  selection: "#555555"

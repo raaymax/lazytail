@@ -1,0 +1,23 @@
+# Twilight — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#141414"
+  red: "#c06d44"
+  green: "#afb97a"
+  yellow: "#c2a86c"
+  blue: "#44474a"
+  magenta: "#b4be7c"
+  cyan: "#778385"
+  white: "#ffffd4"
+  bright_black: "#262626"
+  bright_red: "#de7c4c"
+  bright_green: "#ccd88c"
+  bright_yellow: "#e2c47e"
+  bright_blue: "#5a5e62"
+  bright_magenta: "#d0dc8e"
+  bright_cyan: "#8a989b"
+  bright_white: "#ffffd4"
+  foreground: "#ffffd4"
+  background: "#141414"
+  selection: "#313131"

@@ -1,0 +1,23 @@
+# Hybrid — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#2a2e33"
+  red: "#b84d51"
+  green: "#b3bf5a"
+  yellow: "#e4b55e"
+  blue: "#6e90b0"
+  magenta: "#a17eac"
+  cyan: "#7fbfb4"
+  white: "#b5b9b6"
+  bright_black: "#1d1f22"
+  bright_red: "#8d2e32"
+  bright_green: "#798431"
+  bright_yellow: "#e58a50"
+  bright_blue: "#4b6b88"
+  bright_magenta: "#6e5079"
+  bright_cyan: "#4d7b74"
+  bright_white: "#5a626a"
+  foreground: "#b7bcba"
+  background: "#161719"
+  selection: "#1e1f22"

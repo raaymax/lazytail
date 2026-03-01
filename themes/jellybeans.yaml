@@ -1,0 +1,23 @@
+# Jellybeans — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#929292"
+  red: "#e27373"
+  green: "#94b979"
+  yellow: "#ffba7b"
+  blue: "#97bedc"
+  magenta: "#e1c0fa"
+  cyan: "#00988e"
+  white: "#dedede"
+  bright_black: "#bdbdbd"
+  bright_red: "#ffa1a1"
+  bright_green: "#bddeab"
+  bright_yellow: "#ffdca0"
+  bright_blue: "#b1d8f6"
+  bright_magenta: "#fbdaff"
+  bright_cyan: "#1ab2a8"
+  bright_white: "#ffffff"
+  foreground: "#dedede"
+  background: "#121212"
+  selection: "#474e91"

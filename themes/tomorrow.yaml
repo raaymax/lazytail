@@ -1,0 +1,23 @@
+# Tomorrow — imported from iTerm2-Color-Schemes
+# https://github.com/BenJanecke/iTerm2-Color-Schemes
+base: dark
+palette:
+  black: "#000000"
+  red: "#c82829"
+  green: "#718c00"
+  yellow: "#eab700"
+  blue: "#4271ae"
+  magenta: "#8959a8"
+  cyan: "#3e999f"
+  white: "#ffffff"
+  bright_black: "#000000"
+  bright_red: "#c82829"
+  bright_green: "#718c00"
+  bright_yellow: "#eab700"
+  bright_blue: "#4271ae"
+  bright_magenta: "#8959a8"
+  bright_cyan: "#3e999f"
+  bright_white: "#ffffff"
+  foreground: "#4d4d4c"
+  background: "#ffffff"
+  selection: "#d6d6d6"
