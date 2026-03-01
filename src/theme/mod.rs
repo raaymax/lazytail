@@ -309,7 +309,7 @@ pub enum RawThemeConfig {
         #[serde(default)]
         palette: Option<RawPalette>,
         #[serde(default)]
-        ui: Option<RawUiColors>,
+        ui: Box<Option<RawUiColors>>,
     },
 }
 

@@ -51,7 +51,7 @@ pub fn resolve_theme(
             }
 
             // Apply explicit UI overrides on top of derived colors
-            if let Some(raw_ui) = ui {
+            if let Some(ref raw_ui) = **ui {
                 apply_ui_overrides(&mut theme.ui, raw_ui);
             }
 
@@ -337,7 +337,7 @@ mod tests {
                 red: Some(ThemeColor(Color::Rgb(255, 0, 0))),
                 ..Default::default()
             }),
-            ui: None,
+            ui: Box::new(None),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         assert_eq!(theme.palette.red, Color::Rgb(255, 0, 0));
@@ -350,10 +350,10 @@ mod tests {
         let raw = Some(RawThemeConfig::Custom {
             base: Some("dark".into()),
             palette: None,
-            ui: Some(RawUiColors {
+            ui: Box::new(Some(RawUiColors {
                 primary: Some(ThemeColor(Color::Cyan)),
                 ..Default::default()
-            }),
+            })),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         assert_eq!(theme.ui.primary, Color::Cyan);
@@ -366,10 +366,10 @@ mod tests {
         let raw = Some(RawThemeConfig::Custom {
             base: Some("dark".into()),
             palette: None,
-            ui: Some(RawUiColors {
+            ui: Box::new(Some(RawUiColors {
                 bg: Some(ThemeColor(Color::Rgb(0x2e, 0x34, 0x40))),
                 ..Default::default()
-            }),
+            })),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         assert_eq!(theme.ui.bg, Color::Rgb(0x2e, 0x34, 0x40));
@@ -383,10 +383,10 @@ mod tests {
                 red: Some(ThemeColor(Color::Rgb(200, 50, 50))),
                 ..Default::default()
             }),
-            ui: Some(RawUiColors {
+            ui: Box::new(Some(RawUiColors {
                 severity_error: Some(ThemeColor(Color::Rgb(255, 0, 0))),
                 ..Default::default()
-            }),
+            })),
         });
         let theme = resolve_theme(&raw, &[]).unwrap();
         // Palette red was overridden
