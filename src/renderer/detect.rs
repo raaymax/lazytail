@@ -139,6 +139,7 @@ mod tests {
         use crate::renderer::preset::{compile, RawDetect, RawLayoutEntry, RawPreset};
 
         let custom = compile(RawPreset {
+            parser: None,
             name: "custom".to_string(),
             detect: Some(RawDetect {
                 parser: None,

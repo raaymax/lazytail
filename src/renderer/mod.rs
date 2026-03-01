@@ -24,6 +24,7 @@ impl PresetRegistry {
         for raw in renderers {
             let raw_preset = preset::RawPreset {
                 name: raw.name.clone(),
+                parser: raw.parser.clone(),
                 detect: raw.detect.as_ref().map(|d| preset::RawDetect {
                     parser: d.parser.clone(),
                     filename: d.filename.clone(),
@@ -152,6 +153,7 @@ mod tests {
 
         // A custom preset that only matches logfmt
         let custom = compile(RawPreset {
+            parser: None,
             name: "custom-logfmt".to_string(),
             detect: Some(RawDetect {
                 parser: Some("logfmt".to_string()),
@@ -207,6 +209,7 @@ mod tests {
 
         // User preset with same name "json" but different layout
         let user_json = compile(RawPreset {
+            parser: None,
             name: "json".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -245,6 +248,7 @@ mod tests {
         use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef, StyleValue};
 
         let renderers = vec![RawRendererDef {
+            parser: None,
             name: "my-json".to_string(),
             detect: Some(RawDetectDef {
                 parser: Some("json".to_string()),
@@ -276,6 +280,7 @@ mod tests {
         use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef};
 
         let renderers = vec![RawRendererDef {
+            parser: None,
             name: "bad-regex".to_string(),
             detect: Some(RawDetectDef {
                 parser: Some("regex".to_string()),

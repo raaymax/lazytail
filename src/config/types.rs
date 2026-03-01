@@ -34,6 +34,8 @@ pub struct RawConfig {
 #[serde(deny_unknown_fields)]
 pub struct RawRendererDef {
     pub name: String,
+    /// Top-level parser: sets the parser without enabling auto-detection.
+    pub parser: Option<String>,
     pub detect: Option<RawDetectDef>,
     pub regex: Option<String>,
     pub layout: Vec<RawLayoutEntryDef>,

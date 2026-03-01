@@ -1968,6 +1968,7 @@ plain line with no escapes\n\
         use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef, StyleValue};
 
         let renderers = vec![RawRendererDef {
+            parser: None,
             name: "json".to_string(),
             detect: Some(RawDetectDef {
                 parser: Some("json".to_string()),
@@ -2086,6 +2087,7 @@ plain line with no escapes\n\
         use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef};
 
         let renderers = vec![RawRendererDef {
+            parser: None,
             name: "my-preset".to_string(),
             detect: Some(RawDetectDef {
                 parser: Some("json".to_string()),

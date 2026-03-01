@@ -14,6 +14,8 @@ pub use crate::config::types::StyleValue;
 #[derive(Debug, Deserialize)]
 pub struct RawPreset {
     pub name: String,
+    /// Top-level parser: sets the parser without enabling auto-detection.
+    pub parser: Option<String>,
     pub detect: Option<RawDetect>,
     pub regex: Option<String>,
     pub layout: Vec<RawLayoutEntry>,
@@ -140,9 +142,13 @@ pub struct CompiledPreset {
 
 /// Validates and compiles a RawPreset into a CompiledPreset.
 pub fn compile(raw: RawPreset) -> Result<CompiledPreset, String> {
-    // Determine parser type
+    // Determine parser type: top-level `parser` takes priority, then `detect.parser`
     let has_regex = raw.regex.is_some();
-    let parser = match raw.detect.as_ref().and_then(|d| d.parser.as_deref()) {
+    let parser_str = raw
+        .parser
+        .as_deref()
+        .or_else(|| raw.detect.as_ref().and_then(|d| d.parser.as_deref()));
+    let parser = match parser_str {
         Some("json") => PresetParser::Json,
         Some("logfmt") => PresetParser::Logfmt,
         Some("regex") => PresetParser::Regex,
@@ -400,6 +406,7 @@ impl CompiledPreset {
 
         // Walk layout entries and produce segments
         let mut segments = Vec::new();
+        let mut has_field_content = false;
         for entry in &self.layout {
             match entry {
                 CompiledLayoutEntry::Literal { text, style } => {
@@ -436,6 +443,7 @@ impl CompiledPreset {
                             };
                             let style = resolve_style_fn(style_fn, &text, Some(&source));
                             segments.push(StyledSegment { text, style });
+                            has_field_content = true;
                         }
                     } else if let Some(value) = get_field(&source, name) {
                         // Apply field format if present, falling back to raw value
@@ -453,13 +461,21 @@ impl CompiledPreset {
                             text: formatted,
                             style,
                         });
+                        has_field_content = true;
                     }
                     // Missing fields are silently skipped
                 }
             }
         }
 
-        Some(segments)
+        // If no field-based segments were produced (only literals), this preset
+        // doesn't meaningfully match the line — return None to allow fallthrough
+        // to other presets.
+        if has_field_content {
+            Some(segments)
+        } else {
+            None
+        }
     }
 }
 
@@ -551,6 +567,7 @@ mod tests {
 
     fn json_preset() -> CompiledPreset {
         compile(RawPreset {
+            parser: None,
             name: "test-json".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -627,6 +644,7 @@ mod tests {
     #[test]
     fn test_compile_regex_preset() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test-regex".to_string(),
             detect: None,
             regex: Some(r"(?P<ip>\S+) (?P<method>\S+)".to_string()),
@@ -649,6 +667,7 @@ mod tests {
     #[test]
     fn test_compile_invalid_regex() {
         let result = compile(RawPreset {
+            parser: None,
             name: "bad".to_string(),
             detect: None,
             regex: Some("[invalid".to_string()),
@@ -689,6 +708,7 @@ mod tests {
     #[test]
     fn test_render_logfmt_line() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "logfmt".to_string(),
             detect: Some(RawDetect {
                 parser: Some("logfmt".to_string()),
@@ -741,6 +761,7 @@ mod tests {
     #[test]
     fn test_render_regex_line() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "nginx".to_string(),
             detect: None,
             regex: Some(r"(?P<ip>\S+) - - \[(?P<date>[^\]]+)\] (?P<request>.+)".to_string()),
@@ -813,6 +834,7 @@ mod tests {
     #[test]
     fn test_render_rest_json_format() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -860,6 +882,7 @@ mod tests {
     #[test]
     fn test_render_width_truncation() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -886,6 +909,7 @@ mod tests {
     #[test]
     fn test_render_width_padding() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -921,6 +945,7 @@ mod tests {
     #[test]
     fn test_index_filter_regex() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: None,
             regex: Some(r"(?P<ip>\S+)".to_string()),
@@ -953,6 +978,7 @@ mod tests {
         style_map.insert("warn".to_string(), "yellow".to_string());
 
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -993,6 +1019,7 @@ mod tests {
         style_map.insert("error".to_string(), "red".to_string());
 
         let result = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1017,6 +1044,7 @@ mod tests {
     #[test]
     fn test_compile_width_and_max_width_error() {
         let result = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1044,6 +1072,7 @@ mod tests {
         style_map.insert("error".to_string(), "red".to_string());
 
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1073,6 +1102,7 @@ mod tests {
         style_map.insert("error".to_string(), "red".to_string());
 
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1103,6 +1133,7 @@ mod tests {
         style_map.insert("_default".to_string(), "dim".to_string());
 
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1133,6 +1164,7 @@ mod tests {
     #[test]
     fn test_render_max_width_truncates() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1159,6 +1191,7 @@ mod tests {
     #[test]
     fn test_render_max_width_no_pad() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1190,6 +1223,7 @@ mod tests {
     #[test]
     fn test_compile_compound_style() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1234,6 +1268,7 @@ mod tests {
     #[test]
     fn test_compile_compound_two_colors_error() {
         let result = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1261,6 +1296,7 @@ mod tests {
     #[test]
     fn test_render_compound_style() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1302,6 +1338,7 @@ mod tests {
     #[test]
     fn test_render_array_index_field() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1335,6 +1372,7 @@ mod tests {
     #[test]
     fn test_compile_field_format_datetime() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1365,6 +1403,7 @@ mod tests {
     #[test]
     fn test_compile_field_format_duration_ns() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1395,6 +1434,7 @@ mod tests {
     #[test]
     fn test_render_field_format_duration() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1423,6 +1463,7 @@ mod tests {
     #[test]
     fn test_compile_style_when() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1471,6 +1512,7 @@ mod tests {
     #[test]
     fn test_compile_style_when_regex() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1509,6 +1551,7 @@ mod tests {
     #[test]
     fn test_compile_style_and_style_when_error() {
         let result = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1542,6 +1585,7 @@ mod tests {
         map.insert("error".to_string(), "red".to_string());
 
         let result = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1572,6 +1616,7 @@ mod tests {
     #[test]
     fn test_render_style_when_gt_match() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1603,6 +1648,7 @@ mod tests {
     #[test]
     fn test_render_style_when_gt_no_match() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1634,6 +1680,7 @@ mod tests {
     #[test]
     fn test_render_style_when_first_match_wins() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1674,6 +1721,7 @@ mod tests {
     #[test]
     fn test_render_style_when_contains() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1707,6 +1755,7 @@ mod tests {
     #[test]
     fn test_render_style_when_cross_field() {
         let preset = compile(RawPreset {
+            parser: None,
             name: "test".to_string(),
             detect: Some(RawDetect {
                 parser: Some("json".to_string()),
@@ -1737,5 +1786,68 @@ mod tests {
         // Message field styled red because level == "error"
         assert_eq!(segments[0].style, SegmentStyle::Fg(SegmentColor::Red));
         assert_eq!(segments[0].text, "something failed");
+    }
+
+    // ========================================================================
+    // Empty field fallthrough test
+    // ========================================================================
+
+    #[test]
+    fn test_render_returns_none_when_no_fields_match() {
+        // A preset expecting specific fields that don't exist in the JSON line
+        // should return None (not Some with only literals), so other presets
+        // can be tried.
+        let preset = compile(RawPreset {
+            parser: None,
+            name: "specific-schema".to_string(),
+            detect: Some(RawDetect {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![
+                RawLayoutEntry {
+                    field: Some("agentName".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+                RawLayoutEntry {
+                    field: None,
+                    literal: Some(" ".to_string()),
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+                RawLayoutEntry {
+                    field: Some("subtype".to_string()),
+                    literal: None,
+                    style: None,
+                    width: None,
+                    format: None,
+                    style_map: None,
+                    max_width: None,
+                    style_when: None,
+                },
+            ],
+        })
+        .unwrap();
+
+        // JSON is valid but has completely different fields
+        let result = preset.render(
+            r#"{"timestamp":"2026-02-22T21:22:40Z","level":"info","service":"api","msg":"ok"}"#,
+            None,
+        );
+        assert!(
+            result.is_none(),
+            "Preset with no matching fields should return None for fallthrough"
+        );
     }
 }
