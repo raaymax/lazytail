@@ -30,6 +30,7 @@ fn builtin_json() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " ".to_string(),
@@ -42,6 +43,7 @@ fn builtin_json() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " | ".to_string(),
@@ -54,6 +56,7 @@ fn builtin_json() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Field {
                 name: "msg".to_string(),
@@ -62,6 +65,7 @@ fn builtin_json() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " ".to_string(),
@@ -74,6 +78,7 @@ fn builtin_json() -> CompiledPreset {
                 max_width: None,
                 is_rest: true,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
         ],
         consumed_fields,
@@ -102,6 +107,7 @@ fn builtin_logfmt() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " ".to_string(),
@@ -114,6 +120,7 @@ fn builtin_logfmt() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " ".to_string(),
@@ -126,6 +133,7 @@ fn builtin_logfmt() -> CompiledPreset {
                 max_width: None,
                 is_rest: false,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
             CompiledLayoutEntry::Literal {
                 text: " ".to_string(),
@@ -138,6 +146,7 @@ fn builtin_logfmt() -> CompiledPreset {
                 max_width: None,
                 is_rest: true,
                 rest_format: RestFormat::KeyValue,
+                field_format: None,
             },
         ],
         consumed_fields,

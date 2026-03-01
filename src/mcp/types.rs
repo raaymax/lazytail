@@ -70,6 +70,9 @@ pub struct LineInfo {
     /// Severity level (from columnar index, if available)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<String>,
+    /// Rendered line content using preset formatting (if a preset matched)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendered: Option<String>,
 }
 
 /// Search mode for pattern matching.
@@ -229,6 +232,9 @@ pub struct SourceInfo {
     pub size_bytes: u64,
     /// Where the source was found (project-local or global)
     pub location: SourceLocation,
+    /// Renderer preset names assigned to this source
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renderer_names: Vec<String>,
 }
 
 /// Status of a log source.

@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod detect;
 pub mod field;
+pub mod format;
 pub mod preset;
 pub mod segment;
 
@@ -13,6 +14,54 @@ pub struct PresetRegistry {
 }
 
 impl PresetRegistry {
+    /// Compile renderer definitions from config into a registry.
+    /// Returns the registry and a list of compilation error messages.
+    pub fn compile_from_config(
+        renderers: &[crate::config::types::RawRendererDef],
+    ) -> (Self, Vec<String>) {
+        let mut compiled = Vec::new();
+        let mut errors = Vec::new();
+        for raw in renderers {
+            let raw_preset = preset::RawPreset {
+                name: raw.name.clone(),
+                detect: raw.detect.as_ref().map(|d| preset::RawDetect {
+                    parser: d.parser.clone(),
+                    filename: d.filename.clone(),
+                }),
+                regex: raw.regex.clone(),
+                layout: raw
+                    .layout
+                    .iter()
+                    .map(|e| preset::RawLayoutEntry {
+                        field: e.field.clone(),
+                        literal: e.literal.clone(),
+                        style: e.style.clone(),
+                        width: e.width,
+                        format: e.format.clone(),
+                        style_map: e.style_map.clone(),
+                        max_width: e.max_width,
+                        style_when: e.style_when.as_ref().map(|conditions| {
+                            conditions
+                                .iter()
+                                .map(|c| preset::RawStyleCondition {
+                                    field: c.field.clone(),
+                                    op: c.op.clone(),
+                                    value: c.value.clone(),
+                                    style: c.style.clone(),
+                                })
+                                .collect()
+                        }),
+                    })
+                    .collect(),
+            };
+            match preset::compile(raw_preset) {
+                Ok(preset) => compiled.push(preset),
+                Err(e) => errors.push(format!("Renderer '{}': {}", raw.name, e)),
+            }
+        }
+        (Self::new(compiled), errors)
+    }
+
     /// Merges user presets with builtins. User presets come first (can shadow builtins by name).
     pub fn new(user_presets: Vec<CompiledPreset>) -> Self {
         let user_names: std::collections::HashSet<String> =
@@ -24,6 +73,12 @@ impl PresetRegistry {
             }
         }
         Self { presets }
+    }
+
+    /// Returns names of all registered presets (test-only).
+    #[cfg(test)]
+    pub fn all_preset_names(&self) -> Vec<&str> {
+        self.presets.iter().map(|p| p.name.as_str()).collect()
     }
 
     /// Lookup preset by name.
@@ -111,6 +166,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -165,6 +221,7 @@ mod tests {
                 format: None,
                 style_map: None,
                 max_width: None,
+                style_when: None,
             }],
         })
         .unwrap();
@@ -181,5 +238,74 @@ mod tests {
         // User preset only has level field → exactly 1 segment
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "error");
+    }
+
+    #[test]
+    fn test_compile_from_config_basic() {
+        use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef, StyleValue};
+
+        let renderers = vec![RawRendererDef {
+            name: "my-json".to_string(),
+            detect: Some(RawDetectDef {
+                parser: Some("json".to_string()),
+                filename: None,
+            }),
+            regex: None,
+            layout: vec![RawLayoutEntryDef {
+                field: Some("level".to_string()),
+                literal: None,
+                style: Some(StyleValue::Single("severity".to_string())),
+                width: Some(5),
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        }];
+
+        let (registry, errors) = PresetRegistry::compile_from_config(&renderers);
+        assert!(errors.is_empty());
+        // User preset exists
+        assert!(registry.get_by_name("my-json").is_some());
+        // Builtins also present
+        assert!(registry.get_by_name("json").is_some());
+    }
+
+    #[test]
+    fn test_compile_from_config_errors() {
+        use crate::config::types::{RawDetectDef, RawLayoutEntryDef, RawRendererDef};
+
+        let renderers = vec![RawRendererDef {
+            name: "bad-regex".to_string(),
+            detect: Some(RawDetectDef {
+                parser: Some("regex".to_string()),
+                filename: None,
+            }),
+            regex: Some("[invalid(".to_string()),
+            layout: vec![RawLayoutEntryDef {
+                field: Some("msg".to_string()),
+                literal: None,
+                style: None,
+                width: None,
+                format: None,
+                style_map: None,
+                max_width: None,
+                style_when: None,
+            }],
+        }];
+
+        let (_, errors) = PresetRegistry::compile_from_config(&renderers);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("bad-regex"));
+        assert!(errors[0].contains("invalid regex"));
+    }
+
+    #[test]
+    fn test_all_preset_names() {
+        let registry = PresetRegistry::new(Vec::new());
+        let names = registry.all_preset_names();
+        // Should have builtins
+        assert!(names.contains(&"json"));
+        assert!(names.contains(&"logfmt"));
     }
 }

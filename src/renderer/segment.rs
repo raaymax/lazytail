@@ -90,6 +90,15 @@ pub fn to_ratatui_style(style: &SegmentStyle) -> Style {
     }
 }
 
+/// Concatenate segment text values into a plain text string.
+pub fn segments_to_plain_text(segments: &[StyledSegment]) -> String {
+    let mut out = String::new();
+    for seg in segments {
+        out.push_str(&seg.text);
+    }
+    out
+}
+
 fn segment_color_to_ratatui(color: &SegmentColor) -> ratatui::style::Color {
     match color {
         SegmentColor::Red => ratatui::style::Color::Red,
@@ -183,5 +192,29 @@ mod tests {
         });
         assert!(style.add_modifier.contains(Modifier::BOLD));
         assert!(style.fg.is_none());
+    }
+
+    #[test]
+    fn test_segments_to_plain_text() {
+        let segments = vec![
+            StyledSegment {
+                text: "ERROR".to_string(),
+                style: SegmentStyle::Fg(SegmentColor::Red),
+            },
+            StyledSegment {
+                text: " ".to_string(),
+                style: SegmentStyle::Default,
+            },
+            StyledSegment {
+                text: "something failed".to_string(),
+                style: SegmentStyle::Dim,
+            },
+        ];
+        assert_eq!(segments_to_plain_text(&segments), "ERROR something failed");
+    }
+
+    #[test]
+    fn test_segments_to_plain_text_empty() {
+        assert_eq!(segments_to_plain_text(&[]), "");
     }
 }
