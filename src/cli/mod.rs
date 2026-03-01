@@ -106,7 +106,7 @@ pub enum ConfigAction {
 /// Theme subcommand actions.
 #[derive(Subcommand, Debug)]
 pub enum ThemeAction {
-    /// Import a Windows Terminal JSON color scheme
+    /// Import a color scheme (Windows Terminal, Alacritty, Ghostty, iTerm2)
     Import(ImportArgs),
     /// List available themes
     List,
@@ -115,7 +115,7 @@ pub enum ThemeAction {
 /// Arguments for the theme import subcommand.
 #[derive(Args, Debug)]
 pub struct ImportArgs {
-    /// Windows Terminal JSON color scheme file
+    /// Color scheme file (.json, .toml, .itermcolors, .conf, or extensionless)
     #[arg(value_name = "FILE")]
     pub file: PathBuf,
 
