@@ -130,7 +130,8 @@ pub fn load(discovery: &DiscoveryResult) -> Result<Config, ConfigError> {
     }
 
     // Resolve theme
-    config.theme = crate::theme::loader::resolve_theme(&theme_raw, &[])?;
+    let themes_dirs = crate::theme::loader::collect_themes_dirs(discovery.project_root.as_deref());
+    config.theme = crate::theme::loader::resolve_theme(&theme_raw, &themes_dirs)?;
 
     Ok(config)
 }
