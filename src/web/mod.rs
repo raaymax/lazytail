@@ -639,14 +639,16 @@ fn build_initial_tabs(files: &[PathBuf], watch: bool, verbose: bool) -> Result<I
 
     for source in &cfg.project_sources {
         match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
-            Ok(tab) => tabs.push(tab),
+            Ok(Some(tab)) => tabs.push(tab),
+            Ok(None) => {} // Metadata-only source, skip
             Err(err) => config_errors.push(format!("Failed to open {}: {}", source.name, err)),
         }
     }
 
     for source in &cfg.global_sources {
         match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
-            Ok(tab) => tabs.push(tab),
+            Ok(Some(tab)) => tabs.push(tab),
+            Ok(None) => {} // Metadata-only source, skip
             Err(err) => config_errors.push(format!("Failed to open {}: {}", source.name, err)),
         }
     }

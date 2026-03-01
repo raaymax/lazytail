@@ -44,13 +44,15 @@ pub fn validate() -> Result<(), i32> {
             // Check source file existence
             let mut has_errors = false;
             for source in &cfg.sources {
-                if !source.exists {
-                    eprintln!(
-                        "error: Source '{}' file not found: {}",
-                        source.name,
-                        source.path.display()
-                    );
-                    has_errors = true;
+                if let Some(ref path) = source.path {
+                    if !source.exists {
+                        eprintln!(
+                            "error: Source '{}' file not found: {}",
+                            source.name,
+                            path.display()
+                        );
+                        has_errors = true;
+                    }
                 }
             }
             if has_errors {
@@ -138,10 +140,10 @@ fn show_source(source: &config::Source) {
         format!(" {}", "(not found)".red())
     };
     println!("  - {}: {}", "name".blue(), source.name.green());
-    println!(
-        "    {}: {}{}",
-        "path".blue(),
-        source.path.display().to_string().yellow(),
-        status
-    );
+    let path_str = source
+        .path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(none)".to_string());
+    println!("    {}: {}{}", "path".blue(), path_str.yellow(), status);
 }

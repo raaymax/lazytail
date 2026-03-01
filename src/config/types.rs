@@ -20,6 +20,38 @@ pub struct RawConfig {
     /// Whether to check for updates on TUI startup (default: true).
     #[serde(default)]
     pub update_check: Option<bool>,
+    /// Rendering preset definitions.
+    #[serde(default)]
+    pub renderers: Vec<RawRendererDef>,
+}
+
+/// Raw renderer definition from config file.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawRendererDef {
+    pub name: String,
+    pub detect: Option<RawDetectDef>,
+    pub regex: Option<String>,
+    pub layout: Vec<RawLayoutEntryDef>,
+}
+
+/// Raw detect rules for a renderer.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawDetectDef {
+    pub parser: Option<String>,
+    pub filename: Option<String>,
+}
+
+/// Raw layout entry for a renderer.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawLayoutEntryDef {
+    pub field: Option<String>,
+    pub literal: Option<String>,
+    pub style: Option<String>,
+    pub width: Option<usize>,
+    pub format: Option<String>,
 }
 
 /// Raw source from config file.
@@ -31,8 +63,11 @@ pub struct RawConfig {
 pub struct RawSource {
     /// Display name for this source.
     pub name: String,
-    /// Path to the log file (may contain tilde).
-    pub path: PathBuf,
+    /// Path to the log file (may contain tilde). Optional for metadata-only sources.
+    pub path: Option<PathBuf>,
+    /// List of renderer preset names to use for this source.
+    #[serde(default)]
+    pub renderers: Vec<String>,
 }
 
 /// Validated source with expanded path and existence check.
@@ -42,10 +77,12 @@ pub struct RawSource {
 pub struct Source {
     /// Display name for this source.
     pub name: String,
-    /// Expanded path to the log file.
-    pub path: PathBuf,
+    /// Expanded path to the log file (None for metadata-only sources).
+    pub path: Option<PathBuf>,
     /// Whether the file exists at load time.
     pub exists: bool,
+    /// Renderer preset names assigned to this source.
+    pub renderer_names: Vec<String>,
 }
 
 /// Merged config from global and project files.
@@ -62,6 +99,8 @@ pub struct Config {
     pub global_sources: Vec<Source>,
     /// Whether to check for updates on TUI startup (from global config).
     pub update_check: Option<bool>,
+    /// Raw renderer definitions (passed through to renderer compilation).
+    pub renderers: Vec<RawRendererDef>,
 }
 
 impl Config {

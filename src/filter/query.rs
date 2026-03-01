@@ -467,7 +467,7 @@ impl<'a> QueryTextParser<'a> {
 /// Parse a logfmt line into key-value pairs.
 ///
 /// Logfmt format: `key=value key2="quoted value" key3=unquoted`
-pub(crate) fn parse_logfmt(line: &str) -> HashMap<String, String> {
+pub fn parse_logfmt(line: &str) -> HashMap<String, String> {
     let mut result = HashMap::new();
     let mut chars = line.char_indices().peekable();
 
@@ -711,7 +711,7 @@ pub struct QueryFilter {
 /// Extract a field value from a JSON object.
 ///
 /// Supports dot notation for nested field access: "user.id" -> json["user"]["id"]
-pub(crate) fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<String> {
+pub fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<String> {
     let mut current = json;
 
     for part in field.split('.') {

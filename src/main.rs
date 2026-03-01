@@ -11,6 +11,7 @@ mod log_source;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod reader;
+mod renderer;
 mod signal;
 mod source;
 mod tui;
@@ -32,6 +33,7 @@ use lazytail::index;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // Constants
@@ -245,6 +247,9 @@ fn main() -> Result<()> {
         return result;
     }
 
+    // Compile rendering presets from config
+    let preset_registry = compile_preset_registry(&cfg, &mut config_errors);
+
     // Create app state BEFORE terminal setup (important for process substitution and stdin)
     // These sources may become invalid after terminal operations
     let watch = !cli.no_watch;
@@ -256,7 +261,8 @@ fn main() -> Result<()> {
     // Add project sources
     for source in &cfg.project_sources {
         match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
-            Ok(t) => tabs.push(t),
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {} // Metadata-only source, skip
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
     }
@@ -264,7 +270,8 @@ fn main() -> Result<()> {
     // Add global sources
     for source in &cfg.global_sources {
         match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
-            Ok(t) => tabs.push(t),
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {} // Metadata-only source, skip
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
     }
@@ -329,7 +336,7 @@ fn main() -> Result<()> {
     }
 
     phase = Instant::now();
-    let mut app = App::with_tabs(tabs);
+    let mut app = App::with_tabs(tabs, preset_registry);
     app.startup_time = Some(startup);
     app.verbose = verbose;
     app.ensure_combined_tabs();
@@ -402,6 +409,9 @@ fn run_discovery_mode(
 
     let watch = !no_watch;
 
+    // Compile rendering presets from config
+    let preset_registry = compile_preset_registry(&cfg, &mut config_errors);
+
     // Build tabs from config sources first
     phase = Instant::now();
     let mut tabs = Vec::new();
@@ -409,7 +419,8 @@ fn run_discovery_mode(
     // Add project sources
     for source in &cfg.project_sources {
         match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
-            Ok(t) => tabs.push(t),
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {} // Metadata-only source, skip
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
     }
@@ -417,7 +428,8 @@ fn run_discovery_mode(
     // Add global sources
     for source in &cfg.global_sources {
         match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
-            Ok(t) => tabs.push(t),
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {} // Metadata-only source, skip
             Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
         }
     }
@@ -448,7 +460,7 @@ fn run_discovery_mode(
     }
 
     phase = Instant::now();
-    let mut app = App::with_tabs(tabs);
+    let mut app = App::with_tabs(tabs, preset_registry);
     app.startup_time = Some(startup);
     app.verbose = verbose;
     app.ensure_combined_tabs();
@@ -506,6 +518,40 @@ fn run_discovery_mode(
     }
 
     Ok(())
+}
+
+/// Compile rendering presets from config, returning an Arc<PresetRegistry>.
+fn compile_preset_registry(
+    cfg: &config::Config,
+    config_errors: &mut Vec<String>,
+) -> Arc<renderer::PresetRegistry> {
+    let mut compiled = Vec::new();
+    for raw in &cfg.renderers {
+        let raw_preset = renderer::preset::RawPreset {
+            name: raw.name.clone(),
+            detect: raw.detect.as_ref().map(|d| renderer::preset::RawDetect {
+                parser: d.parser.clone(),
+                filename: d.filename.clone(),
+            }),
+            regex: raw.regex.clone(),
+            layout: raw
+                .layout
+                .iter()
+                .map(|e| renderer::preset::RawLayoutEntry {
+                    field: e.field.clone(),
+                    literal: e.literal.clone(),
+                    style: e.style.clone(),
+                    width: e.width,
+                    format: e.format.clone(),
+                })
+                .collect(),
+        };
+        match renderer::preset::compile(raw_preset) {
+            Ok(preset) => compiled.push(preset),
+            Err(e) => config_errors.push(format!("Renderer '{}': {}", raw.name, e)),
+        }
+    }
+    Arc::new(renderer::PresetRegistry::new(compiled))
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
