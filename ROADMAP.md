@@ -223,7 +223,7 @@
 
 #### Expandable Entries — Remaining 🟢
 - [ ] Fix: expanding a line near the bottom of the screen shows empty lines when the expansion doesn't fit — viewport should auto-scroll up so the expanded content is visible 🔴
-- [ ] Scrolling within expanded content (huge JSON)
+- [ ] Scrolling within expanded content — expanded views (especially pretty-printed JSON) can exceed screen height; need internal scroll, viewport clipping, and sensible max-height with scroll indicators
 - [ ] Collapsible JSON nodes (nested objects)
 
 ---
@@ -231,6 +231,7 @@
 ### Side Panel
 
 - [ ] Fix: selected empty/ended source is invisible — grayed-out dim text has no visible selection highlight, making it unclear which tab is active 🔴
+- [ ] Preview log source content while navigating the side panel — show a live preview of the highlighted source before switching to it 🟡
 - [ ] Toggle panel visibility keybinding 🟡
 - [ ] Configurable panel width 🟡
 - [ ] Tree structure with collapsible groups 🟡
@@ -245,6 +246,8 @@
 - [ ] Session ID per capture run (UUID in marker + log boundary marker + filter by session) 🟡
 - [ ] `--file <path>` for custom log file location 🟡
 - [ ] `--max-size <size>` for log rotation 🟡
+- [ ] Display captured logs formatted with rendering presets in the terminal during `cmd | lazytail -n name` (apply preset formatting to passthrough output) 🟡
+- [ ] `--raw` flag to bypass rendering preset formatting and output unmodified log lines during capture 🟡
 
 ---
 
@@ -269,7 +272,10 @@
 - [ ] MCP server settings (enabled tools, access control) 🟡
 - [ ] Allow manual severity format override per source 🟡
 - [ ] Theme/colors config via `lazytail.yaml` (named + hex colors, built-in themes) 🟢
+- [ ] Theme and color overrides should support customizing the app background color (not just text/severity colors) 🟢
+- [ ] Theme-aware rendering presets — preset styles resolve colors from `theme.palette` instead of fixed ANSI names, so changing themes also affects log line formatting 🟢
 - [ ] Keybindings config via `lazytail.yaml` 🟢
+- [ ] In-app configuration UI — TUI overlay with two sections: Global (`~/.config/lazytail/config.yaml`) and Project (`lazytail.yaml`), for editing theme, display options, and per-source settings without manually editing config files 🟢
 
 ---
 

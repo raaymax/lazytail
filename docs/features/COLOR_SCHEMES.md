@@ -29,13 +29,13 @@ A theme system that:
 - [x] **R9: Configurable source colors** — `CombinedReader::source_info()` accepts `&[Color]` from `theme.ui.source_colors`.
 - [x] **R10: Error handling** — `resolve_named()` suggests built-in names via Jaro-Winkler similarity. `"theme"` added to `ROOT_FIELDS` in `config/error.rs`.
 
-### Should Have (Stage 2 — External Files + Import)
+### Should Have (Stage 2 — External Files + Import) — COMPLETE
 
-- [ ] **R11: External theme files** — YAML files in `~/.config/lazytail/themes/` (global) or `.lazytail/themes/` (project). `_themes_dirs` param stubbed in loader but not wired.
-- [ ] **R12: Theme inheritance** — `base:` field works for built-in names ("dark", "light") only. External file inheritance not yet implemented.
+- [x] **R11: External theme files** — YAML files in `~/.config/lazytail/themes/` (global) or `.lazytail/themes/` (project). `collect_themes_dirs()` discovers both directories; `discover_themes()` scans for `.yaml` files.
+- [x] **R12: Theme inheritance** — `base:` field works for built-in and external theme names. Recursive `load_theme_file()` resolves external-to-external inheritance with cycle detection.
 - [x] **R13: Inline overrides in config** — `theme: { base: dark, ui: { primary: cyan } }` works. Palette overrides re-derive UI colors, then UI overrides applied on top.
-- [ ] **R14: iTerm2 import CLI** — `lazytail theme import <file> --name <name>` not implemented. No `Theme` subcommand in CLI.
-- [ ] **R15: Theme list CLI** — `lazytail theme list` not implemented.
+- [x] **R14: iTerm2 import CLI** — `lazytail theme import <file> --name <name>` parses Windows Terminal JSON, validates required keys, maps "purple" → "magenta", writes YAML to `~/.config/lazytail/themes/`.
+- [x] **R15: Theme list CLI** — `lazytail theme list` shows built-in themes (dark, light) and discovered external themes from themes directories.
 
 ### Could Have (Stage 3 — Polish)
 
@@ -259,13 +259,13 @@ src/theme/
 - [x] Inline overrides in config (`theme: { base: ..., ui: { ... } }`)
 - [x] Tests: 18 tests covering color parsing, palette derivation, theme loading, overrides
 
-### Stage 2: External Files + Import
+### Stage 2: External Files + Import — COMPLETE
 
-- [ ] Theme file discovery (project + global themes dirs) — `_themes_dirs` param stubbed but unused
-- [ ] Theme file loading with inheritance (`base:` field) — only built-in bases ("dark", "light") work
-- [ ] `lazytail theme import` CLI (Windows Terminal JSON → theme YAML)
-- [ ] `lazytail theme list` CLI (built-ins + discovered files)
-- [ ] Tests: file loading, inheritance, import
+- [x] Theme file discovery (project + global themes dirs) — `collect_themes_dirs()` and `discover_themes()`
+- [x] Theme file loading with inheritance (`base:` field) — recursive resolution with cycle detection, supports external-to-external inheritance
+- [x] `lazytail theme import` CLI (Windows Terminal JSON → theme YAML) — validates keys, maps "purple" → "magenta"
+- [x] `lazytail theme list` CLI (built-ins + discovered files)
+- [x] Tests: file loading, inheritance, import, cycle detection, roundtrip validation
 
 ### Stage 3: Polish (future)
 

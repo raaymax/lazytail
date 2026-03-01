@@ -38,35 +38,34 @@ A YAML-configurable preset system that:
 - [x] **R14: Built-in defaults** — `builtin_json()` (timestamp|level|message|_rest) and `builtin_logfmt()` (ts|level|msg|_rest). Both activate via auto-detection from index flags.
 - [x] **R15: Width/alignment** — `apply_width()` truncates if over width, pads left-aligned if under.
 
-### Should Have (Stage 2 — Field Paths + Styling)
+### Should Have (Stage 2 — Field Paths + Styling) — COMPLETE
 
-- [ ] **R16: Array index in field paths** — `extract_json_field()` should resolve numeric path segments as array indices. `message.content.0.text` traverses into `message` → `content` (array) → index 0 → `text`. When a path segment is a valid `usize` and the current value is an array, use index access; otherwise fall back to object key lookup. This is the foundational blocker for rendering logs with nested array structures (e.g., Claude conversation logs where `message.content` is `[{"type":"text","text":"..."}]`).
-- [ ] **R17: Value-to-style mapping (`style_map`)** — Layout entries gain an optional `style_map` field: a YAML map from field value → style name. When the extracted field value matches a key, apply that style; unmatched values get `Default`. Example:
-  ```yaml
-  - field: type
-    style_map:
-      user: green
-      assistant: blue
-      system: yellow
-      progress: dim
-  ```
-  `style_map` and `style` are mutually exclusive (compile error if both set). Resolved at compile time into a `StyleFn::Map(HashMap<String, SegmentStyle>)` variant.
-- [ ] **R18: `max_width` (truncate without padding)** — Layout entries gain an optional `max_width` field. Unlike `width` (which pads short values with spaces to a fixed column), `max_width` only truncates values exceeding the limit. Short values are unchanged. `width` and `max_width` are mutually exclusive (compile error if both set). Useful for content previews where you want the first N chars without wasting horizontal space.
-- [ ] **R19: Compound styles** — Allow `style` to accept a list of style names. `style: [bold, cyan]` applies both BOLD modifier and cyan foreground. Resolved at compile time into a combined `SegmentStyle`. Implementation: `SegmentStyle` gains a `Compound` variant or styles become a bitmask. Modifiers (dim, bold, italic) can combine with one Fg color.
+- [x] **R16: Array index in field paths** — `extract_json_field()` resolves numeric path segments as array indices. `message.content.0.text` traverses into `message` → `content` (array) → index 0 → `text`. When a path segment is a valid `usize` and the current value is an array, uses index access; otherwise falls back to object key lookup.
+- [x] **R17: Value-to-style mapping (`style_map`)** — Layout entries have an optional `style_map` field: a YAML map from field value → style name. When the extracted field value matches a key, that style is applied; unmatched values get `Default`. Supports `_default` fallback key. `style_map` and `style` are mutually exclusive (compile error if both set). Resolved at compile time into a `StyleFn::Map(HashMap<String, SegmentStyle>)` variant.
+- [x] **R18: `max_width` (truncate without padding)** — Layout entries have an optional `max_width` field. Unlike `width` (which pads short values with spaces to a fixed column), `max_width` only truncates values exceeding the limit. Short values are unchanged. `width` and `max_width` are mutually exclusive (compile error if both set).
+- [x] **R19: Compound styles** — `style` accepts a list of style names. `style: [bold, cyan]` applies both BOLD modifier and cyan foreground. Resolved at compile time into `SegmentStyle::Compound { dim, bold, italic, fg }`. Modifiers (dim, bold, italic) combine with one Fg color. Compile error if two Fg colors specified.
 
 ### Should Have (Stage 3 — MCP + Formatting)
 
-- [ ] **R20: MCP integration** — `LineInfo` gains optional `rendered` field with preset-formatted plain text. `content` stays as raw line (backward compatible).
-- [ ] **R21: Preset inheritance** — A preset can extend another, overriding specific layout entries.
-- [ ] **R22: Field formatting** — Built-in formatters: `datetime` (relative/absolute), `duration` (humanize ms/ns), `bytes` (humanize).
-- [ ] **R23: Conditional styling** — Style based on field value: e.g., highlight duration > 1000ms.
+- [ ] **R20: MCP integration** — `LineInfo` gains optional `rendered` field with preset-formatted plain text. `content` stays as raw line (backward compatible). MCP `list_sources` exposes available renderer names per source.
+- [ ] **R24: Field formatting** — Built-in formatters: `datetime` (relative/absolute), `duration` (humanize ms/ns), `bytes` (humanize). Applied via `format:` key on layout entries.
+- [ ] **R25: Conditional styling** — Style based on field value comparison: e.g., highlight duration > 1000ms. Uses `style_when` with `{field, op, value, style}` conditions.
+
+### Should Have (Stage 4 — Capture + Theme + External Presets)
+
+- [ ] **R21: Capture passthrough rendering** — During `cmd | lazytail -n name`, apply the source's rendering preset to format log lines written to stdout. Resolves preset chain from config (by source name) or auto-detection. Lines that don't match any preset pass through unchanged.
+- [ ] **R22: `--raw` flag for capture** — `lazytail -n name --raw` bypasses preset formatting and outputs unmodified log lines during capture. Default behavior (without `--raw`) applies preset formatting.
+- [ ] **R23: Theme-aware preset styles** — Preset styles resolve colors from `theme.palette` instead of fixed ANSI color names. Changing the active theme also changes how rendering presets colorize log lines. `SegmentColor` gains a `Palette(String)` variant that looks up named colors from the theme. Fixed ANSI names (`red`, `cyan`, etc.) remain as fallback.
+- [ ] **R26: External preset files** — Load preset definitions from standalone YAML files in search paths, following the same pattern as theme loading (`collect_themes_dirs`). Search order: `{project_root}/.lazytail/renderers/` > `{project_root}/renderers/` > `~/.config/lazytail/renderers/`. Each `.yaml` file defines one preset (filename stem = preset name). External presets merge with inline `renderers:` in `lazytail.yaml` (inline shadows external). `PresetRegistry::new()` discovers and compiles external presets alongside inline ones. Repo-bundled presets in `{project_root}/renderers/` let projects ship presets for their log formats without requiring each user to copy them into their config.
 
 ### Could Have (future)
 
-- [ ] **R24: Live preset reload** — Watch preset config for changes, recompile without restart.
-- [ ] **R25: Preset sharing** — Import presets via URL or package.
-- [ ] **R26: Conditional layout entries (`when`)** — Layout entries gain an optional `when` field that references a field + expected value. Entry is only rendered when condition matches. Example: `when: {field: type, eq: system}` would only render `subtype` for system events. Avoids blank gaps in mixed-type lines.
-- [ ] **R27: Array join/iteration** — A `format: join(", ")` option for array fields that iterates array elements, extracts a sub-field from each, and joins them. Example: `field: message.content, format: join("; "), sub_field: type` → `"text; tool_use; thinking"`. Useful for summarizing content block types.
+- [ ] **R27: Preset inheritance** — A preset can extend another via `extends: base-preset`, overriding specific layout entries while inheriting the rest.
+- [ ] **R28: Live preset reload** — Watch preset config for changes, recompile without restart.
+- [ ] **R29: Preset sharing** — Import presets via URL or package.
+- [ ] **R30: Conditional layout entries (`when`)** — Layout entries gain an optional `when` field that references a field + expected value. Entry is only rendered when condition matches. Example: `when: {field: type, eq: system}` would only render `subtype` for system events. Avoids blank gaps in mixed-type lines.
+- [ ] **R31: Array join/iteration** — A `format: join(", ")` option for array fields that iterates array elements, extracts a sub-field from each, and joins them. Example: `field: message.content, format: join("; "), sub_field: type` → `"text; tool_use; thinking"`. Useful for summarizing content block types.
+- [ ] **R32: Query `format` stage** — Inline preset-like formatting in query syntax: `json | format <severity> - <method> <url> - <status>`. Parses a format template after `format` keyword, extracts referenced fields, renders each line using the template. Bridges query language and rendering presets — lightweight alternative to defining a full YAML preset.
 
 ### Won't Have (out of scope)
 
@@ -264,20 +263,26 @@ src/renderer/
 - [x] Name matching: `App::source_renderer_map` built from config, passed to `from_discovered_source()` at startup and via dir watcher
 - [x] Tests: preset compilation, rendering, field extraction, renderer chain, `_rest`, config loading
 
-### Stage 2: Field Paths + Styling (next)
+### Stage 2: Field Paths + Styling — COMPLETE
 
-- [ ] R16: Array index in field paths (`extract_json_field` numeric segment → array index)
-- [ ] R17: `style_map` — value-to-style mapping on layout entries
-- [ ] R18: `max_width` — truncate without padding
-- [ ] R19: Compound styles (`style: [bold, cyan]`)
+- [x] R16: Array index in field paths (`extract_json_field` numeric segment → array index, with object key fallback)
+- [x] R17: `style_map` — value-to-style mapping on layout entries (`StyleFn::Map`, `_default` fallback key, mutual exclusivity with `style`)
+- [x] R18: `max_width` — truncate without padding (mutual exclusivity with `width`)
+- [x] R19: Compound styles (`style: [bold, cyan]` → `SegmentStyle::Compound`, single Fg color enforced)
 
-### Stage 3: MCP + Formatting (future)
+### Stage 3: MCP + Formatting (next)
 
-- [ ] MCP: `rendered` field in LineInfo
-- [ ] MCP: preset registry in MCP server
-- [ ] Preset inheritance (`extends:` field)
-- [ ] Field formatters (datetime, duration, bytes)
-- [ ] Conditional styling
+- [ ] R20: MCP `rendered` field in LineInfo + renderer names in `list_sources`
+- [ ] R20: Preset registry in MCP server
+- [ ] R24: Field formatters (datetime, duration, bytes)
+- [ ] R25: Conditional styling (`style_when` conditions)
+
+### Stage 4: Capture + Theme + External Presets
+
+- [ ] R21: Capture passthrough rendering (`lazytail -n` applies preset to stdout)
+- [ ] R22: `--raw` flag to bypass passthrough formatting
+- [ ] R23: Theme-aware styles (`SegmentColor::Palette`, resolve from `theme.palette`)
+- [ ] R26: External preset files (`.lazytail/renderers/`, `renderers/`, `~/.config/lazytail/renderers/`)
 
 ## Testing Strategy
 
@@ -303,3 +308,7 @@ src/renderer/
 5. R16 array index: should `message.content.0.text` syntax also support bracket notation (`message.content[0].text`)? Dot notation is simpler to parse and consistent with existing path syntax. Bracket notation is more familiar from jq/JSONPath. — **Decision: dot notation only** (`message.content.0.text`). Simpler implementation, no ambiguity with field names containing dots.
 6. R17 style_map: should unmatched values fall back to a `_default` key or always to `SegmentStyle::Default`? — Allow optional `_default` key in the map for a fallback style.
 7. R19 compound styles: should the style list be ordered (first color wins) or should color conflict be a compile error? — First Fg color wins, multiple modifiers combine. Compile error if two Fg colors specified.
+8. R21 capture passthrough: should preset rendering be the default for `lazytail -n`, with `--raw` to disable? Or opt-in with `--format`/`--render`? Default-on is more useful but changes existing behavior.
+9. R23 theme-aware: should `SegmentColor::Palette(name)` fall back to a hardcoded color if the palette key is missing, or fail at compile time? Runtime fallback is more resilient, compile-time is safer.
+10. R32 query `format` stage: should the format template reuse YAML preset layout syntax or have its own inline syntax? Inline is more ergonomic for one-off use but adds a second format language.
+11. R26 external preset files: should the directory be called `renderers/` or `presets/`? `renderers/` matches the YAML key name (`renderers:`). `presets/` is more intuitive for users. Theme system uses `themes/` matching the config key `theme:`.
