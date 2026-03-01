@@ -72,7 +72,105 @@ pub fn run(args: BenchArgs) -> Result<(), i32> {
             }
         };
 
-        if args.compare {
+        let is_plain = !args.regex && !args.query;
+
+        if is_plain {
+            // Plain text: always compare generic vs SIMD paths
+            let generic = match run_trials(file, filter.clone(), None, None, trials) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error benchmarking {}: {}", file.display(), e);
+                    return Err(1);
+                }
+            };
+            let generic_stats = compute_stats(&generic.durations);
+
+            let simd =
+                match run_trials_fast(file, args.pattern.as_bytes(), args.case_sensitive, trials) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Error benchmarking {}: {}", file.display(), e);
+                        return Err(1);
+                    }
+                };
+            let simd_stats = compute_stats(&simd.durations);
+
+            if let Some(ref mut results) = json_results {
+                results.push(build_paths_compare_json(
+                    file,
+                    file_size,
+                    total_lines,
+                    &args.pattern,
+                    mode_label,
+                    trials,
+                    &generic,
+                    &generic_stats,
+                    &simd,
+                    &simd_stats,
+                ));
+            } else {
+                print_paths_compare(
+                    file,
+                    file_size,
+                    total_lines,
+                    &args.pattern,
+                    mode_label,
+                    trials,
+                    &generic,
+                    &generic_stats,
+                    &simd,
+                    &simd_stats,
+                );
+            }
+
+            // --compare adds indexed dimension on top
+            if args.compare {
+                let index = IndexReader::open(file);
+                if let Some(ref idx) = index {
+                    let indexed = match run_trials(file, filter.clone(), None, Some(idx), trials) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Error benchmarking {}: {}", file.display(), e);
+                            return Err(1);
+                        }
+                    };
+                    let indexed_stats = compute_stats(&indexed.durations);
+
+                    if let Some(ref mut results) = json_results {
+                        results.push(build_compare_json(
+                            file,
+                            file_size,
+                            total_lines,
+                            &args.pattern,
+                            mode_label,
+                            trials,
+                            &generic,
+                            &generic_stats,
+                            &indexed,
+                            &indexed_stats,
+                        ));
+                    } else {
+                        print_compare_results(
+                            file,
+                            file_size,
+                            total_lines,
+                            &args.pattern,
+                            mode_label,
+                            trials,
+                            &generic,
+                            &generic_stats,
+                            &indexed,
+                            &indexed_stats,
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "Note: No index found for {}. Skipping indexed comparison.",
+                        file.display()
+                    );
+                }
+            }
+        } else if args.compare {
             // Run non-indexed path
             let non_indexed =
                 match run_trials(file, filter.clone(), filter_query.as_ref(), None, trials) {
@@ -245,6 +343,41 @@ fn run_trials(
         let rx =
             SearchEngine::search_file(path, filter.clone(), query, index, None, CancelToken::new())
                 .map_err(|e| format!("Search failed: {}", e))?;
+
+        let (matches, lines_searched) = collect_filter_results(rx)?;
+        let elapsed = start.elapsed();
+
+        last_matches = matches.len();
+        last_lines_searched = lines_searched;
+
+        // Discard warmup trial (first one)
+        if i > 0 {
+            durations.push(elapsed);
+        }
+    }
+
+    Ok(BenchResult {
+        durations,
+        matches: last_matches,
+        lines_searched: last_lines_searched,
+    })
+}
+
+fn run_trials_fast(
+    path: &Path,
+    pattern: &[u8],
+    case_sensitive: bool,
+    trials: usize,
+) -> Result<BenchResult, String> {
+    let mut durations = Vec::with_capacity(trials - 1);
+    let mut last_matches = 0;
+    let mut last_lines_searched = 0;
+
+    for i in 0..trials {
+        let start = Instant::now();
+
+        let rx = SearchEngine::search_file_fast(path, pattern, case_sensitive, CancelToken::new())
+            .map_err(|e| format!("Search failed: {}", e))?;
 
         let (matches, lines_searched) = collect_filter_results(rx)?;
         let elapsed = start.elapsed();
@@ -469,6 +602,73 @@ fn print_compare_results(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn print_paths_compare(
+    path: &Path,
+    file_size: u64,
+    total_lines: usize,
+    pattern: &str,
+    mode_label: &str,
+    trials: usize,
+    generic: &BenchResult,
+    generic_stats: &TrialStats,
+    simd: &BenchResult,
+    simd_stats: &TrialStats,
+) {
+    println!("Filter Benchmark");
+    println!("================");
+    println!();
+    println!("File:        {}", path.display());
+    println!("File size:   {}", format_size(file_size));
+    println!("Total lines: {}", total_lines);
+    println!("Pattern:     {}", pattern);
+    println!("Mode:        {}", mode_label);
+    println!(
+        "Trials:      {} (1 warmup + {} measured)",
+        trials,
+        trials - 1
+    );
+    println!();
+    println!("Generic:");
+    println!("  Matches:  {}", generic.matches);
+    println!(
+        "  mean:     {}",
+        format_duration(generic_stats.mean.as_millis())
+    );
+    println!(
+        "  p50:      {}",
+        format_duration(generic_stats.p50.as_millis())
+    );
+    println!(
+        "  p95:      {}",
+        format_duration(generic_stats.p95.as_millis())
+    );
+    println!();
+    println!("SIMD:");
+    println!("  Matches:  {}", simd.matches);
+    println!(
+        "  mean:     {}",
+        format_duration(simd_stats.mean.as_millis())
+    );
+    println!(
+        "  p50:      {}",
+        format_duration(simd_stats.p50.as_millis())
+    );
+    println!(
+        "  p95:      {}",
+        format_duration(simd_stats.p95.as_millis())
+    );
+    println!();
+
+    let speedup = if simd_stats.mean.as_nanos() > 0 {
+        generic_stats.mean.as_nanos() as f64 / simd_stats.mean.as_nanos() as f64
+    } else {
+        0.0
+    };
+    println!("Speedup:     {:.2}x (mean)", speedup);
+    println!();
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_result_json(
     path: &Path,
     file_size: u64,
@@ -560,6 +760,62 @@ fn build_compare_json(
                 "p50_ms": indexed_stats.p50.as_millis(),
                 "p95_ms": indexed_stats.p95.as_millis(),
                 "p99_ms": indexed_stats.p99.as_millis(),
+            },
+        },
+        "speedup": speedup,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_paths_compare_json(
+    path: &Path,
+    file_size: u64,
+    total_lines: usize,
+    pattern: &str,
+    mode_label: &str,
+    trials: usize,
+    generic: &BenchResult,
+    generic_stats: &TrialStats,
+    simd: &BenchResult,
+    simd_stats: &TrialStats,
+) -> serde_json::Value {
+    let speedup = if simd_stats.mean.as_nanos() > 0 {
+        generic_stats.mean.as_nanos() as f64 / simd_stats.mean.as_nanos() as f64
+    } else {
+        0.0
+    };
+
+    serde_json::json!({
+        "file": path.display().to_string(),
+        "file_size": file_size,
+        "total_lines": total_lines,
+        "pattern": pattern,
+        "mode": mode_label,
+        "trials": trials - 1,
+        "generic": {
+            "matches": generic.matches,
+            "lines_searched": generic.lines_searched,
+            "timing": {
+                "min_ms": generic_stats.min.as_millis(),
+                "max_ms": generic_stats.max.as_millis(),
+                "mean_ms": generic_stats.mean.as_millis(),
+                "stddev_ms": generic_stats.stddev.as_millis(),
+                "p50_ms": generic_stats.p50.as_millis(),
+                "p95_ms": generic_stats.p95.as_millis(),
+                "p99_ms": generic_stats.p99.as_millis(),
+            },
+        },
+        "simd": {
+            "matches": simd.matches,
+            "lines_searched": simd.lines_searched,
+            "timing": {
+                "min_ms": simd_stats.min.as_millis(),
+                "max_ms": simd_stats.max.as_millis(),
+                "mean_ms": simd_stats.mean.as_millis(),
+                "stddev_ms": simd_stats.stddev.as_millis(),
+                "p50_ms": simd_stats.p50.as_millis(),
+                "p95_ms": simd_stats.p95.as_millis(),
+                "p99_ms": simd_stats.p99.as_millis(),
             },
         },
         "speedup": speedup,
@@ -749,5 +1005,94 @@ mod tests {
         let result = collect_filter_results(rx);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "fail");
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp files
+    fn test_run_trials_fast_finds_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.log");
+        std::fs::write(
+            &file,
+            "info: all good\nerror: bad thing\ninfo: fine\nerror: another\n",
+        )
+        .unwrap();
+
+        let result = run_trials_fast(&file, b"error", false, 3).unwrap();
+        assert_eq!(result.matches, 2);
+        assert_eq!(result.lines_searched, 4);
+        // 3 trials - 1 warmup = 2 measured
+        assert_eq!(result.durations.len(), 2);
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp files
+    fn test_run_trials_fast_no_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.log");
+        std::fs::write(&file, "info: all good\ninfo: fine\n").unwrap();
+
+        let result = run_trials_fast(&file, b"error", false, 2).unwrap();
+        assert_eq!(result.matches, 0);
+        assert_eq!(result.lines_searched, 2);
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp files
+    fn test_run_plain_text_shows_both_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.log");
+        std::fs::write(&file, "error: one\ninfo: two\nerror: three\n").unwrap();
+
+        let args = BenchArgs {
+            pattern: "error".to_string(),
+            files: vec![file],
+            regex: false,
+            query: false,
+            case_sensitive: false,
+            trials: 2,
+            json: true,
+            compare: false,
+        };
+        // Should succeed (JSON mode captures output)
+        let result = run(args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp files
+    fn test_run_regex_no_paths_compare() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.log");
+        std::fs::write(&file, "error: one\ninfo: two\n").unwrap();
+
+        let args = BenchArgs {
+            pattern: "err(or)".to_string(),
+            files: vec![file],
+            regex: true,
+            query: false,
+            case_sensitive: false,
+            trials: 2,
+            json: true,
+            compare: false,
+        };
+        let result = run(args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[ignore] // Slow: creates temp files
+    fn test_run_trials_fast_matches_run_trials() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.log");
+        std::fs::write(&file, "error: one\ninfo: two\nerror: three\nwarn: four\n").unwrap();
+
+        let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("error", false));
+        let generic = run_trials(&file, filter, None, None, 2).unwrap();
+        let simd = run_trials_fast(&file, b"error", false, 2).unwrap();
+
+        // Both paths must find the same number of matches
+        assert_eq!(generic.matches, simd.matches);
+        assert_eq!(generic.matches, 2);
     }
 }
