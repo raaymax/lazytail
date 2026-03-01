@@ -84,6 +84,7 @@ pub enum AppEvent {
     // Mode toggles
     ToggleFollowMode,
     DisableFollowMode,
+    ToggleRawMode,
 
     // Help mode
     ShowHelp,
