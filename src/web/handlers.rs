@@ -477,22 +477,32 @@ fn parse_query_params(query: &str) -> HashMap<String, String> {
 }
 
 /// Decode a percent-encoded URL component (`+` → space, `%XX` → byte).
+/// Invalid or truncated percent sequences are left as-is.
 fn url_decode(input: &str) -> String {
-    let mut bytes = Vec::with_capacity(input.len());
-    let mut chars = input.bytes();
-    while let Some(b) = chars.next() {
-        match b {
-            b'+' => bytes.push(b' '),
-            b'%' => {
-                let hi = chars.next().and_then(|c| (c as char).to_digit(16));
-                let lo = chars.next().and_then(|c| (c as char).to_digit(16));
+    let raw = input.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        match raw[i] {
+            b'+' => {
+                bytes.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < raw.len() => {
+                let hi = (raw[i + 1] as char).to_digit(16);
+                let lo = (raw[i + 2] as char).to_digit(16);
                 if let (Some(h), Some(l)) = (hi, lo) {
                     bytes.push((h * 16 + l) as u8);
+                    i += 3;
                 } else {
                     bytes.push(b'%');
+                    i += 1;
                 }
             }
-            _ => bytes.push(b),
+            c => {
+                bytes.push(c);
+                i += 1;
+            }
         }
     }
     String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
@@ -606,9 +616,16 @@ mod tests {
 
     #[test]
     fn url_decode_truncated_percent() {
-        // Truncated %XX sequence — emit literal '%'
-        assert_eq!(url_decode("abc%2"), "abc%");
+        // Truncated %XX sequence — preserved as-is
+        assert_eq!(url_decode("abc%2"), "abc%2");
         assert_eq!(url_decode("abc%"), "abc%");
+    }
+
+    #[test]
+    fn url_decode_invalid_hex_preserved() {
+        // Invalid hex digits after % — preserved as-is
+        assert_eq!(url_decode("%GG"), "%GG");
+        assert_eq!(url_decode("%2G"), "%2G");
     }
 
     #[test]
