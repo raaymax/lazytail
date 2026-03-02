@@ -420,7 +420,10 @@ impl TabState {
 
         // Add lines via the StreamableReader handle
         if let Some(ref writer) = self.stream_writer {
-            let mut writer = writer.lock().unwrap();
+            let mut writer = match writer.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             writer.append_lines(lines);
         }
 
@@ -444,7 +447,10 @@ impl TabState {
     /// Mark stream loading as complete
     pub fn mark_stream_complete(&mut self) {
         if let Some(ref writer) = self.stream_writer {
-            let mut writer = writer.lock().unwrap();
+            let mut writer = match writer.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             writer.mark_complete();
         }
         // Clear the receiver since we won't need it anymore
@@ -748,12 +754,15 @@ impl TabState {
                 if new_total > self.source.filter.last_filtered_line {
                     let mode = self.source.filter.mode;
                     let range = Some((self.source.filter.last_filtered_line, new_total));
-                    crate::filter::orchestrator::FilterOrchestrator::trigger(
+                    if let Err(e) = crate::filter::orchestrator::FilterOrchestrator::trigger(
                         &mut self.source,
                         pattern,
                         mode,
                         range,
-                    );
+                    ) {
+                        eprintln!("Incremental filter error: {}", e);
+                        self.source.filter.state = FilterState::Inactive;
+                    }
                 }
             }
         }

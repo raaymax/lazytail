@@ -373,7 +373,11 @@ impl WebState {
                     if new_total > tab.source.filter.last_filtered_line {
                         let mode = tab.source.filter.mode;
                         let range = Some((tab.source.filter.last_filtered_line, new_total));
-                        FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
+                        if let Err(e) =
+                            FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range)
+                        {
+                            eprintln!("Web incremental filter error: {}", e);
+                        }
                     }
                 }
 
@@ -884,7 +888,12 @@ fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<WebState>>) {
 
             tab.source.filter.pattern = Some(trimmed_pattern.clone());
             tab.source.filter.mode = mode;
-            FilterOrchestrator::trigger(&mut tab.source, trimmed_pattern, mode, None);
+            if let Err(e) =
+                FilterOrchestrator::trigger(&mut tab.source, trimmed_pattern, mode, None)
+            {
+                respond_json_error(request, 400, e);
+                return;
+            }
             state.bump_revision();
             respond_json(
                 request,
