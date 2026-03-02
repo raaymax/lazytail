@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.8.0](https://github.com/raaymax/lazytail/compare/v0.7.0...v0.8.0) (2026-03-02)
+
+
+### Features
+
+* **bench:** add filter benchmarking CLI subcommand ([#50](https://github.com/raaymax/lazytail/issues/50)) ([a45ca20](https://github.com/raaymax/lazytail/commit/a45ca20da231ab8939cdc51cab9a5ff8d0852ba9))
+* **bench:** compare generic and SIMD paths for plain text benchmarks ([#65](https://github.com/raaymax/lazytail/issues/65)) ([017188b](https://github.com/raaymax/lazytail/commit/017188b79b7abafb35677f8808eb101404e9e5d2))
+* **clipboard:** add y keybinding to copy selected line ([#44](https://github.com/raaymax/lazytail/issues/44)) ([f7dd854](https://github.com/raaymax/lazytail/commit/f7dd8543e199083b03932b70f8ef0868d97b0609))
+* **combined-view:** add merged chronological view for source categories ([#48](https://github.com/raaymax/lazytail/issues/48)) ([8d5ff18](https://github.com/raaymax/lazytail/commit/8d5ff1814a2bfa186572a974330e35332c72ebda))
+* **combined-view:** per-category combined tabs with follow mode fix ([#49](https://github.com/raaymax/lazytail/issues/49)) ([40861db](https://github.com/raaymax/lazytail/commit/40861db78807c77429a699647a46958837a9cb0a))
+* **filter:** add count-by aggregation with TUI view and MCP support ([#46](https://github.com/raaymax/lazytail/issues/46)) ([331e2ae](https://github.com/raaymax/lazytail/commit/331e2aefd5045c3bd8e5041fe410f87dc3f51daa))
+* **filter:** add explicit Query filter mode via Tab cycling ([#47](https://github.com/raaymax/lazytail/issues/47)) ([136d779](https://github.com/raaymax/lazytail/commit/136d7799989a6fadff04e9cb5ffada82a823f912))
+* **help:** add scrollable help overlay with j/k navigation ([#43](https://github.com/raaymax/lazytail/issues/43)) ([75ee3f4](https://github.com/raaymax/lazytail/commit/75ee3f45739533862134aac29d8813da65f15b75))
+* **mcp:** add since_line parameter to get_tail for incremental polling ([bd88113](https://github.com/raaymax/lazytail/commit/bd88113d7f34a42cf0153d7ad5257bce03df1ee0))
+* **mouse:** add mouse click support for side panel and log view ([#45](https://github.com/raaymax/lazytail/issues/45)) ([e459bfc](https://github.com/raaymax/lazytail/commit/e459bfc15b10e9a176aa89030775a5abb4362684))
+* remember last opened source and fix tab shortcut mapping ([#62](https://github.com/raaymax/lazytail/issues/62)) ([22e822c](https://github.com/raaymax/lazytail/commit/22e822cf9622df166f54c2149627e6fa42aea7ea))
+* **renderer:** add capture rendering, theme-aware styles, and external presets ([#61](https://github.com/raaymax/lazytail/issues/61)) ([84ff261](https://github.com/raaymax/lazytail/commit/84ff261d048889643deff930fb8d99514cbc36aa))
+* **renderer:** add field paths, style maps, max width, and compound styles ([#55](https://github.com/raaymax/lazytail/issues/55)) ([2f12eee](https://github.com/raaymax/lazytail/commit/2f12eeea41559392c4c7e950edb43ac30e7518c7))
+* **renderer:** add MCP rendering, field formatting, and conditional styling ([#59](https://github.com/raaymax/lazytail/issues/59)) ([2038433](https://github.com/raaymax/lazytail/commit/2038433adadb89c425d5e17edce8e36c75a5582c))
+* **renderer:** add MCP rendering, field formatting, and conditional styling ([#59](https://github.com/raaymax/lazytail/issues/59)) ([6dd34ac](https://github.com/raaymax/lazytail/commit/6dd34acbe976778ca52002d4c79d16f083958606))
+* **renderer:** add YAML-configurable rendering presets for structured log lines ([#52](https://github.com/raaymax/lazytail/issues/52)) ([960529b](https://github.com/raaymax/lazytail/commit/960529b750cc399659de906ab281bbc7ebc839a6))
+* **renderer:** wire discovered sources to config renderers and add conversation preset ([f96224b](https://github.com/raaymax/lazytail/commit/f96224b20ac4eb5292708c2a8c310bfdaa7d8f78))
+* **theme:** add {project_root}/themes/ to theme search paths ([#57](https://github.com/raaymax/lazytail/issues/57)) ([ed0e890](https://github.com/raaymax/lazytail/commit/ed0e890d40c9ce0fc06284fff6304b2cf3368ab6))
+* **theme:** add configurable color scheme system with built-in themes ([#53](https://github.com/raaymax/lazytail/issues/53)) ([4b751cc](https://github.com/raaymax/lazytail/commit/4b751cc50095512a07f2bb38971106938a4fd16d))
+* **theme:** add external theme file loading, inheritance, and CLI ([#54](https://github.com/raaymax/lazytail/issues/54)) ([ecee32c](https://github.com/raaymax/lazytail/commit/ecee32c4db8088e9ceccf0391d9b1c49daa4b776))
+* **theme:** add multi-format import and remove project_root/themes/ path ([#63](https://github.com/raaymax/lazytail/issues/63)) ([46698fe](https://github.com/raaymax/lazytail/commit/46698fee2fb7baf2c1a94aac05df833a980f579b))
+* **theme:** apply palette.background as TUI background color ([#58](https://github.com/raaymax/lazytail/issues/58)) ([6bd8127](https://github.com/raaymax/lazytail/commit/6bd8127a89bbd9703548cf9be23c6bcfba741722))
+* **tui:** add raw mode toggle to bypass preset and ANSI rendering ([#66](https://github.com/raaymax/lazytail/issues/66)) ([9819e41](https://github.com/raaymax/lazytail/commit/9819e41e112ac1376612749a3c6865a3ee894ddc))
+
+
+### Bug Fixes
+
+* **index:** detect and reject stale columnar indexes on file replacement ([#56](https://github.com/raaymax/lazytail/issues/56)) ([d7f62f6](https://github.com/raaymax/lazytail/commit/d7f62f62d7b2ee723030c5e91cd2b0bd041c33d3))
+* **index:** validate index freshness in `get_stats` before returning metadata ([#64](https://github.com/raaymax/lazytail/issues/64)) ([4ebc16e](https://github.com/raaymax/lazytail/commit/4ebc16e39e5bc48271219e3b4975483858aca099))
+* install script fails due to GitHub API rate limiting ([#39](https://github.com/raaymax/lazytail/issues/39)) ([9cfd015](https://github.com/raaymax/lazytail/commit/9cfd015959647d9f54e96509e7599e9513b86da2))
+* **renderer:** prevent empty lines from mismatched preset auto-detection ([4dd1703](https://github.com/raaymax/lazytail/commit/4dd1703b1d61503d6c9d09ac3e8adb9f8917960a))
+* **tui:** prevent expanded lines from clipping at screen bottom ([#51](https://github.com/raaymax/lazytail/issues/51)) ([14f2bec](https://github.com/raaymax/lazytail/commit/14f2bec0b20c8beadbf52d29504f5acff0246ee7))
+* **tui:** unify sidebar selection background color for overflow overlay ([bf6327b](https://github.com/raaymax/lazytail/commit/bf6327bc1216355799445f67aff8a0665e019d35))
+* **tui:** use normal background for metadata in sidebar overflow overlay ([39b53b4](https://github.com/raaymax/lazytail/commit/39b53b4023973876b8ba934edb2e4e140faa152f))
+* **watcher:** TUI not refreshing on macOS due to missed file events ([#41](https://github.com/raaymax/lazytail/issues/41)) ([f28c44d](https://github.com/raaymax/lazytail/commit/f28c44d4bb05e0b72ae43e154ffb4b47667e64de))
+
 ## [0.7.0](https://github.com/raaymax/lazytail/compare/v0.6.0...v0.7.0) (2026-02-23)
 
 
