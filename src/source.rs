@@ -557,7 +557,7 @@ pub fn build_missing_indexes(sources: &[DiscoveredSource]) {
     }
 }
 
-pub(crate) fn format_bytes(bytes: u64) -> String {
+fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
     } else if bytes < 1024 * 1024 {

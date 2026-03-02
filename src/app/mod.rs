@@ -1258,7 +1258,8 @@ impl App {
                 self.active_tab_mut().source.follow_mode = false;
             }
             AppEvent::ToggleRawMode => {
-                self.active_tab_mut().source.raw_mode = !self.active_tab_mut().source.raw_mode;
+                let tab = self.active_tab_mut();
+                tab.source.raw_mode = !tab.source.raw_mode;
             }
 
             // Line expansion
