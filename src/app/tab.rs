@@ -795,6 +795,89 @@ impl TabState {
             _ => false,
         }
     }
+
+    /// Merge partial filter results into visible lines for immediate display.
+    ///
+    /// Handles deferred clearing (to prevent UI blink) and sorted-merge of
+    /// newly arriving line indices with existing results. Adjusts scroll
+    /// position to keep the view stable when items are prepended.
+    pub fn merge_partial_filter_results(
+        &mut self,
+        new_indices: Vec<usize>,
+        lines_processed: usize,
+    ) {
+        if self.source.filter.needs_clear {
+            self.source.mode = ViewMode::Filtered;
+            self.source.line_indices.clear();
+            self.source.filter.needs_clear = false;
+        } else if self.source.mode == ViewMode::Normal {
+            self.source.mode = ViewMode::Filtered;
+            self.source.line_indices.clear();
+        }
+
+        let is_first_result = self.source.line_indices.is_empty();
+        if is_first_result {
+            self.source.line_indices = new_indices;
+            self.viewport.jump_to_end(&self.source.line_indices);
+        } else {
+            let first_existing = self.source.line_indices[0];
+            let prepended_count = new_indices
+                .iter()
+                .filter(|&&idx| idx < first_existing)
+                .count();
+
+            let mut merged = Vec::with_capacity(self.source.line_indices.len() + new_indices.len());
+            let mut i = 0;
+            let mut j = 0;
+
+            while i < self.source.line_indices.len() && j < new_indices.len() {
+                if self.source.line_indices[i] <= new_indices[j] {
+                    merged.push(self.source.line_indices[i]);
+                    i += 1;
+                } else {
+                    merged.push(new_indices[j]);
+                    j += 1;
+                }
+            }
+
+            merged.extend_from_slice(&self.source.line_indices[i..]);
+            merged.extend_from_slice(&new_indices[j..]);
+
+            self.source.line_indices = merged;
+            self.viewport.adjust_scroll_for_prepend(prepended_count);
+        }
+
+        self.source.filter.state = FilterState::Processing { lines_processed };
+    }
+
+    /// Reset tab state after file truncation.
+    ///
+    /// Cancels any in-progress filter, resets all filter state,
+    /// rebuilds line indices, and repositions the viewport.
+    pub fn reset_after_truncation(&mut self, new_total: usize) {
+        use crate::filter::orchestrator::FilterOrchestrator;
+
+        FilterOrchestrator::cancel(&mut self.source);
+        self.source.filter.receiver = None;
+        self.source.filter.is_incremental = false;
+
+        self.source.total_lines = new_total;
+        self.source.rate_tracker.record(new_total);
+        self.source.line_indices = (0..new_total).collect();
+        self.source.mode = ViewMode::Normal;
+
+        self.source.filter.pattern = None;
+        self.source.filter.state = FilterState::Inactive;
+        self.source.filter.last_filtered_line = 0;
+        self.source.filter.cancel_token = None;
+        self.source.filter.needs_clear = false;
+
+        if new_total > 0 {
+            self.jump_to_end();
+        } else {
+            self.jump_to_start();
+        }
+    }
 }
 
 /// Spawn a background thread to read from a stream and send batches of lines

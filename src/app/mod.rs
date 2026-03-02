@@ -788,65 +788,8 @@ impl App {
         new_indices: Vec<usize>,
         lines_processed: usize,
     ) {
-        let tab = self.active_tab_mut();
-
-        // Check if we need to clear old results (new filter started)
-        // This is deferred from trigger_filter to prevent blink
-        if tab.source.filter.needs_clear {
-            tab.source.mode = ViewMode::Filtered;
-            tab.source.line_indices.clear();
-            tab.source.filter.needs_clear = false;
-        } else if tab.source.mode == ViewMode::Normal {
-            // Switch to filtered mode if this is the first partial result
-            tab.source.mode = ViewMode::Filtered;
-            tab.source.line_indices.clear();
-        }
-
-        // Merge new indices (they should already be sorted)
-        // Since we process from end to start, new indices may need to be inserted at the beginning
-        let is_first_result = tab.source.line_indices.is_empty();
-        if is_first_result {
-            tab.source.line_indices = new_indices;
-            // Jump to end to show newest results first (we process from end of file)
-            tab.viewport.jump_to_end(&tab.source.line_indices);
-        } else {
-            // Count items that will be prepended (items smaller than current first item)
-            // This is needed to adjust scroll_position since it's an index that becomes
-            // stale when items are inserted before it
-            let first_existing = tab.source.line_indices[0];
-            let prepended_count = new_indices
-                .iter()
-                .filter(|&&idx| idx < first_existing)
-                .count();
-
-            // Merge sorted arrays
-            let mut merged = Vec::with_capacity(tab.source.line_indices.len() + new_indices.len());
-            let mut i = 0;
-            let mut j = 0;
-
-            while i < tab.source.line_indices.len() && j < new_indices.len() {
-                if tab.source.line_indices[i] <= new_indices[j] {
-                    merged.push(tab.source.line_indices[i]);
-                    i += 1;
-                } else {
-                    merged.push(new_indices[j]);
-                    j += 1;
-                }
-            }
-
-            // Add remaining elements
-            merged.extend_from_slice(&tab.source.line_indices[i..]);
-            merged.extend_from_slice(&new_indices[j..]);
-
-            tab.source.line_indices = merged;
-
-            // Adjust scroll_position to account for prepended items
-            // This keeps the view stable - the same content stays visible
-            tab.viewport.adjust_scroll_for_prepend(prepended_count);
-        }
-
-        // Update filter state with lines processed for progress display
-        tab.source.filter.state = FilterState::Processing { lines_processed };
+        self.active_tab_mut()
+            .merge_partial_filter_results(new_indices, lines_processed);
     }
 
     /// Drill down into the selected aggregation group, showing its lines.
@@ -1224,25 +1167,160 @@ impl App {
         self.active_tab_mut().jump_to_start();
     }
 
-    /// Apply an event to the application state
-    /// This is the central event handler that modifies app state based on events
+    /// Apply an event to the application state.
+    ///
+    /// Central event dispatcher — delegates to concern-focused handler methods.
     pub fn apply_event(&mut self, event: event::AppEvent) {
         use event::AppEvent;
 
         match event {
-            // Navigation events - delegate to active tab
+            // Navigation
+            AppEvent::ScrollDown
+            | AppEvent::ScrollUp
+            | AppEvent::PageDown(_)
+            | AppEvent::PageUp(_)
+            | AppEvent::JumpToStart
+            | AppEvent::JumpToEnd
+            | AppEvent::MouseScrollDown(_)
+            | AppEvent::MouseScrollUp(_)
+            | AppEvent::ViewportDown
+            | AppEvent::ViewportUp => self.handle_navigation_event(event),
+
+            // Tab management
+            AppEvent::SelectTab(_)
+            | AppEvent::CloseCurrentTab
+            | AppEvent::CloseSelectedTab
+            | AppEvent::ConfirmCloseTab
+            | AppEvent::CancelCloseTab => self.handle_tab_event(event),
+
+            // Source panel
+            AppEvent::FocusSourcePanel
+            | AppEvent::UnfocusSourcePanel
+            | AppEvent::SourcePanelUp
+            | AppEvent::SourcePanelDown
+            | AppEvent::ToggleCategoryExpand
+            | AppEvent::SelectSource
+            | AppEvent::CopySourcePath
+            | AppEvent::CopySelectedLine => self.handle_source_panel_event(event),
+
+            // Filter input
+            AppEvent::StartFilterInput
+            | AppEvent::FilterInputChar(_)
+            | AppEvent::FilterInputBackspace
+            | AppEvent::FilterInputSubmit
+            | AppEvent::FilterInputCancel
+            | AppEvent::ClearFilter
+            | AppEvent::ToggleFilterMode
+            | AppEvent::ToggleCaseSensitivity
+            | AppEvent::CursorLeft
+            | AppEvent::CursorRight
+            | AppEvent::CursorHome
+            | AppEvent::CursorEnd
+            | AppEvent::StartFilter { .. } => self.handle_filter_input_event(event),
+
+            // Filter progress
+            AppEvent::FilterProgress(_)
+            | AppEvent::FilterPartialResults { .. }
+            | AppEvent::FilterComplete { .. }
+            | AppEvent::FilterError(_) => self.handle_filter_progress_event(event),
+
+            // File events
+            AppEvent::FileModified { .. } | AppEvent::FileTruncated { .. } => {
+                self.handle_file_event(event)
+            }
+
+            // Help overlay
+            AppEvent::ShowHelp
+            | AppEvent::HideHelp
+            | AppEvent::ScrollHelpDown
+            | AppEvent::ScrollHelpUp => self.handle_help_event(event),
+
+            // Line jump
+            AppEvent::StartLineJumpInput
+            | AppEvent::LineJumpInputChar(_)
+            | AppEvent::LineJumpInputBackspace
+            | AppEvent::LineJumpInputSubmit
+            | AppEvent::LineJumpInputCancel => self.handle_line_jump_event(event),
+
+            // Filter history
+            AppEvent::HistoryUp | AppEvent::HistoryDown => self.handle_history_event(event),
+
+            // View positioning (vim z commands)
+            AppEvent::EnterZMode
+            | AppEvent::ExitZMode
+            | AppEvent::CenterView
+            | AppEvent::ViewToTop
+            | AppEvent::ViewToBottom => self.handle_view_position_event(event),
+
+            // Mode toggles
+            AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
+            AppEvent::DisableFollowMode => {
+                self.active_tab_mut().source.follow_mode = false;
+            }
+            AppEvent::ToggleRawMode => {
+                self.active_tab_mut().source.raw_mode = !self.active_tab_mut().source.raw_mode;
+            }
+
+            // Line expansion
+            AppEvent::ToggleLineExpansion => self.active_tab_mut().toggle_expansion(),
+            AppEvent::CollapseAll => self.active_tab_mut().collapse_all(),
+
+            // Aggregation
+            AppEvent::AggregationDown
+            | AppEvent::AggregationUp
+            | AppEvent::AggregationJumpToStart
+            | AppEvent::AggregationJumpToEnd
+            | AppEvent::AggregationDrillDown
+            | AppEvent::AggregationBack => self.handle_aggregation_event(event),
+
+            // Combined view
+            AppEvent::RefreshCombinedView => {
+                if let Some(cat) = self.active_combined {
+                    self.refresh_combined_tab(cat);
+                    let cat_idx = cat as usize;
+                    if let Some(ref mut tab) = self.combined_tabs[cat_idx] {
+                        tab.source.mode = ViewMode::Normal;
+                        let indices = tab.source.line_indices.clone();
+                        tab.viewport.jump_to_end(&indices);
+                    }
+                    self.status_message =
+                        Some(("Combined view refreshed".to_string(), Instant::now()));
+                }
+            }
+
+            // Mouse
+            AppEvent::MouseClick { column, row } => self.handle_mouse_click(column, row),
+
+            // System
+            AppEvent::Quit => self.should_quit = true,
+
+            // Stream events are handled directly in main loop
+            AppEvent::StreamData { .. } | AppEvent::StreamComplete => {}
+        }
+    }
+
+    // === Event handler methods (delegated from apply_event) ===
+
+    fn handle_navigation_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::ScrollDown => self.scroll_down(),
             AppEvent::ScrollUp => self.scroll_up(),
-            AppEvent::PageDown(page_size) => self.page_down(page_size),
-            AppEvent::PageUp(page_size) => self.page_up(page_size),
+            AppEvent::PageDown(size) => self.page_down(size),
+            AppEvent::PageUp(size) => self.page_up(size),
             AppEvent::JumpToStart => self.jump_to_start(),
             AppEvent::JumpToEnd => self.jump_to_end(),
             AppEvent::MouseScrollDown(lines) => self.mouse_scroll_down(lines),
             AppEvent::MouseScrollUp(lines) => self.mouse_scroll_up(lines),
             AppEvent::ViewportDown => self.viewport_down(),
             AppEvent::ViewportUp => self.viewport_up(),
+            _ => {}
+        }
+    }
 
-            // Tab navigation events
+    fn handle_tab_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::SelectTab(shortcut) => {
                 if let Some(tab_idx) = self.tab_index_for_shortcut(shortcut) {
                     self.select_tab(tab_idx);
@@ -1254,35 +1332,39 @@ impl App {
                     self.request_close_tab(idx);
                 }
             }
-            AppEvent::CloseSelectedTab => {
-                match self.source_panel.selection.clone() {
-                    Some(TreeSelection::CombinedForCategory(_)) => {
-                        // Can't close $all entries
+            AppEvent::CloseSelectedTab => match self.source_panel.selection.clone() {
+                Some(TreeSelection::CombinedForCategory(_)) => {}
+                Some(TreeSelection::Item(cat, idx)) => {
+                    if let Some(tab_idx) = self.find_tab_index(cat, idx) {
+                        self.request_close_tab(tab_idx);
                     }
-                    Some(TreeSelection::Item(cat, idx)) => {
-                        if let Some(tab_idx) = self.find_tab_index(cat, idx) {
-                            self.request_close_tab(tab_idx);
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
             AppEvent::ConfirmCloseTab => self.confirm_pending_close(),
             AppEvent::CancelCloseTab => self.cancel_pending_close(),
+            _ => {}
+        }
+    }
 
-            // Source panel events
+    fn handle_source_panel_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::FocusSourcePanel => self.focus_source_panel(),
-            AppEvent::UnfocusSourcePanel => {
-                self.input_mode = InputMode::Normal;
-            }
+            AppEvent::UnfocusSourcePanel => self.input_mode = InputMode::Normal,
             AppEvent::SourcePanelUp => self.source_panel_navigate(-1),
             AppEvent::SourcePanelDown => self.source_panel_navigate(1),
             AppEvent::ToggleCategoryExpand => self.toggle_category_expand(),
             AppEvent::SelectSource => self.select_source_from_panel(),
             AppEvent::CopySourcePath => self.copy_source_path(),
             AppEvent::CopySelectedLine => self.copy_selected_line(),
+            _ => {}
+        }
+    }
 
-            // Filter input events
+    fn handle_filter_input_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::StartFilterInput => self.start_filter_input(),
             AppEvent::FilterInputChar(c) => {
                 self.input_char(c);
@@ -1298,7 +1380,6 @@ impl App {
             }
             AppEvent::FilterInputSubmit => {
                 self.pending_filter_at = None;
-                // Trigger filter with current input BEFORE clearing it
                 let pattern = self.input_buffer.clone();
                 let mode = self.current_filter_mode;
                 if !pattern.is_empty() && self.is_regex_valid() {
@@ -1307,7 +1388,6 @@ impl App {
                     tab.source.filter.mode = mode;
                     FilterOrchestrator::trigger(&mut tab.source, pattern.clone(), mode, None);
                 }
-                // Save to history and clear input
                 self.add_to_history(pattern, mode);
                 self.active_tab_mut().source.filter.origin_line = None;
                 self.cancel_filter_input();
@@ -1340,8 +1420,20 @@ impl App {
             AppEvent::CursorRight => self.cursor_right(),
             AppEvent::CursorHome => self.cursor_home(),
             AppEvent::CursorEnd => self.cursor_end(),
+            AppEvent::StartFilter { pattern, range, .. } => {
+                let mode = self.current_filter_mode;
+                let tab = self.active_tab_mut();
+                tab.source.filter.pattern = Some(pattern.clone());
+                tab.source.filter.mode = mode;
+                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
+            }
+            _ => {}
+        }
+    }
 
-            // Filter progress events
+    fn handle_filter_progress_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::FilterProgress(lines_processed) => {
                 self.active_tab_mut().source.filter.state =
                     FilterState::Processing { lines_processed };
@@ -1350,9 +1442,7 @@ impl App {
                 matches,
                 lines_processed,
             } => {
-                // Merge partial results for immediate display
                 self.merge_partial_filter_results(matches, lines_processed);
-                // Live-update aggregation during filtering
                 self.maybe_compute_aggregation();
             }
             AppEvent::FilterComplete {
@@ -1371,10 +1461,7 @@ impl App {
                         .unwrap_or_default();
                     self.apply_filter(indices, pattern);
                 }
-
-                // Compute aggregation if pending
                 self.maybe_compute_aggregation();
-
                 if self.active_tab().source.follow_mode
                     && self.active_tab().source.mode != ViewMode::Aggregation
                 {
@@ -1385,12 +1472,14 @@ impl App {
                 eprintln!("Filter error: {}", err);
                 self.active_tab_mut().source.filter.state = FilterState::Inactive;
             }
+            _ => {}
+        }
+    }
 
-            // File events
-            AppEvent::FileModified {
-                new_total,
-                old_total: _,
-            } => {
+    fn handle_file_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
+            AppEvent::FileModified { new_total, .. } => {
                 let tab = self.active_tab_mut();
                 tab.source.total_lines = new_total;
                 tab.source.rate_tracker.record(new_total);
@@ -1400,13 +1489,11 @@ impl App {
                         tab.source.line_indices.extend(old..new_total);
                     }
                 }
-                // Refresh index reader to pick up new flags/checkpoints
                 if let (Some(ref mut ir), Some(ref path)) =
                     (&mut tab.source.index_reader, &tab.source.source_path)
                 {
                     ir.refresh(path);
                 }
-                // Follow mode jump (suppress if a StartFilter is in the same batch)
                 let should_jump = self.active_tab().source.follow_mode
                     && self.active_tab().source.mode == ViewMode::Normal
                     && !self.has_start_filter_in_batch;
@@ -1415,50 +1502,84 @@ impl App {
                 }
             }
             AppEvent::FileTruncated { new_total } => {
-                let tab = self.active_tab_mut();
                 eprintln!(
                     "File truncated: {} -> {} lines",
-                    tab.source.total_lines, new_total
+                    self.active_tab().source.total_lines,
+                    new_total
                 );
-
-                // Cancel any in-progress filter
-                FilterOrchestrator::cancel(&mut tab.source);
-                tab.source.filter.receiver = None;
-                tab.source.filter.is_incremental = false;
-
-                // Reset state on truncation
-                tab.source.total_lines = new_total;
-                tab.source.rate_tracker.record(new_total);
-                tab.source.line_indices = (0..new_total).collect();
-                tab.source.mode = ViewMode::Normal;
-
-                // Fully reset filter state
-                tab.source.filter.pattern = None;
-                tab.source.filter.state = FilterState::Inactive;
-                tab.source.filter.last_filtered_line = 0;
-                tab.source.filter.cancel_token = None;
-                tab.source.filter.needs_clear = false;
-
-                // Reset viewport to valid position
-                let new_anchor = if new_total > 0 { new_total - 1 } else { 0 };
-                tab.viewport.jump_to_line(new_anchor);
-
-                // Sync old fields from viewport
-                tab.selected_line = new_anchor.min(new_total.saturating_sub(1));
-                tab.scroll_position = 0;
+                self.active_tab_mut().reset_after_truncation(new_total);
             }
+            _ => {}
+        }
+    }
 
-            // Mode toggles
-            AppEvent::ToggleFollowMode => self.toggle_follow_mode(),
-            AppEvent::DisableFollowMode => {
-                self.active_tab_mut().source.follow_mode = false;
+    fn handle_help_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
+            AppEvent::ShowHelp => self.help_scroll_offset = Some(0),
+            AppEvent::HideHelp => self.help_scroll_offset = None,
+            AppEvent::ScrollHelpDown => {
+                if let Some(offset) = &mut self.help_scroll_offset {
+                    *offset = offset.saturating_add(1);
+                }
             }
-            AppEvent::ToggleRawMode => {
-                let tab = self.active_tab_mut();
-                tab.source.raw_mode = !tab.source.raw_mode;
+            AppEvent::ScrollHelpUp => {
+                if let Some(offset) = &mut self.help_scroll_offset {
+                    *offset = offset.saturating_sub(1);
+                }
             }
+            _ => {}
+        }
+    }
 
-            // Aggregation navigation events
+    fn handle_line_jump_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
+            AppEvent::StartLineJumpInput => self.start_line_jump_input(),
+            AppEvent::LineJumpInputChar(c) => {
+                if c.is_ascii_digit() {
+                    self.input_char(c);
+                }
+            }
+            AppEvent::LineJumpInputBackspace => self.input_backspace(),
+            AppEvent::LineJumpInputSubmit => {
+                if let Ok(line_num) = self.input_buffer.parse::<usize>() {
+                    self.jump_to_line(line_num);
+                    self.active_tab_mut().source.follow_mode = false;
+                }
+                self.cancel_line_jump_input();
+            }
+            AppEvent::LineJumpInputCancel => self.cancel_line_jump_input(),
+            _ => {}
+        }
+    }
+
+    fn handle_history_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
+            AppEvent::HistoryUp => self.history_up(),
+            AppEvent::HistoryDown => self.history_down(),
+            _ => {}
+        }
+        FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
+        self.pending_filter_at = Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
+    }
+
+    fn handle_view_position_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
+            AppEvent::EnterZMode => self.input_mode = InputMode::ZPending,
+            AppEvent::ExitZMode => self.input_mode = InputMode::Normal,
+            AppEvent::CenterView => self.active_tab_mut().center_view(),
+            AppEvent::ViewToTop => self.active_tab_mut().view_to_top(),
+            AppEvent::ViewToBottom => self.active_tab_mut().view_to_bottom(),
+            _ => {}
+        }
+    }
+
+    fn handle_aggregation_event(&mut self, event: event::AppEvent) {
+        use event::AppEvent;
+        match event {
             AppEvent::AggregationDown => {
                 let tab = self.active_tab_mut();
                 if let Some(ref result) = tab.source.aggregation_result {
@@ -1487,124 +1608,9 @@ impl App {
                 }
                 self.active_tab_mut().aggregation_view.ensure_visible();
             }
-            AppEvent::AggregationDrillDown => {
-                self.aggregation_drill_down();
-            }
-            AppEvent::AggregationBack => {
-                self.aggregation_back();
-            }
-
-            // System events
-            AppEvent::Quit => {
-                self.should_quit = true;
-            }
-
-            // Help mode
-            AppEvent::ShowHelp => {
-                self.help_scroll_offset = Some(0);
-            }
-            AppEvent::HideHelp => {
-                self.help_scroll_offset = None;
-            }
-            AppEvent::ScrollHelpDown => {
-                if let Some(offset) = &mut self.help_scroll_offset {
-                    *offset = offset.saturating_add(1);
-                }
-            }
-            AppEvent::ScrollHelpUp => {
-                if let Some(offset) = &mut self.help_scroll_offset {
-                    *offset = offset.saturating_sub(1);
-                }
-            }
-
-            // Line jump events
-            AppEvent::StartLineJumpInput => self.start_line_jump_input(),
-            AppEvent::LineJumpInputChar(c) => {
-                // Only allow digits in line jump input
-                if c.is_ascii_digit() {
-                    self.input_char(c);
-                }
-            }
-            AppEvent::LineJumpInputBackspace => self.input_backspace(),
-            AppEvent::LineJumpInputSubmit => {
-                // Parse the input and jump to the line
-                if let Ok(line_num) = self.input_buffer.parse::<usize>() {
-                    self.jump_to_line(line_num);
-                    // Disable follow mode when explicitly jumping to a line
-                    self.active_tab_mut().source.follow_mode = false;
-                }
-                self.cancel_line_jump_input();
-            }
-            AppEvent::LineJumpInputCancel => self.cancel_line_jump_input(),
-
-            // Filter history navigation
-            AppEvent::HistoryUp => {
-                self.history_up();
-                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
-                self.pending_filter_at =
-                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
-            }
-            AppEvent::HistoryDown => {
-                self.history_down();
-                FilterOrchestrator::cancel(&mut self.active_tab_mut().source);
-                self.pending_filter_at =
-                    Some(Instant::now() + Duration::from_millis(FILTER_DEBOUNCE_MS));
-            }
-
-            // View positioning (vim z commands)
-            AppEvent::EnterZMode => {
-                self.input_mode = InputMode::ZPending;
-            }
-            AppEvent::ExitZMode => {
-                self.input_mode = InputMode::Normal;
-            }
-            AppEvent::CenterView => {
-                self.active_tab_mut().center_view();
-            }
-            AppEvent::ViewToTop => {
-                self.active_tab_mut().view_to_top();
-            }
-            AppEvent::ViewToBottom => {
-                self.active_tab_mut().view_to_bottom();
-            }
-
-            // Line expansion events
-            AppEvent::ToggleLineExpansion => {
-                self.active_tab_mut().toggle_expansion();
-            }
-            AppEvent::CollapseAll => {
-                self.active_tab_mut().collapse_all();
-            }
-
-            // StartFilter: trigger background filter via orchestrator
-            AppEvent::StartFilter { pattern, range, .. } => {
-                let mode = self.current_filter_mode;
-                let tab = self.active_tab_mut();
-                tab.source.filter.pattern = Some(pattern.clone());
-                tab.source.filter.mode = mode;
-                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
-            }
-
-            // Combined view events
-            AppEvent::RefreshCombinedView => {
-                if let Some(cat) = self.active_combined {
-                    self.refresh_combined_tab(cat);
-                    let cat_idx = cat as usize;
-                    if let Some(ref mut tab) = self.combined_tabs[cat_idx] {
-                        tab.source.mode = ViewMode::Normal;
-                        let indices = tab.source.line_indices.clone();
-                        tab.viewport.jump_to_end(&indices);
-                    }
-                    self.status_message =
-                        Some(("Combined view refreshed".to_string(), Instant::now()));
-                }
-            }
-
-            // Mouse events
-            AppEvent::MouseClick { column, row } => self.handle_mouse_click(column, row),
-
-            // Stream events are handled directly in main loop, not here
-            AppEvent::StreamData { .. } | AppEvent::StreamComplete => {}
+            AppEvent::AggregationDrillDown => self.aggregation_drill_down(),
+            AppEvent::AggregationBack => self.aggregation_back(),
+            _ => {}
         }
     }
 

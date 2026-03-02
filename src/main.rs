@@ -276,6 +276,7 @@ fn main() -> Result<()> {
             &discovery,
             startup,
             verbose,
+            preset_registry,
         );
         #[cfg(feature = "self-update")]
         print_update_notice(update_handle);
@@ -288,25 +289,7 @@ fn main() -> Result<()> {
 
     // Build tabs from config sources first
     phase = Instant::now();
-    let mut tabs = Vec::new();
-
-    // Add project sources
-    for source in &cfg.project_sources {
-        match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
-            Ok(Some(t)) => tabs.push(t),
-            Ok(None) => {} // Metadata-only source, skip
-            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
-        }
-    }
-
-    // Add global sources
-    for source in &cfg.global_sources {
-        match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
-            Ok(Some(t)) => tabs.push(t),
-            Ok(None) => {} // Metadata-only source, skip
-            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
-        }
-    }
+    let mut tabs = build_config_tabs(&cfg, watch, &mut config_errors);
 
     // Build tabs from CLI args, treating "-" as stdin
     let mut stdin_used = false;
@@ -335,29 +318,7 @@ fn main() -> Result<()> {
 
     // Build columnar indexes for file tabs that don't have one yet
     phase = Instant::now();
-    for tab in &tabs {
-        if let Some(path) = tab.file_path() {
-            let idx_dir = source::index_dir_for_log(path);
-            if !idx_dir.join("meta").exists() {
-                let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                eprintln!("Building index for {} ({} bytes)...", name, file_size);
-                let start = std::time::Instant::now();
-                match index::builder::IndexBuilder::new().build(path, &idx_dir) {
-                    Ok(meta) => {
-                        eprintln!(
-                            "  Done: {} lines indexed in {:.1?}",
-                            meta.entry_count,
-                            start.elapsed()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("  Warning: failed to build index: {}", e);
-                    }
-                }
-            }
-        }
-    }
+    build_tab_indexes(&tabs);
     if verbose {
         eprintln!("[startup]   index build: {:.1?}", phase.elapsed());
     }
@@ -379,11 +340,7 @@ fn main() -> Result<()> {
     restore_last_source(&mut app, project_root);
 
     // Setup terminal
-    enable_raw_mode().context("Failed to enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = setup_terminal()?;
     if verbose {
         eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
     }
@@ -395,13 +352,7 @@ fn main() -> Result<()> {
     save_active_source(&app, project_root);
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    restore_terminal(&mut terminal)?;
 
     if app.verbose {
         if let Some(elapsed) = app.first_render_elapsed {
@@ -427,6 +378,7 @@ fn run_discovery_mode(
     discovery: &config::DiscoveryResult,
     startup: Instant,
     verbose: bool,
+    preset_registry: Arc<renderer::PresetRegistry>,
 ) -> Result<()> {
     use source::{discover_sources_for_context, ensure_directories_for_context};
 
@@ -449,14 +401,6 @@ fn run_discovery_mode(
 
     let watch = !no_watch;
 
-    // Compile rendering presets from config
-    let (registry, compile_errors) = renderer::PresetRegistry::compile_from_config(
-        &cfg.renderers,
-        discovery.project_root.as_deref(),
-    );
-    config_errors.extend(compile_errors);
-    let preset_registry = Arc::new(registry);
-
     // Build source name → renderer_names map from config sources
     let source_renderer_map: std::collections::HashMap<String, Vec<String>> = cfg
         .project_sources
@@ -466,27 +410,9 @@ fn run_discovery_mode(
         .map(|s| (s.name.clone(), s.renderer_names.clone()))
         .collect();
 
-    // Build tabs from config sources first
+    // Build tabs from config sources first, then add discovered sources
     phase = Instant::now();
-    let mut tabs = Vec::new();
-
-    // Add project sources
-    for source in &cfg.project_sources {
-        match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
-            Ok(Some(t)) => tabs.push(t),
-            Ok(None) => {} // Metadata-only source, skip
-            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
-        }
-    }
-
-    // Add global sources
-    for source in &cfg.global_sources {
-        match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
-            Ok(Some(t)) => tabs.push(t),
-            Ok(None) => {} // Metadata-only source, skip
-            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
-        }
-    }
+    let mut tabs = build_config_tabs(&cfg, watch, &mut config_errors);
 
     // Add discovered sources (with renderer_names from config if available)
     let discovery_tabs: Vec<TabState> = sources
@@ -545,11 +471,7 @@ fn run_discovery_mode(
     };
 
     // Setup terminal
-    enable_raw_mode().context("Failed to enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = setup_terminal()?;
     if verbose {
         eprintln!("[startup]   terminal setup: {:.1?}", phase.elapsed());
     }
@@ -568,13 +490,7 @@ fn run_discovery_mode(
     save_active_source(&app, project_root);
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    restore_terminal(&mut terminal)?;
 
     if app.verbose {
         if let Some(elapsed) = app.first_render_elapsed {
@@ -609,6 +525,78 @@ fn save_active_source(app: &App, project_root: Option<&std::path::Path>) {
     if let Some(tab) = app.tabs.get(app.active_tab) {
         session::save_last_source(project_root, &tab.source.name);
     }
+}
+
+/// Create tabs from config sources (project + global).
+fn build_config_tabs(
+    cfg: &config::Config,
+    watch: bool,
+    config_errors: &mut Vec<String>,
+) -> Vec<TabState> {
+    let mut tabs = Vec::new();
+    for source in &cfg.project_sources {
+        match TabState::from_config_source(source, SourceType::ProjectSource, watch) {
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {}
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+    for source in &cfg.global_sources {
+        match TabState::from_config_source(source, SourceType::GlobalSource, watch) {
+            Ok(Some(t)) => tabs.push(t),
+            Ok(None) => {}
+            Err(e) => config_errors.push(format!("Failed to open {}: {}", source.name, e)),
+        }
+    }
+    tabs
+}
+
+/// Build columnar indexes for file-backed tabs that don't have one yet.
+fn build_tab_indexes(tabs: &[TabState]) {
+    for tab in tabs {
+        if let Some(path) = tab.file_path() {
+            let idx_dir = source::index_dir_for_log(path);
+            if !idx_dir.join("meta").exists() {
+                let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                eprintln!("Building index for {} ({} bytes)...", name, file_size);
+                let start = Instant::now();
+                match index::builder::IndexBuilder::new().build(path, &idx_dir) {
+                    Ok(meta) => {
+                        eprintln!(
+                            "  Done: {} lines indexed in {:.1?}",
+                            meta.entry_count,
+                            start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("  Warning: failed to build index: {}", e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Set up the terminal for TUI rendering (raw mode, alternate screen, mouse).
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    enable_raw_mode().context("Failed to enable raw mode")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    Terminal::new(backend).context("Failed to create terminal")
+}
+
+/// Restore terminal to normal state.
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
 }
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
