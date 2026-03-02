@@ -58,6 +58,19 @@ impl Severity {
             Severity::Fatal => SEVERITY_FATAL,
         }
     }
+
+    /// Human-readable label for this severity, or `None` for `Unknown`.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Severity::Trace => Some("trace"),
+            Severity::Debug => Some("debug"),
+            Severity::Info => Some("info"),
+            Severity::Warn => Some("warn"),
+            Severity::Error => Some("error"),
+            Severity::Fatal => Some("fatal"),
+            Severity::Unknown => None,
+        }
+    }
 }
 
 /// Extract the template ID (bits 16-31) from a flags value.

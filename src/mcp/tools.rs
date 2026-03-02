@@ -16,8 +16,7 @@ use crate::config::{self, DiscoveryResult};
 use crate::filter::query::QueryFilter;
 use crate::filter::search_engine::SearchEngine;
 use crate::filter::{cancel::CancelToken, engine::FilterProgress};
-use crate::filter::{regex_filter::RegexFilter, string_filter::StringFilter, Filter};
-use crate::index::flags::Severity;
+use crate::filter::{regex_filter::RegexFilter, Filter};
 use crate::index::reader::IndexReader;
 use crate::reader::{file_reader::FileReader, LogReader};
 use crate::renderer::segment::segments_to_plain_text;
@@ -75,18 +74,6 @@ fn collect_filter_results(rx: Receiver<FilterProgress>) -> Result<(Vec<usize>, u
 fn error_response(message: impl std::fmt::Display) -> String {
     serde_json::to_string(&serde_json::json!({ "error": message.to_string() }))
         .unwrap_or_else(|_| r#"{"error": "Failed to serialize error"}"#.to_string())
-}
-
-fn severity_string(severity: Severity) -> Option<String> {
-    match severity {
-        Severity::Trace => Some("trace".to_string()),
-        Severity::Debug => Some("debug".to_string()),
-        Severity::Info => Some("info".to_string()),
-        Severity::Warn => Some("warn".to_string()),
-        Severity::Error => Some("error".to_string()),
-        Severity::Fatal => Some("fatal".to_string()),
-        Severity::Unknown => None,
-    }
 }
 
 /// Strip ANSI escape codes from all line content in a GetLinesResponse.
@@ -341,7 +328,7 @@ impl LazyTailMcp {
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
-                        .and_then(severity_string),
+                        .and_then(|s| s.label().map(String::from)),
                     rendered: None,
                 };
                 let raw_content = info.content.clone();
@@ -410,7 +397,7 @@ impl LazyTailMcp {
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
-                        .and_then(severity_string),
+                        .and_then(|s| s.label().map(String::from)),
                     rendered: None,
                 };
                 let raw_content = info.content.clone();
@@ -447,16 +434,23 @@ impl LazyTailMcp {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
 
-        let filter: Arc<dyn Filter> = match mode {
-            SearchMode::Plain => Arc::new(StringFilter::new(pattern, case_sensitive)),
-            SearchMode::Regex => match RegexFilter::new(pattern, case_sensitive) {
-                Ok(f) => Arc::new(f),
-                Err(e) => return error_response(format!("Invalid regex pattern: {}", e)),
-            },
+        // Use SIMD fast path for plain text, generic path for regex
+        let rx = match mode {
+            SearchMode::Plain => SearchEngine::search_file_fast(
+                path,
+                pattern.as_bytes(),
+                case_sensitive,
+                CancelToken::new(),
+            ),
+            SearchMode::Regex => {
+                let filter: Arc<dyn Filter> = match RegexFilter::new(pattern, case_sensitive) {
+                    Ok(f) => Arc::new(f),
+                    Err(e) => return error_response(format!("Invalid regex pattern: {}", e)),
+                };
+                SearchEngine::search_file(path, filter, None, None, None, CancelToken::new())
+            }
         };
-
-        let rx = match SearchEngine::search_file(path, filter, None, None, None, CancelToken::new())
-        {
+        let rx = match rx {
             Ok(rx) => rx,
             Err(e) => {
                 return error_response(format!("Failed to search file '{}': {}", path.display(), e))
@@ -811,7 +805,7 @@ impl LazyTailMcp {
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
-                        .and_then(severity_string),
+                        .and_then(|s| s.label().map(String::from)),
                     rendered: None,
                 };
                 let raw_content = info.content.clone();
@@ -832,7 +826,7 @@ impl LazyTailMcp {
             severity: index_reader
                 .as_ref()
                 .map(|ir| ir.severity(line_number))
-                .and_then(severity_string),
+                .and_then(|s| s.label().map(String::from)),
             rendered: None,
         };
         let raw_target = target_line.content.clone();
@@ -850,7 +844,7 @@ impl LazyTailMcp {
                     severity: index_reader
                         .as_ref()
                         .map(|ir| ir.severity(i))
-                        .and_then(severity_string),
+                        .and_then(|s| s.label().map(String::from)),
                     rendered: None,
                 };
                 let raw_content = info.content.clone();
