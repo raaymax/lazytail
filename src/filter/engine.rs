@@ -319,7 +319,10 @@ impl FilterEngine {
         }
 
         let total_lines = {
-            let reader_guard = reader.lock().expect("Reader lock poisoned");
+            let reader_guard = match reader.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             reader_guard.total_lines()
         };
 
@@ -345,7 +348,10 @@ impl FilterEngine {
 
             // Read a batch of lines (brief lock)
             let batch: Vec<(usize, String)> = {
-                let mut reader_guard = reader.lock().expect("Reader lock poisoned");
+                let mut reader_guard = match reader.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 let mut lines = Vec::with_capacity(current_end - batch_start);
 
                 for line_idx in batch_start..current_end {
