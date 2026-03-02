@@ -808,10 +808,22 @@ impl QueryFilter {
         Some(a.cmp(b))
     }
 
-    /// Check if a line matches all exclusion patterns.
+    /// Check if a line matches any exclusion pattern (JSON).
     fn matches_exclude(&self, json: &serde_json::Value) -> bool {
         for exclude in &self.query.exclude {
             if let Some(field_value) = extract_json_field(json, &exclude.field) {
+                if field_value.contains(&exclude.pattern) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a line matches any exclusion pattern (logfmt).
+    fn matches_exclude_logfmt(&self, fields: &HashMap<String, String>) -> bool {
+        for exclude in &self.query.exclude {
+            if let Some(field_value) = fields.get(&exclude.field) {
                 if field_value.contains(&exclude.pattern) {
                     return true;
                 }
@@ -861,6 +873,11 @@ impl Filter for QueryFilter {
             Parser::Logfmt => {
                 // Parse line as logfmt
                 let fields = parse_logfmt(line);
+
+                // Check exclusion patterns first
+                if self.matches_exclude_logfmt(&fields) {
+                    return false;
+                }
 
                 // All filters must match (AND logic)
                 for (i, filter) in self.query.filters.iter().enumerate() {
@@ -1632,6 +1649,32 @@ mod tests {
         assert!(filter.matches("status=500 msg=error"));
         assert!(filter.matches("status=400 msg=error"));
         assert!(!filter.matches("status=200 msg=ok"));
+    }
+
+    #[test]
+    fn test_logfmt_exclude() {
+        let query = FilterQuery {
+            parser: Parser::Logfmt,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Eq,
+                value: "error".to_string(),
+            }],
+            exclude: vec![ExcludePattern {
+                field: "msg".to_string(),
+                pattern: "ignore".to_string(),
+            }],
+            aggregate: None,
+        };
+
+        let filter = QueryFilter::new(query).unwrap();
+
+        // Matches: level=error without excluded pattern
+        assert!(filter.matches("level=error msg=\"real error\""));
+        // Excluded: msg contains "ignore"
+        assert!(!filter.matches("level=error msg=\"please ignore this\""));
+        // Not matching: wrong level
+        assert!(!filter.matches("level=info msg=\"real error\""));
     }
 
     // ========================================================================

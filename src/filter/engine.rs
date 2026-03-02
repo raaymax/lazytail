@@ -30,52 +30,8 @@ pub enum FilterProgress {
 pub struct FilterEngine;
 
 impl FilterEngine {
-    /// Run a filter with an OWNED reader (no locking, no UI contention)
-    ///
-    /// This is the preferred method for filtering files - it creates no lock
-    /// contention with the UI thread because the filter has its own reader.
-    #[allow(dead_code)]
-    pub fn run_filter_owned<R, F>(
-        mut reader: R,
-        filter: Arc<F>,
-        progress_interval: usize,
-        cancel: CancelToken,
-    ) -> Receiver<FilterProgress>
-    where
-        R: LogReader + Send + 'static,
-        F: Filter + 'static + ?Sized,
-    {
-        let (tx, rx) = channel();
-
-        thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Self::process_filter_owned(
-                    &mut reader,
-                    filter,
-                    tx.clone(),
-                    progress_interval,
-                    0,
-                    None,
-                    cancel,
-                )
-            }));
-
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    let _ = tx.send(FilterProgress::Error(e.to_string()));
-                }
-                Err(_) => {
-                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
-                }
-            }
-        });
-
-        rx
-    }
-
-    /// Run a filter on a log reader in a background thread (shared reader version)
-    /// Returns a receiver for progress updates
+    /// Run a filter on a log reader in a background thread.
+    /// Returns a receiver for progress updates.
     pub fn run_filter<R, F>(
         reader: Arc<Mutex<R>>,
         filter: Arc<F>,
@@ -115,51 +71,8 @@ impl FilterEngine {
         rx
     }
 
-    /// Run a filter on a specific range with an OWNED reader (no locking)
-    #[allow(dead_code)]
-    pub fn run_filter_range_owned<R, F>(
-        mut reader: R,
-        filter: Arc<F>,
-        progress_interval: usize,
-        start_line: usize,
-        end_line: usize,
-        cancel: CancelToken,
-    ) -> Receiver<FilterProgress>
-    where
-        R: LogReader + Send + 'static,
-        F: Filter + 'static + ?Sized,
-    {
-        let (tx, rx) = channel();
-
-        thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Self::process_filter_owned(
-                    &mut reader,
-                    filter,
-                    tx.clone(),
-                    progress_interval,
-                    start_line,
-                    Some(end_line),
-                    cancel,
-                )
-            }));
-
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    let _ = tx.send(FilterProgress::Error(e.to_string()));
-                }
-                Err(_) => {
-                    let _ = tx.send(FilterProgress::Error("Filter thread panicked".to_string()));
-                }
-            }
-        });
-
-        rx
-    }
-
-    /// Run a filter on a specific range of lines (for incremental filtering)
-    /// Returns a receiver for progress updates
+    /// Run a filter on a specific range of lines (for incremental filtering).
+    /// Returns a receiver for progress updates.
     pub fn run_filter_range<R, F>(
         reader: Arc<Mutex<R>>,
         filter: Arc<F>,
@@ -199,99 +112,6 @@ impl FilterEngine {
         });
 
         rx
-    }
-
-    /// Internal filter processing with OWNED reader (no locking!)
-    ///
-    /// Processes lines in batches FROM THE END to show recent results first.
-    /// Sends partial results after each batch so the UI can display matches immediately.
-    /// This version has zero lock contention with the UI because it owns its reader.
-    #[allow(dead_code)]
-    fn process_filter_owned<R, F>(
-        reader: &mut R,
-        filter: Arc<F>,
-        tx: Sender<FilterProgress>,
-        batch_size: usize,
-        start_line: usize,
-        end_line: Option<usize>,
-        cancel: CancelToken,
-    ) -> Result<()>
-    where
-        R: LogReader + Send + 'static,
-        F: Filter + 'static + ?Sized,
-    {
-        let batch_size = batch_size.max(100); // Ensure reasonable minimum
-
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-
-        let total_lines = reader.total_lines();
-        let end = end_line.unwrap_or(total_lines);
-        let range_size = end.saturating_sub(start_line);
-
-        if range_size == 0 {
-            tx.send(FilterProgress::Complete {
-                matches: vec![],
-                lines_processed: 0,
-            })?;
-            return Ok(());
-        }
-
-        let mut current_end = end;
-
-        while current_end > start_line {
-            if cancel.is_cancelled() {
-                return Ok(());
-            }
-
-            let batch_start = current_end.saturating_sub(batch_size).max(start_line);
-
-            // Read and filter this batch
-            let mut batch_matches = Vec::new();
-            for line_idx in batch_start..current_end {
-                if let Ok(Some(line)) = reader.get_line(line_idx) {
-                    if filter.matches(&line) {
-                        batch_matches.push(line_idx);
-                    }
-                }
-            }
-
-            // Calculate lines processed (we process from end to start)
-            let lines_processed = end - batch_start;
-
-            // Send partial results immediately if we found matches
-            if !batch_matches.is_empty() {
-                // Sort this batch (it's from a contiguous range, so already mostly sorted)
-                batch_matches.sort_unstable();
-
-                if cancel.is_cancelled() {
-                    return Ok(());
-                }
-                // Send these matches so UI can show them right away
-                let _ = tx.send(FilterProgress::PartialResults {
-                    matches: batch_matches,
-                    lines_processed,
-                });
-            }
-
-            current_end = batch_start;
-
-            // Yield to let UI thread process the partial results
-            std::thread::yield_now();
-        }
-
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-
-        // All matches were already sent as partials; signal completion
-        tx.send(FilterProgress::Complete {
-            matches: vec![],
-            lines_processed: range_size,
-        })?;
-
-        Ok(())
     }
 
     /// Internal filter processing with shared reader (uses locking)

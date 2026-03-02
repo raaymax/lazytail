@@ -706,7 +706,10 @@ impl TabState {
         }
 
         // Get the actual file line number (not the index into line_indices)
-        let file_line_number = self.source.line_indices[self.selected_line];
+        let file_line_number = match self.source.line_indices.get(self.selected_line) {
+            Some(&n) => n,
+            None => return,
+        };
 
         if self.expansion.expanded_lines.contains(&file_line_number) {
             // Collapse this line
@@ -1225,6 +1228,19 @@ mod tests {
         let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
 
         // Toggle expansion on empty file should not panic
+        tab.toggle_expansion();
+        assert!(tab.expansion.expanded_lines.is_empty());
+    }
+
+    #[test]
+    fn test_expansion_with_out_of_bounds_selected_line() {
+        let temp_file = create_temp_log_file(&["line1", "line2"]);
+        let mut tab = TabState::new(temp_file.path().to_path_buf(), false).unwrap();
+
+        // Force selected_line past the end of line_indices
+        tab.selected_line = tab.source.line_indices.len() + 10;
+
+        // Should not panic due to bounds checking
         tab.toggle_expansion();
         assert!(tab.expansion.expanded_lines.is_empty());
     }

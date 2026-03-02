@@ -151,6 +151,7 @@ impl CheckpointReader {
             });
         }
 
+        // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
         let mmap = unsafe { Mmap::map(&file)? };
         let entry_count = mmap.len() / CHECKPOINT_SIZE;
 

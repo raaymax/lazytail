@@ -23,6 +23,8 @@ impl IndexWriteLock {
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
+            // SAFETY: fd is valid (from an open File) and we pass well-defined flock flags.
+            // The advisory lock is released automatically when the File is dropped.
             let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
             if ret != 0 {
                 return Ok(None);

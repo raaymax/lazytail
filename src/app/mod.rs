@@ -1179,6 +1179,12 @@ impl App {
     /// Apply an event to the application state.
     ///
     /// Central event dispatcher — delegates to concern-focused handler methods.
+    /// Note: most state changes flow through this method, but some mutations
+    /// happen outside it by design: inactive tab updates (FileModified on
+    /// background tabs), combined-view refresh (main loop), and stream data
+    /// appending (main loop). These bypasses exist because the event targets
+    /// a tab other than the active one, or because the data arrives outside
+    /// the event channel.
     pub fn apply_event(&mut self, event: event::AppEvent) {
         use event::AppEvent;
 

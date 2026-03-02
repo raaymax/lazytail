@@ -94,6 +94,7 @@ impl IndexBuilder {
             return Ok(meta);
         }
 
+        // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
         let mmap = unsafe {
             Mmap::map(&file).with_context(|| format!("mmap log file: {}", log_path.display()))?
         };
