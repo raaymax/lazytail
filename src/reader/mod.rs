@@ -1,14 +1,7 @@
 pub mod combined_reader;
 pub mod file_reader;
-#[allow(dead_code)]
-pub mod huge_file_reader;
-#[allow(dead_code)]
-pub mod mmap_reader;
-#[allow(dead_code)]
 pub mod sparse_index;
 pub mod stream_reader;
-#[allow(dead_code)]
-pub mod tail_buffer;
 
 use anyhow::Result;
 use std::any::Any;

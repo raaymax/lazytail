@@ -35,11 +35,6 @@ impl SparseIndex {
         }
     }
 
-    /// Create a sparse index with default interval (10,000)
-    pub fn default_interval() -> Self {
-        Self::new(10_000)
-    }
-
     /// Get the indexing interval
     pub fn interval(&self) -> usize {
         self.interval
@@ -93,11 +88,13 @@ impl SparseIndex {
     }
 
     /// Get the byte offset where incremental indexing should resume
+    #[cfg(test)]
     pub fn last_indexed_offset(&self) -> u64 {
         self.last_indexed_offset
     }
 
     /// Get the line number of the last indexed entry
+    #[cfg(test)]
     pub fn last_indexed_line(&self) -> usize {
         self.entries
             .last()
@@ -113,11 +110,13 @@ impl SparseIndex {
     }
 
     /// Get memory usage in bytes (approximate)
+    #[cfg(test)]
     pub fn memory_usage(&self) -> usize {
         self.entries.len() * std::mem::size_of::<IndexEntry>() + std::mem::size_of::<Self>()
     }
 
     /// Get number of index entries
+    #[cfg(test)]
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
@@ -133,12 +132,6 @@ mod tests {
         assert_eq!(index.interval(), 1000);
         assert_eq!(index.total_lines(), 0);
         assert_eq!(index.entry_count(), 0);
-    }
-
-    #[test]
-    fn test_default_interval() {
-        let index = SparseIndex::default_interval();
-        assert_eq!(index.interval(), 10_000);
     }
 
     #[test]

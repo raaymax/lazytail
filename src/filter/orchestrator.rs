@@ -1,4 +1,4 @@
-use crate::app::{App, FilterState};
+use crate::app::FilterState;
 use crate::filter::cancel::CancelToken;
 use crate::filter::search_engine::SearchEngine;
 use crate::filter::{
@@ -128,24 +128,6 @@ impl FilterOrchestrator {
         };
 
         source.filter.receiver = Some(receiver);
-    }
-
-    /// Trigger live filter preview based on current input.
-    ///
-    /// Validates input, then either triggers a filter or clears if empty/invalid.
-    pub fn trigger_preview(app: &mut App) {
-        let pattern = app.get_input().to_string();
-        let mode = app.current_filter_mode;
-
-        if !pattern.is_empty() && app.is_regex_valid() {
-            let tab = app.active_tab_mut();
-            tab.source.filter.pattern = Some(pattern.clone());
-            tab.source.filter.mode = mode;
-            Self::trigger(&mut tab.source, pattern, mode, None);
-        } else {
-            app.clear_filter();
-            app.active_tab_mut().source.filter.receiver = None;
-        }
     }
 
     /// Cancel any in-progress filter on a source.
