@@ -19,7 +19,16 @@ This directory contains Architecture Decision Records (ADRs) for LazyTail. Each 
 | [011](011-project-scoped-storage.md) | Project-Scoped vs Global Source Storage | Accepted |
 | [012](012-incremental-filtering.md) | Incremental Filtering on File Growth | Accepted |
 | [013](013-live-filter-preview.md) | Live Filter Preview with Debouncing | Accepted |
-| [014](014-hexagonal-log-source-state.md) | Hexagonal Architecture — LogSourceState Extraction | Accepted |
+| [014](014-hexagonal-log-source-state.md) | Hexagonal Architecture — LogSource Extraction | Accepted |
+| [015](015-columnar-index-system.md) | Columnar Index System | Accepted |
+| [016](016-renderer-preset-architecture.md) | Renderer Preset Architecture | Accepted |
+| [017](017-theme-system.md) | Theme System | Accepted |
+| [018](018-aggregation-pipeline.md) | Aggregation Pipeline | Accepted |
+| [019](019-combined-merged-source-view.md) | Combined / Merged Source View | Accepted |
+| [020](020-search-engine-extraction.md) | SearchEngine Extraction | Accepted |
+| [021](021-web-server-architecture.md) | Web Server Architecture | Accepted |
+| [022](022-session-persistence.md) | Session Persistence | Accepted |
+| [023](023-self-update-mechanism.md) | Self-Update Mechanism | Accepted |
 
 ## Format
 
