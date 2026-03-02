@@ -14,9 +14,9 @@
 - [x] Wire LineIndexer into capture.rs (capture mode -n flag)
 - [x] Wire IndexBuilder into source discovery (build index for existing files)
 - [ ] Add index-aware LogReader (read lines via offset column instead of sparse index)
-- [ ] TUI: severity-based line coloring from flags column
-- [ ] TUI: severity histogram from checkpoint counts
-- [ ] MCP: expose index stats via tools
+- [x] TUI: severity-based line coloring from flags column
+- [x] TUI: severity histogram from checkpoint counts
+- [x] MCP: expose index stats via tools
 - [ ] Config: format hints in lazytail.yaml (json/logfmt/plain)
 - [ ] Auto-detection: sample first 20 lines, infer format
 - [ ] Incremental rebuild: detect log file truncation/rotation

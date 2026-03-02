@@ -4,31 +4,40 @@
 
 LazyTail is a terminal-based log viewer written in Rust. It provides live filtering, multi-tab viewing, source discovery, capture mode, a web UI, and an MCP server for AI assistant integration.
 
-The application operates in five distinct modes:
+The application operates in six distinct modes:
 
-1. **TUI mode** - Interactive terminal UI for viewing log files and stdin
-2. **Web mode** (`web`) - HTTP server with browser-based log viewing
-3. **Discovery mode** - Auto-discovers sources from project/global data directories
-4. **Capture mode** (`-n`) - Tee-like stdin-to-file with source tracking
-5. **MCP server mode** (`--mcp`) - Model Context Protocol server for programmatic log access
-6. **Subcommand mode** - CLI subcommands (`init`, `config`, `update`)
+1. **TUI mode** — Interactive terminal UI for viewing log files and stdin
+2. **Web mode** (`web`) — HTTP server with browser-based log viewing
+3. **Discovery mode** — Auto-discovers sources from project/global data directories
+4. **Capture mode** (`-n`) — Tee-like stdin-to-file with source tracking
+5. **MCP server mode** (`--mcp`) — Model Context Protocol server for programmatic log access
+6. **Subcommand mode** — CLI subcommands (`init`, `config`, `bench`, `theme`)
 
 ## Module Map
 
 ```
 src/
-  main.rs           Core event loop, mode dispatch, CLI definition
-  app.rs            Top-level application state (App struct)
-  tab.rs            Per-tab TUI state (TabState) wrapping LogSource
+  main.rs           Core event loop, mode dispatch, CLI definition (~1200 lines)
+  lib.rs            Library crate interface (config, index, source, theme)
+  ansi.rs           ANSI escape sequence stripping
   log_source.rs     Domain-only source state (LogSource, FilterConfig, LineRateTracker)
-  viewport.rs       Vim-style viewport with anchor-based scrolling
-  event.rs          AppEvent enum (all possible state transitions)
   signal.rs         Flag-based SIGINT/SIGTERM handling
+  source.rs         Source discovery, PID markers, data directory management
+  capture.rs        Capture mode implementation
+  history.rs        Filter history persistence (~/.config/lazytail/history.json)
+  session.rs        Session persistence (last-opened source per project)
+
+  app/
+    mod.rs           Top-level application state (App struct, InputMode, ViewMode)
+    tab.rs           Per-tab TUI state (TabState) wrapping LogSource
+    viewport.rs      Vim-style viewport with anchor-based scrolling
+    event.rs         AppEvent enum (all possible state transitions)
 
   reader/
     mod.rs           LogReader trait
     file_reader.rs   Sparse-indexed file reader (O(1) memory)
     stream_reader.rs Stdin/pipe buffering reader
+    combined_reader.rs Multi-source chronological merging via index timestamps
     sparse_index.rs  Sparse line offset index
     mmap_reader.rs   Memory-mapped reader (experimental)
     huge_file_reader.rs  Large file reader (experimental)
@@ -36,12 +45,14 @@ src/
 
   filter/
     mod.rs           Filter trait, FilterMode, FilterHistoryEntry
-    orchestrator.rs  FilterOrchestrator - unified filter dispatch entry point
-    engine.rs        FilterEngine - background thread coordination
+    orchestrator.rs  FilterOrchestrator — unified filter dispatch entry point
+    search_engine.rs SearchEngine — stateless search dispatch (picks fastest path)
+    engine.rs        FilterEngine — background thread coordination
     streaming_filter.rs  mmap + memchr grep-like filtering
     string_filter.rs Plain text substring filter
     regex_filter.rs  Regex-based filter
     query.rs         Structured query language (json/logfmt field filtering)
+    aggregation.rs   Grouped query results (count by field, top N)
     cancel.rs        CancelToken for cooperative cancellation
     parallel_engine.rs  Parallel filtering (experimental)
 
@@ -51,20 +62,45 @@ src/
     filter.rs        FilterProgress -> AppEvent mapping
     file_events.rs   File modification -> AppEvent mapping
 
-  ui/
-    mod.rs           ratatui rendering (side panel, log view, status bar, help)
+  renderer/
+    mod.rs           PresetRegistry — compiled rendering presets
+    preset.rs        Compiled preset types
+    detect.rs        Auto-detection of log format
+    field.rs         Field extraction from log lines
+    format.rs        Segment formatting
+    segment.rs       Styled segment types
+    builtin.rs       Built-in preset definitions
+
+  theme/
+    mod.rs           Theme struct, color parsing
+    loader.rs        YAML theme loading, multi-format import
+
+  tui/
+    mod.rs           ratatui rendering coordinator
+    log_view.rs      Main log content rendering
+    side_panel.rs    Source tree panel
+    status_bar.rs    Status bar rendering
+    help.rs          Help overlay (keyboard shortcuts)
+    aggregation_view.rs  Aggregation result rendering
+
+  watcher/
+    mod.rs           Watcher module exports
+    file.rs          File change detection via notify/inotify
+    dir.rs           Directory watcher for dynamic source discovery
 
   web/
     mod.rs           HTTP server with embedded SPA for browser-based log viewing
+    index.html       Embedded single-page application
 
   index/
     mod.rs           Columnar index module exports
     builder.rs       Index writer (flags, offsets, checkpoints)
-    reader.rs        IndexReader - read-only access to flags and checkpoints
+    reader.rs        IndexReader — read-only access to flags and checkpoints
     column.rs        ColumnReader/ColumnWriter for typed columnar storage
     checkpoint.rs    Checkpoint and SeverityCounts types
     flags.rs         Severity enum, format flags, line classification
     meta.rs          Index metadata (entry count, column bits)
+    lock.rs          Advisory flock-based write lock
 
   config/
     mod.rs           Config module exports
@@ -73,12 +109,16 @@ src/
     types.rs         Config and Source types
     error.rs         Config error types
 
-  source.rs         Source discovery, PID markers, data directory management
-  capture.rs        Capture mode implementation
-  watcher.rs        File change detection via notify/inotify
-  dir_watcher.rs    Directory watcher for dynamic source discovery
-  history.rs        Filter history persistence (~/.config/lazytail/history.json)
+  cli/
+    mod.rs           Subcommand definitions
+    init.rs          `lazytail init` command
+    bench.rs         `lazytail bench` — filter performance benchmarking
+    config.rs        `lazytail config validate/show` commands
+    theme.rs         `lazytail theme import/list` commands
+    update.rs        `lazytail update` command (feature-gated: self-update)
+
   cache/
+    mod.rs           Cache module
     line_cache.rs    LRU cache for line content
     ansi_cache.rs    LRU cache for parsed ANSI sequences
 
@@ -94,12 +134,6 @@ src/
     checker.rs       GitHub release checking with 24h cache
     installer.rs     Binary download and replacement
     detection.rs     Package manager detection (pacman/dpkg/brew/path)
-
-  cmd/
-    mod.rs           Subcommand definitions
-    init.rs          `lazytail init` command
-    config.rs        `lazytail config validate/show` commands
-    update.rs        `lazytail update` command (feature-gated: self-update)
 ```
 
 ## Core Architecture
@@ -132,20 +166,30 @@ See [ADR-001: Event-Driven Architecture](adr/001-event-driven-architecture.md).
 
 ```
 App
-  tabs: Vec<TabState>         One per open file/source/pipe
-  active_tab: usize           Index into tabs
-  input_mode: InputMode       Normal, EnteringFilter, ZPending, SourcePanel, ConfirmClose
-  input_buffer: String        Shared input for filter/line-jump
-  filter_history: Vec<...>    Persistent across sessions
-  source_panel: ...           Tree navigation state
+  tabs: Vec<TabState>           One per open file/source/pipe
+  combined_tabs: [Option; 5]    Per-category combined ($all) tabs
+  active_tab: usize             Index into tabs
+  active_combined: Option<...>  Which combined tab is active
+  input_mode: InputMode         Normal, EnteringFilter, EnteringLineJump,
+                                ZPending, SourcePanel, ConfirmClose
+  input_buffer: String          Shared input for filter/line-jump
+  filter_history: Vec<...>      Persistent across sessions
+  source_panel: ...             Tree navigation state
+  preset_registry: Arc<...>     Compiled rendering presets
+  theme: Theme                  UI color scheme
+  source_renderer_map: ...      Source name → renderer preset names
+  pending_filter_at: Option<..> Debounced filter trigger time
 
 TabState                              TUI adapter state
   source: LogSource              Domain core (shared across adapters)
   viewport: Viewport                  Scroll/selection state
   expansion: ExpansionState           Expanded/collapsed lines
   watcher: Option<FileWatcher>        inotify file watcher
+  is_combined: bool                   Whether this is a combined view
   stream_writer: ...                  Stdin background reader handle
   stream_receiver: ...                Stdin message channel
+  config_source_type: Option<...>     Source type from config
+  aggregation_view: ...               Aggregation table navigation state
 
 LogSource                        Domain-only state (log_source.rs)
   reader: Arc<Mutex<dyn LogReader>>   File or stream reader
@@ -153,10 +197,13 @@ LogSource                        Domain-only state (log_source.rs)
   filter: FilterConfig                Active filter, cancel token, receiver
   line_indices: Vec<usize>            Current visible line indices
   total_lines: usize                  Total lines in source
-  mode: ViewMode                      Normal or Filtered
+  mode: ViewMode                      Normal, Filtered, or Aggregation
   follow_mode: bool                   Auto-scroll on new content
   source_path: Option<PathBuf>        File path (None for stdin)
   source_status: Option<SourceStatus> Active/Ended for discovered sources
+  rate_tracker: LineRateTracker       Sliding-window ingestion rate
+  aggregation_result: Option<...>     Grouped query result (count by)
+  renderer_names: Vec<String>         Renderer preset names for this source
 ```
 
 Each tab is fully independent. Domain state lives in `LogSource` which is shared by TUI, Web, and MCP adapters. Adapter-specific state (viewport, expansion, watchers) stays on `TabState`.
@@ -165,7 +212,7 @@ See [ADR-014: Hexagonal Architecture — LogSource Extraction](adr/014-hexagonal
 
 ### Filter Pipeline
 
-Filtering runs in background threads to keep the UI responsive. All filter dispatch goes through `FilterOrchestrator`, the single entry point shared by TUI, Web, and MCP:
+Filtering runs in background threads to keep the UI responsive. `FilterOrchestrator` is the entry point for TUI and Web adapters, and delegates search dispatch to `SearchEngine` (shared with MCP):
 
 ```
 User types pattern (TUI) / POST /api/filter (Web) / MCP search
@@ -255,9 +302,11 @@ The `lazytail web` subcommand starts an HTTP server with an embedded single-page
 Key endpoints:
 - `GET /api/sources` - list sources with severity counts and filter state
 - `GET /api/lines` - paginated line content with per-line severity
+- `GET /api/events` - long-polling for state changes (25-second timeout)
 - `POST /api/filter` - trigger filter via `FilterOrchestrator::trigger`
 - `POST /api/filter/clear` - cancel and clear filter
 - `POST /api/follow` - toggle follow mode
+- `POST /api/source/close` - close a source tab
 
 The web adapter uses the same `TabState` as TUI for file watching and filter progress polling, but only consumes the `LogSource` portion for API responses. Severity data flows from `IndexReader` through to JSON responses automatically.
 
@@ -277,6 +326,69 @@ When a columnar index is available, `LineInfo` responses include a `severity` fi
 
 See [ADR-010: MCP Server Integration](adr/010-mcp-server.md).
 
+### Renderer / Preset System
+
+The renderer system (`src/renderer/`) provides configurable structured log formatting. Presets define how log lines are parsed and displayed:
+
+1. **Preset compilation**: Raw YAML definitions (`lazytail.yaml` `renderers:` section) are compiled into `CompiledPreset` at startup
+2. **Auto-detection**: Each preset includes detection patterns (regex or string match) to automatically select the right preset for a log line
+3. **Field extraction**: Parsers extract named fields from JSON, logfmt, or regex-captured groups
+4. **Segment formatting**: Extracted fields are arranged into styled segments (color, alignment, truncation)
+5. **Builtin presets**: Default presets for common log formats ship with the binary
+
+The `PresetRegistry` holds all compiled presets (user definitions take priority over builtins). Each source can have explicit renderer names assigned via config, or presets are auto-detected per line.
+
+### Theme System
+
+The theme system (`src/theme/`) provides color scheme support:
+
+- **Theme struct**: Maps UI elements to ratatui colors (foreground, background, highlight, severity levels, etc.)
+- **YAML themes**: Themes are defined as YAML files and stored in `~/.config/lazytail/themes/` or project-local `.lazytail/themes/`
+- **Multi-format import**: `lazytail theme import` converts color schemes from Windows Terminal (.json), Alacritty (.toml), Ghostty (.conf), and iTerm2 (.itermcolors) into LazyTail's YAML format
+- **Theme resolution**: Project theme > global theme > built-in default
+- **Color parsing**: Supports named colors, `#rrggbb` hex, `#rgb` shorthand, and `"default"` for terminal default
+
+### SearchEngine
+
+`SearchEngine` (`src/filter/search_engine.rs`) is the unified, stateless search dispatch module. Both `FilterOrchestrator` (TUI) and MCP converge here, eliminating duplicated index-acceleration logic.
+
+Given a filter, path, optional index, and optional range, `SearchEngine` picks the fastest execution path:
+- **File + plain text (full scan)**: `streaming_filter_fast` (mmap + SIMD memmem)
+- **File + regex/query (full scan)**: `streaming_filter` (mmap + per-line matching)
+- **File + index available + query**: `candidate_bitmap` pre-filter → `streaming_filter_indexed`
+- **File + any (incremental)**: `streaming_filter_range` (byte offset from index)
+- **Stdin + any**: `FilterEngine` (shared reader with Mutex)
+
+All functions are stateless and return `Result<Receiver<FilterProgress>>`.
+
+### Aggregation
+
+The aggregation system (`src/filter/aggregation.rs`) computes grouped counts from query results:
+
+- Triggered by `count by (field1, field2)` syntax in the query language
+- Optional `top N` limiting for large cardinality fields
+- Each `AggregationGroup` contains key-value pairs, count, and source line indices
+- Drill-down: selecting a group switches to a filtered view of its constituent lines
+- UI rendered via `tui/aggregation_view.rs` as a navigable list
+
+### Session Persistence
+
+`session.rs` remembers the last-opened source per project context:
+
+- Stores per-project entries in `~/.config/lazytail/session.json`
+- On launch, restores the previously active source (selects its tab)
+- Uses the project root path as context key (or a global key for non-project usage)
+- Caps stored entries at 100 to prevent unbounded growth
+
+### Combined / Merged View
+
+`CombinedReader` (`src/reader/combined_reader.rs`) merges lines from multiple sources in chronological order:
+
+- Implements `LogReader` so it works transparently with the existing rendering and filter infrastructure
+- Uses timestamps from the columnar index to interleave lines
+- Each `MergedLine` references a source ID and file line number
+- Tabs with `is_combined: true` use a `CombinedReader` instead of a single-file reader
+
 ## Key Dependencies
 
 | Crate | Purpose |
@@ -294,6 +406,11 @@ See [ADR-010: MCP Server Integration](adr/010-mcp-server.md).
 | `lru` | LRU cache for line content and ANSI parsing |
 | `rayon` | Parallel iteration (experimental) |
 | `tiny_http` | Lightweight HTTP server for web mode |
+| `colored` | CLI colored output |
+| `strsim` | Fuzzy matching for typo suggestions |
+| `xxhash-rust` | Content hashing |
+| `unicode-width` | Text width calculation |
+| `libc` | Unix-specific operations (flock) |
 | `tokio` | Async runtime for MCP server (optional) |
 | `rmcp` | MCP protocol implementation (optional) |
 | `self_update` | GitHub release checking and binary replacement (optional) |

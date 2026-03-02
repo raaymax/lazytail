@@ -2,7 +2,9 @@
 
 ## The Problem
 
-Three interfaces (TUI, MCP, upcoming Web UI) each independently wire together readers, indexes, and filters. Adding an index feature means touching `FilterOrchestrator` (TUI), `mcp/tools.rs` (MCP), and soon a third place (Web UI). The core domain operations — "open a log source", "search with index acceleration", "get line content" — are duplicated across adapters rather than expressed once.
+Three interfaces (TUI, MCP, Web UI) each independently wire together readers, indexes, and filters. Adding an index feature means touching `FilterOrchestrator` (TUI), `mcp/tools.rs` (MCP), and the Web UI. The core domain operations — "open a log source", "search with index acceleration", "get line content" — were duplicated across adapters rather than expressed once.
+
+> **Update:** Phases 1–2 from the recommended approach below have been implemented. `LogSource` (in `src/log_source.rs`) and `SearchEngine` (in `src/filter/search_engine.rs`) now exist. `FilterOrchestrator` delegates search dispatch to `SearchEngine`, and all three adapters share the `LogSource` domain struct via `TabState.source`. The coupling map below reflects the state before these changes.
 
 ## Current Coupling Map
 
