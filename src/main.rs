@@ -800,11 +800,10 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 
         if has_modified {
             any_file_modified = true;
-            let mut reader_guard = tab
-                .source
-                .reader
-                .lock()
-                .expect("Reader lock poisoned - filter thread panicked");
+            let mut reader_guard = match tab.source.reader.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
 
             if let Err(e) = reader_guard.reload() {
                 eprintln!("Failed to reload file for tab {}: {}", tab_idx, e);
@@ -839,11 +838,10 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
             if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
                 let old_total = combined.source.total_lines;
                 {
-                    let mut reader = combined
-                        .source
-                        .reader
-                        .lock()
-                        .expect("Combined reader lock poisoned");
+                    let mut reader = match combined.source.reader.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
                     if let Err(e) = reader.reload() {
                         eprintln!(
                             "Failed to reload combined reader for cat {}: {}",

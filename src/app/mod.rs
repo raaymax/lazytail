@@ -561,7 +561,10 @@ impl App {
         };
 
         let content = {
-            let mut reader = tab.source.reader.lock().unwrap();
+            let mut reader = match tab.source.reader.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             reader.get_line(file_line_number).ok().flatten()
         };
 
@@ -910,7 +913,10 @@ impl App {
             let agg = agg.clone();
             let parser = parser.clone();
             let indices = tab.source.line_indices.clone();
-            let mut reader = tab.source.reader.lock().unwrap();
+            let mut reader = match tab.source.reader.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             let result = crate::filter::aggregation::AggregationResult::compute(
                 &mut *reader,
                 &indices,
@@ -941,7 +947,10 @@ impl App {
             let tab = self.active_tab_mut();
             tab.source.filter.pattern = Some(pattern.clone());
             tab.source.filter.mode = mode;
-            FilterOrchestrator::trigger(&mut tab.source, pattern, mode, None);
+            if let Err(e) = FilterOrchestrator::trigger(&mut tab.source, pattern, mode, None) {
+                self.status_message = Some((e, Instant::now()));
+                self.active_tab_mut().source.filter.state = FilterState::Inactive;
+            }
         } else {
             self.clear_filter();
             self.active_tab_mut().source.filter.receiver = None;
@@ -1305,7 +1314,12 @@ impl App {
                     let tab = self.active_tab_mut();
                     tab.source.filter.pattern = Some(pattern.clone());
                     tab.source.filter.mode = mode;
-                    FilterOrchestrator::trigger(&mut tab.source, pattern.clone(), mode, None);
+                    if let Err(e) =
+                        FilterOrchestrator::trigger(&mut tab.source, pattern.clone(), mode, None)
+                    {
+                        self.status_message = Some((e, Instant::now()));
+                        self.active_tab_mut().source.filter.state = FilterState::Inactive;
+                    }
                 }
                 // Save to history and clear input
                 self.add_to_history(pattern, mode);
@@ -1381,8 +1395,8 @@ impl App {
                     self.jump_to_end();
                 }
             }
-            AppEvent::FilterError(err) => {
-                eprintln!("Filter error: {}", err);
+            AppEvent::FilterError(ref err) => {
+                self.status_message = Some((format!("Filter error: {}", err), Instant::now()));
                 self.active_tab_mut().source.filter.state = FilterState::Inactive;
             }
 
@@ -1582,7 +1596,10 @@ impl App {
                 let tab = self.active_tab_mut();
                 tab.source.filter.pattern = Some(pattern.clone());
                 tab.source.filter.mode = mode;
-                FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range);
+                if let Err(e) = FilterOrchestrator::trigger(&mut tab.source, pattern, mode, range) {
+                    self.status_message = Some((e, Instant::now()));
+                    self.active_tab_mut().source.filter.state = FilterState::Inactive;
+                }
             }
 
             // Combined view events

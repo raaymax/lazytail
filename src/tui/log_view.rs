@@ -114,7 +114,10 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
     // Get reader access and collect snapshots for rendering
-    let mut reader_guard = tab.source.reader.lock().unwrap();
+    let mut reader_guard = match tab.source.reader.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let expanded_lines = tab.expansion.expanded_lines.clone();
     let index_reader = tab.source.index_reader.as_ref();
     let total_lines = tab.source.line_indices.len();

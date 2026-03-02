@@ -118,14 +118,20 @@ impl LogReader for CombinedReader {
         let Some(m) = self.merged.get(index).copied() else {
             return Ok(None);
         };
-        let mut reader = self.sources[m.source_id].reader.lock().unwrap();
+        let mut reader = match self.sources[m.source_id].reader.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         reader.get_line(m.file_line)
     }
 
     fn reload(&mut self) -> Result<()> {
         // Reload each source reader and refresh index readers
         for source in &mut self.sources {
-            let mut reader = source.reader.lock().unwrap();
+            let mut reader = match source.reader.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             reader.reload()?;
             source.total_lines = reader.total_lines();
             drop(reader);
