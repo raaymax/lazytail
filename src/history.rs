@@ -1,8 +1,11 @@
 use crate::filter::FilterHistoryEntry;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(test))]
+use std::path::PathBuf;
 
 /// Get the history file path
+#[cfg(not(test))]
 fn history_file_path() -> Option<PathBuf> {
     crate::source::lazytail_dir().map(|p| p.join("history.json"))
 }
