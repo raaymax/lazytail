@@ -251,18 +251,15 @@ pub struct LineIndexer {
 
 impl LineIndexer {
     pub fn create(index_dir: &Path) -> Result<Self> {
-        let lock = IndexWriteLock::try_acquire(index_dir)?;
-        if lock.is_none() {
-            eprintln!(
-                "Warning: index directory is locked by another process, proceeding without lock"
-            );
-        }
+        let Some(lock) = IndexWriteLock::try_acquire(index_dir)? else {
+            bail!("index is being written by another process, skipping");
+        };
 
         std::fs::create_dir_all(index_dir)
             .with_context(|| format!("creating index dir: {}", index_dir.display()))?;
 
         Ok(Self {
-            _lock: lock,
+            _lock: Some(lock),
             offset_writer: ColumnWriter::create(index_dir.join("offsets"))?,
             length_writer: ColumnWriter::create(index_dir.join("lengths"))?,
             flags_writer: ColumnWriter::create(index_dir.join("flags"))?,
@@ -278,12 +275,9 @@ impl LineIndexer {
     }
 
     pub fn resume(index_dir: &Path) -> Result<Self> {
-        let lock = IndexWriteLock::try_acquire(index_dir)?;
-        if lock.is_none() {
-            eprintln!(
-                "Warning: index directory is locked by another process, proceeding without lock"
-            );
-        }
+        let Some(lock) = IndexWriteLock::try_acquire(index_dir)? else {
+            bail!("index is being written by another process, skipping");
+        };
 
         let meta = IndexMeta::read_from(index_dir.join("meta"))?;
 
@@ -295,7 +289,7 @@ impl LineIndexer {
         };
 
         Ok(Self {
-            _lock: lock,
+            _lock: Some(lock),
             offset_writer: ColumnWriter::truncate_and_open(
                 index_dir.join("offsets"),
                 meta.entry_count as usize,

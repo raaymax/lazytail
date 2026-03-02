@@ -194,7 +194,12 @@ pub(super) fn handle_request(request: tiny_http::Request, shared: &Arc<Mutex<Web
 
             tab.source.filter.pattern = Some(trimmed_pattern.clone());
             tab.source.filter.mode = mode;
-            FilterOrchestrator::trigger(&mut tab.source, trimmed_pattern, mode, None);
+            if let Err(e) =
+                FilterOrchestrator::trigger(&mut tab.source, trimmed_pattern, mode, None)
+            {
+                respond_json_error(request, 400, e);
+                return;
+            }
             state.bump_revision();
             respond_json(
                 request,

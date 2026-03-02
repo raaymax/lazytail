@@ -36,67 +36,108 @@ cargo run --release -- test.log
 
 ```
 src/
-├── main.rs                 # Entry point, CLI (clap), and main event loop
-├── app.rs                  # Application state management
-├── tab.rs                  # Per-tab state (reader, watcher, filter, viewport)
-├── viewport.rs             # Vim-style viewport scrolling
-├── event.rs                # Event type definitions
-├── watcher.rs              # File watching with inotify
-├── dir_watcher.rs          # Directory watcher for source discovery
-├── capture.rs              # Capture mode (tee-like stdin to file)
-├── source.rs               # Source discovery and status tracking
-├── signal.rs               # Signal handling (SIGINT/SIGTERM)
-├── history.rs              # Filter history persistence
+├── main.rs                   # Entry point, CLI (clap), and main event loop
+├── lib.rs                    # Library crate interface (config, index, source, theme)
+├── ansi.rs                   # ANSI escape sequence stripping
+├── capture.rs                # Capture mode (tee-like stdin to file)
+├── history.rs                # Filter history persistence
+├── log_source.rs             # Domain state shared across TUI/Web/MCP (LogSource)
+├── session.rs                # Session persistence (last-opened source per project)
+├── signal.rs                 # Signal handling (SIGINT/SIGTERM)
+├── source.rs                 # Source discovery and status tracking
+├── app/
+│   ├── mod.rs                # App struct, InputMode, ViewMode
+│   ├── event.rs              # AppEvent enum
+│   ├── tab.rs                # Per-tab TUI state (TabState)
+│   └── viewport.rs           # Vim-style viewport scrolling
 ├── cache/
-│   ├── mod.rs              # Cache module
-│   ├── line_cache.rs       # LRU cache for line content
-│   └── ansi_cache.rs       # ANSI-parsed line cache
-├── cmd/
-│   ├── mod.rs              # CLI subcommand definitions
-│   ├── init.rs             # `lazytail init` command
-│   ├── config.rs           # `lazytail config` commands
-│   └── update.rs           # `lazytail update` command (feature-gated: self-update)
+│   ├── mod.rs                # Cache module
+│   ├── line_cache.rs         # LRU cache for line content
+│   └── ansi_cache.rs         # ANSI-parsed line cache
+├── cli/
+│   ├── mod.rs                # CLI subcommand definitions
+│   ├── init.rs               # `lazytail init` command
+│   ├── bench.rs              # `lazytail bench` command
+│   ├── config.rs             # `lazytail config` commands
+│   ├── theme.rs              # `lazytail theme` commands
+│   └── update.rs             # `lazytail update` command (feature-gated: self-update)
 ├── config/
-│   ├── mod.rs              # Config module
-│   ├── discovery.rs        # Walk parent dirs for lazytail.yaml
-│   ├── loader.rs           # YAML config loading
-│   ├── types.rs            # Config structs
-│   └── error.rs            # Config error types
+│   ├── mod.rs                # Config module
+│   ├── discovery.rs          # Walk parent dirs for lazytail.yaml
+│   ├── loader.rs             # YAML config loading
+│   ├── types.rs              # Config structs
+│   └── error.rs              # Config error types
 ├── filter/
-│   ├── mod.rs              # Filter trait
-│   ├── engine.rs           # Background filtering engine
-│   ├── streaming_filter.rs # Streaming mmap-based filter (grep-like)
-│   ├── regex_filter.rs     # Regex filter implementation
-│   ├── string_filter.rs    # String matching filter
-│   ├── query.rs            # Query language (json | field == value)
-│   ├── cancel.rs           # Cancellation tokens
-│   └── parallel_engine.rs  # Parallel filtering
+│   ├── mod.rs                # Filter trait
+│   ├── aggregation.rs        # Grouped query results (count by)
+│   ├── cancel.rs             # Cancellation tokens
+│   ├── engine.rs             # Background filtering engine
+│   ├── orchestrator.rs       # FilterOrchestrator — unified filter dispatch
+│   ├── parallel_engine.rs    # Parallel filtering
+│   ├── query.rs              # Query language (json | field == value)
+│   ├── regex_filter.rs       # Regex filter implementation
+│   ├── search_engine.rs      # SearchEngine — stateless search dispatch
+│   ├── streaming_filter.rs   # Streaming mmap-based filter (grep-like)
+│   └── string_filter.rs      # String matching filter
 ├── handlers/
-│   ├── mod.rs              # Handler module
-│   ├── input.rs            # Keyboard input handling
-│   ├── filter.rs           # Filter progress handling
-│   └── file_events.rs      # File change event handling
+│   ├── mod.rs                # Handler module
+│   ├── input.rs              # Keyboard input handling
+│   ├── filter.rs             # Filter progress handling
+│   └── file_events.rs        # File change event handling
+├── index/
+│   ├── mod.rs                # Columnar index module
+│   ├── builder.rs            # Index writer (flags, offsets, checkpoints)
+│   ├── checkpoint.rs         # Checkpoint and SeverityCounts types
+│   ├── column.rs             # ColumnReader/ColumnWriter for typed columnar storage
+│   ├── flags.rs              # Severity enum, format flags, line classification
+│   ├── lock.rs               # Advisory flock-based write lock
+│   ├── meta.rs               # Index metadata (entry count, column bits)
+│   └── reader.rs             # IndexReader — read-only access to flags/checkpoints
 ├── mcp/
-│   ├── mod.rs              # MCP server module
-│   ├── tools.rs            # Tool implementations (6 tools)
-│   ├── types.rs            # Request/response types
-│   ├── format.rs           # Plain text output formatters
-│   └── ansi.rs             # ANSI escape code stripping
-├── update/                 # Self-update module (feature-gated: self-update)
-│   ├── mod.rs              # Types, cache I/O, version comparison
-│   ├── checker.rs          # GitHub release checking with cache
-│   ├── installer.rs        # Binary download and replacement
-│   └── detection.rs        # Package manager detection
+│   ├── mod.rs                # MCP server module
+│   ├── tools.rs              # Tool implementations (6 tools)
+│   ├── types.rs              # Request/response types
+│   ├── format.rs             # Plain text output formatters
+│   └── ansi.rs               # ANSI escape code stripping
 ├── reader/
-│   ├── mod.rs              # LogReader trait
-│   ├── file_reader.rs      # Lazy file reader with line indexing
-│   ├── stream_reader.rs    # Stdin/stream reader
-│   ├── mmap_reader.rs      # Memory-mapped reader
-│   ├── huge_file_reader.rs # Large file support
-│   ├── sparse_index.rs     # Sparse line index
-│   └── tail_buffer.rs      # Tail buffer for recent lines
-└── ui/
-    └── mod.rs              # ratatui rendering (log view, panels, help overlay)
+│   ├── mod.rs                # LogReader trait
+│   ├── combined_reader.rs    # Multi-source chronological merging
+│   ├── file_reader.rs        # Lazy file reader with line indexing
+│   ├── huge_file_reader.rs   # Large file support (experimental)
+│   ├── mmap_reader.rs        # Memory-mapped reader (experimental)
+│   ├── sparse_index.rs       # Sparse line index
+│   ├── stream_reader.rs      # Stdin/stream reader
+│   └── tail_buffer.rs        # Tail buffer (experimental)
+├── renderer/
+│   ├── mod.rs                # PresetRegistry — compiled rendering presets
+│   ├── builtin.rs            # Built-in preset definitions
+│   ├── detect.rs             # Auto-detection of log format
+│   ├── field.rs              # Field extraction from log lines
+│   ├── format.rs             # Segment formatting
+│   ├── preset.rs             # Compiled preset types
+│   └── segment.rs            # Styled segment types
+├── theme/
+│   ├── mod.rs                # Theme struct, color parsing
+│   └── loader.rs             # YAML theme loading, multi-format import
+├── tui/
+│   ├── mod.rs                # ratatui rendering coordinator
+│   ├── aggregation_view.rs   # Aggregation result rendering
+│   ├── help.rs               # Help overlay (keyboard shortcuts)
+│   ├── log_view.rs           # Main log content rendering
+│   ├── side_panel.rs         # Source tree panel
+│   └── status_bar.rs         # Status bar rendering
+├── update/                   # Self-update module (feature-gated: self-update)
+│   ├── mod.rs                # Types, cache I/O, version comparison
+│   ├── checker.rs            # GitHub release checking with cache
+│   ├── installer.rs          # Binary download and replacement
+│   └── detection.rs          # Package manager detection
+├── watcher/
+│   ├── mod.rs                # Watcher module exports
+│   ├── file.rs               # File change detection via notify/inotify
+│   └── dir.rs                # Directory watcher for source discovery
+└── web/
+    ├── mod.rs                # HTTP server (tiny_http)
+    └── index.html            # Embedded SPA
 ```
 
 For detailed architecture documentation, see `CLAUDE.md`.
@@ -127,6 +168,12 @@ The viewer is designed to handle large log files efficiently:
 - **rayon** - Parallel processing
 - **signal-hook** - Unix signal handling
 - **dirs** - Platform-specific directories
+- **tiny_http** - Lightweight HTTP server for web mode
+- **colored** - CLI colored output
+- **strsim** - Fuzzy matching for typo suggestions
+- **xxhash-rust** - Content hashing
+- **unicode-width** - Text width calculation
+- **libc** - Unix-specific operations (flock, etc.)
 - **rmcp** - MCP server framework (optional, feature-gated)
 - **schemars** - JSON Schema generation for MCP (optional)
 - **tokio** - Async runtime for MCP server (optional)
@@ -256,7 +303,7 @@ Runs on every push and pull request to the master branch.
 
 **Jobs:**
 - **Test**: Runs on Linux and macOS
-  - Executes all tests with `cargo test`
+  - Executes all tests with `cargo test --verbose`
   - Runs `cargo clippy` for linting
   - Checks code formatting with `cargo fmt`
 - **Build**: Creates artifacts for all platforms

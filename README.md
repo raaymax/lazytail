@@ -133,24 +133,30 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 
 ## Features
 
-- **Multi-tab support** - Open multiple log files in tabs with side panel navigation
-- **Stdin support** - Pipe logs directly with auto-detection (`cmd | lazytail`)
-- **Lazy file reading** - Efficiently handles large log files using indexed line positions
-- **TUI interface** - Clean terminal UI with ratatui
-- **Live filtering** - See results instantly as you type with regex or plain text
-- **Filter history** - Navigate and reuse previous filter patterns
-- **Background filtering** - Non-blocking filtering keeps UI responsive
-- **File watching** - Auto-reload when log file is modified (using inotify on Linux)
-- **Follow mode** - Auto-scroll to show latest logs as they arrive (like `tail -f`)
-- **ANSI color support** - Parses and renders ANSI escape codes in full color
-- **Line expansion** - Expand long lines for better readability
-- **Memory efficient** - Viewport-based rendering keeps RAM usage low
-- **Vim-style navigation** - Familiar keybindings for efficient navigation
-- **Severity detection** - Automatic log level coloring (ERROR/WARN/INFO/DEBUG) with severity histogram
-- **Columnar index** - Per-line metadata index built during capture for instant severity stats and accelerated filtering
-- **Config system** - Project-scoped `lazytail.yaml` config with source definitions
-- **Query language** - Structured field filtering (`json | level == "error"`)
-- **Web UI mode** - Browser interface with virtualized source/log lists (`lazytail web`)
+- **Multi-tab support** — Open multiple log files in tabs with side panel navigation
+- **Stdin support** — Pipe logs directly with auto-detection (`cmd | lazytail`)
+- **Lazy file reading** — Efficiently handles large log files using indexed line positions
+- **TUI interface** — Clean terminal UI with ratatui, mouse support
+- **Live filtering** — See results instantly as you type with regex or plain text
+- **Filter history** — Navigate and reuse previous filter patterns
+- **Background filtering** — Non-blocking filtering keeps UI responsive
+- **File watching** — Auto-reload when log file is modified (using inotify on Linux)
+- **Follow mode** — Auto-scroll to show latest logs as they arrive (like `tail -f`)
+- **ANSI color support** — Parses and renders ANSI escape codes in full color
+- **Line expansion** — Expand long lines for better readability
+- **Copy to clipboard** — Copy current line with `y`
+- **Memory efficient** — Viewport-based rendering keeps RAM usage low
+- **Vim-style navigation** — Familiar keybindings for efficient navigation
+- **Severity detection** — Automatic log level coloring (ERROR/WARN/INFO/DEBUG) with severity histogram
+- **Columnar index** — Per-line metadata index built during capture for instant severity stats and accelerated filtering
+- **Config system** — Project-scoped `lazytail.yaml` config with source definitions
+- **Query language** — Structured field filtering (`json | level == "error"`) with aggregation (`count by (field)`)
+- **Rendering presets** — Configurable structured log formatting via YAML for custom log layouts
+- **Theme support** — Color schemes with import from Windows Terminal, Alacritty, Ghostty, iTerm2
+- **Session persistence** — Remembers last-opened source per project
+- **Combined view** — Merge multiple sources chronologically using index timestamps
+- **Benchmark tool** — Filter performance benchmarking (`lazytail bench`)
+- **Web UI mode** — Browser interface with virtualized source/log lists (`lazytail web`)
 
 Press `?` in the app to see all keyboard shortcuts.
 
@@ -197,15 +203,16 @@ lazytail [OPTIONS] [FILE]... [COMMAND]
 Commands:
   init              Initialize a new lazytail.yaml config file
   web               Start browser-based web UI
-  config validate   Validate the config file
-  config show       Show effective configuration
-  update            Check for and install updates (GitHub release builds only)
+  bench             Benchmark filter performance
+  config            Config file commands (validate, show)
+  theme             Theme management commands (import, list)
+  help              Print help for a command
 
 Options:
   -n, --name <NAME>        Capture stdin to ~/.config/lazytail/data/<NAME>.log
+      --raw                Output raw lines without rendering (only with -n)
       --no-watch           Disable file watching
       --mcp                Run as MCP server for AI assistants
-      --no-update-check    Disable background update check on startup
   -v, --verbose            Verbose output (show config discovery paths)
   -h, --help               Print help
   -V, --version            Print version
@@ -255,6 +262,58 @@ lazytail  # Shows tabs: [API] [Worker] with live status
 ```
 
 Captured sources show active (●) or ended (○) status in the UI.
+
+Use `--raw` to output raw lines without rendering presets:
+
+```bash
+kubectl logs -f api-pod | lazytail -n "API" --raw
+```
+
+### Themes
+
+LazyTail supports color schemes for customizing the UI appearance.
+
+```bash
+# List available themes
+lazytail theme list
+
+# Import from Windows Terminal, Alacritty, Ghostty, or iTerm2
+lazytail theme import my-scheme.json
+lazytail theme import --name "My Theme" alacritty.toml
+```
+
+Set the active theme in `lazytail.yaml`:
+
+```yaml
+theme: my-scheme
+```
+
+### Benchmarking
+
+Measure filter performance on your log files:
+
+```bash
+# Benchmark a plain text filter
+lazytail bench "error" app.log
+
+# Benchmark regex filter
+lazytail bench --regex "level=(error|warn)" app.log
+
+# Benchmark structured query
+lazytail bench --query "json | level == \"error\"" app.log
+
+# Case-sensitive matching
+lazytail bench --case-sensitive "Error" app.log
+
+# Compare indexed vs non-indexed performance
+lazytail bench --compare "error" app.log
+
+# Custom number of trials (default: 5)
+lazytail bench --trials 10 "error" app.log
+
+# Output JSON results
+lazytail bench --json "error" app.log
+```
 
 ### Use Cases
 
