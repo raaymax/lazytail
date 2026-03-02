@@ -159,14 +159,87 @@ pub struct LogSource {
     pub renderer_names: Vec<String>,
 }
 
-#[allow(dead_code)]
 impl LogSource {
+    /// Create a new LogSource with sensible defaults.
+    ///
+    /// Defaults: no path, 0 lines, follow mode on, no index, no status.
+    /// Use builder methods to customize.
+    pub fn new(name: String, reader: Arc<Mutex<dyn LogReader + Send>>) -> Self {
+        Self {
+            name,
+            source_path: None,
+            mode: ViewMode::Normal,
+            total_lines: 0,
+            line_indices: Vec::new(),
+            follow_mode: true,
+            raw_mode: false,
+            reader,
+            filter: FilterConfig::default(),
+            source_status: None,
+            disabled: false,
+            file_size: None,
+            index_reader: None,
+            index_size: None,
+            rate_tracker: LineRateTracker::new(0),
+            aggregation_result: None,
+            renderer_names: Vec::new(),
+        }
+    }
+
+    /// Set the source file path.
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+
+    /// Set total lines and populate line_indices with 0..total_lines.
+    pub fn with_lines(mut self, total_lines: usize) -> Self {
+        self.total_lines = total_lines;
+        self.line_indices = (0..total_lines).collect();
+        self.rate_tracker = LineRateTracker::new(total_lines);
+        self
+    }
+
+    /// Set file size.
+    pub fn with_file_size(mut self, size: Option<u64>) -> Self {
+        self.file_size = size;
+        self
+    }
+
+    /// Set index reader and index size.
+    pub fn with_index(mut self, reader: Option<IndexReader>, size: Option<u64>) -> Self {
+        self.index_reader = reader;
+        self.index_size = size;
+        self
+    }
+
+    /// Set source status for discovered sources.
+    pub fn with_source_status(mut self, status: SourceStatus) -> Self {
+        self.source_status = Some(status);
+        self
+    }
+
+    /// Set renderer preset names.
+    pub fn with_renderer_names(mut self, names: Vec<String>) -> Self {
+        self.renderer_names = names;
+        self
+    }
+
+    /// Mark this source as disabled (file doesn't exist).
+    pub fn into_disabled(mut self) -> Self {
+        self.disabled = true;
+        self.follow_mode = false;
+        self
+    }
+
     /// Get the number of visible lines
+    #[allow(dead_code)]
     pub fn visible_line_count(&self) -> usize {
         self.line_indices.len()
     }
 
     /// Get the file path for this source (None for stdin/pipe).
+    #[allow(dead_code)]
     pub fn file_path(&self) -> Option<&Path> {
         self.source_path.as_deref()
     }

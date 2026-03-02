@@ -930,6 +930,24 @@ impl App {
         self.active_tab_mut().clear_filter();
     }
 
+    /// Trigger live filter preview based on current input.
+    ///
+    /// Validates input, then either triggers a filter or clears if empty/invalid.
+    pub fn trigger_filter_preview(&mut self) {
+        let pattern = self.get_input().to_string();
+        let mode = self.current_filter_mode;
+
+        if !pattern.is_empty() && self.is_regex_valid() {
+            let tab = self.active_tab_mut();
+            tab.source.filter.pattern = Some(pattern.clone());
+            tab.source.filter.mode = mode;
+            FilterOrchestrator::trigger(&mut tab.source, pattern, mode, None);
+        } else {
+            self.clear_filter();
+            self.active_tab_mut().source.filter.receiver = None;
+        }
+    }
+
     /// Enter filter input mode
     pub fn start_filter_input(&mut self) {
         self.input_mode = InputMode::EnteringFilter;

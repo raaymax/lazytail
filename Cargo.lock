@@ -1283,7 +1283,6 @@ dependencies = [
  "signal-hook",
  "strsim",
  "tempfile",
- "thiserror 2.0.18",
  "tiny_http",
  "tokio",
  "unicode-width 0.2.0",

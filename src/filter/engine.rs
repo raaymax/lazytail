@@ -403,35 +403,7 @@ impl FilterEngine {
 mod tests {
     use super::*;
     use crate::filter::string_filter::StringFilter;
-
-    /// Mock LogReader for testing
-    struct MockLogReader {
-        lines: Vec<String>,
-    }
-
-    impl MockLogReader {
-        fn new(lines: Vec<String>) -> Self {
-            Self { lines }
-        }
-    }
-
-    impl LogReader for MockLogReader {
-        fn total_lines(&self) -> usize {
-            self.lines.len()
-        }
-
-        fn get_line(&mut self, index: usize) -> Result<Option<String>> {
-            Ok(self.lines.get(index).cloned())
-        }
-
-        fn reload(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
+    use crate::test_utils::MockLogReader;
 
     /// Collect all matches from both PartialResults and Complete messages.
     fn collect_all_matches(rx: Receiver<FilterProgress>) -> Vec<usize> {

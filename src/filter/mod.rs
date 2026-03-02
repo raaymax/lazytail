@@ -2,8 +2,6 @@ pub mod aggregation;
 pub mod cancel;
 pub mod engine;
 pub mod orchestrator;
-#[allow(dead_code)]
-pub mod parallel_engine;
 pub mod query;
 pub mod regex_filter;
 pub mod search_engine;

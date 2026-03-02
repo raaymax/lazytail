@@ -1,6 +1,5 @@
 mod ansi;
 mod app;
-mod cache;
 mod capture;
 mod cli;
 mod config;
@@ -22,6 +21,9 @@ mod update;
 mod watcher;
 mod web;
 
+#[cfg(test)]
+mod test_utils;
+
 use anyhow::{Context, Result};
 use app::{App, AppEvent, FilterState, SourceType, StreamMessage, TabState, ViewMode};
 use clap::Parser;
@@ -30,7 +32,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use filter::orchestrator::FilterOrchestrator;
 use lazytail::index;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
@@ -635,7 +636,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         if let Some(trigger_at) = app.pending_filter_at {
             if Instant::now() >= trigger_at {
                 app.pending_filter_at = None;
-                FilterOrchestrator::trigger_preview(app);
+                app.trigger_filter_preview();
             }
         }
 

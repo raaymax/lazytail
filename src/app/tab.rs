@@ -2,7 +2,7 @@ use super::viewport::Viewport;
 use crate::app::{FilterState, SourceType, ViewMode};
 use crate::config;
 use crate::index::reader::IndexReader;
-use crate::log_source::{calculate_index_size, LineRateTracker};
+use crate::log_source::calculate_index_size;
 use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
@@ -19,8 +19,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-// Re-export FilterConfig so existing `use crate::tab::FilterConfig` still works
-pub use crate::log_source::FilterConfig;
 // Re-export LogSource for convenience
 pub use crate::log_source::LogSource;
 
@@ -168,29 +166,14 @@ impl TabState {
             };
 
             let total_lines = file_reader.total_lines();
-            let line_indices = (0..total_lines).collect();
             let selected_line = total_lines.saturating_sub(1);
 
             Ok(Self {
-                source: LogSource {
-                    name,
-                    source_path: Some(path),
-                    mode: ViewMode::Normal,
-                    total_lines,
-                    line_indices,
-                    follow_mode: true,
-                    raw_mode: false,
-                    reader: Arc::new(Mutex::new(file_reader)),
-                    filter: FilterConfig::default(),
-                    source_status: None,
-                    disabled: false,
-                    file_size,
-                    index_reader,
-                    index_size,
-                    rate_tracker: LineRateTracker::new(total_lines),
-                    aggregation_result: None,
-                    renderer_names: Vec::new(),
-                },
+                source: LogSource::new(name, Arc::new(Mutex::new(file_reader)))
+                    .with_path(path)
+                    .with_lines(total_lines)
+                    .with_file_size(file_size)
+                    .with_index(index_reader, index_size),
                 scroll_position: 0,
                 selected_line,
                 watcher,
@@ -213,25 +196,7 @@ impl TabState {
             spawn_stream_reader(file, tx);
 
             Ok(Self {
-                source: LogSource {
-                    name,
-                    source_path: None,
-                    mode: ViewMode::Normal,
-                    total_lines: 0,
-                    line_indices: Vec::new(),
-                    follow_mode: true,
-                    raw_mode: false,
-                    reader,
-                    filter: FilterConfig::default(),
-                    source_status: None,
-                    disabled: false,
-                    file_size: None,
-                    index_reader: None,
-                    index_size: None,
-                    rate_tracker: LineRateTracker::new(0),
-                    aggregation_result: None,
-                    renderer_names: Vec::new(),
-                },
+                source: LogSource::new(name, reader),
                 scroll_position: 0,
                 selected_line: 0,
                 watcher: None,
@@ -257,25 +222,7 @@ impl TabState {
         spawn_stream_reader(std::io::stdin(), tx);
 
         Ok(Self {
-            source: LogSource {
-                name: "<stdin>".to_string(),
-                source_path: None,
-                mode: ViewMode::Normal,
-                total_lines: 0,
-                line_indices: Vec::new(),
-                follow_mode: true,
-                raw_mode: false,
-                reader,
-                filter: FilterConfig::default(),
-                source_status: None,
-                disabled: false,
-                file_size: None,
-                index_reader: None,
-                index_size: None,
-                rate_tracker: LineRateTracker::new(0),
-                aggregation_result: None,
-                renderer_names: Vec::new(),
-            },
+            source: LogSource::new("<stdin>".to_string(), reader),
             scroll_position: 0,
             selected_line: 0,
             watcher: None,
@@ -309,29 +256,16 @@ impl TabState {
         };
 
         let total_lines = file_reader.total_lines();
-        let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
 
         Ok(Self {
-            source: LogSource {
-                name: source.name,
-                source_path: Some(source.log_path),
-                mode: ViewMode::Normal,
-                total_lines,
-                line_indices,
-                follow_mode: true,
-                raw_mode: false,
-                reader: Arc::new(Mutex::new(file_reader)),
-                filter: FilterConfig::default(),
-                source_status: Some(source.status),
-                disabled: false,
-                file_size,
-                index_reader,
-                index_size,
-                rate_tracker: LineRateTracker::new(total_lines),
-                aggregation_result: None,
-                renderer_names,
-            },
+            source: LogSource::new(source.name, Arc::new(Mutex::new(file_reader)))
+                .with_path(source.log_path)
+                .with_lines(total_lines)
+                .with_file_size(file_size)
+                .with_index(index_reader, index_size)
+                .with_source_status(source.status)
+                .with_renderer_names(renderer_names),
             scroll_position: 0,
             selected_line,
             watcher,
@@ -387,29 +321,15 @@ impl TabState {
         };
 
         let total_lines = file_reader.total_lines();
-        let line_indices = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
 
         Ok(Some(Self {
-            source: LogSource {
-                name: source.name.clone(),
-                source_path: Some(path.clone()),
-                mode: ViewMode::Normal,
-                total_lines,
-                line_indices,
-                follow_mode: true,
-                raw_mode: false,
-                reader: Arc::new(Mutex::new(file_reader)),
-                filter: FilterConfig::default(),
-                source_status: None,
-                disabled: false,
-                file_size,
-                index_reader,
-                index_size,
-                rate_tracker: LineRateTracker::new(total_lines),
-                aggregation_result: None,
-                renderer_names: source.renderer_names.clone(),
-            },
+            source: LogSource::new(source.name.clone(), Arc::new(Mutex::new(file_reader)))
+                .with_path(path.clone())
+                .with_lines(total_lines)
+                .with_file_size(file_size)
+                .with_index(index_reader, index_size)
+                .with_renderer_names(source.renderer_names.clone()),
             scroll_position: 0,
             selected_line,
             watcher,
@@ -430,25 +350,7 @@ impl TabState {
         let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(stream_reader));
 
         Ok(Self {
-            source: LogSource {
-                name,
-                source_path: Some(path),
-                mode: ViewMode::Normal,
-                total_lines: 0,
-                line_indices: Vec::new(),
-                follow_mode: false,
-                raw_mode: false,
-                reader,
-                filter: FilterConfig::default(),
-                source_status: None,
-                disabled: true,
-                file_size: None,
-                index_reader: None,
-                index_size: None,
-                rate_tracker: LineRateTracker::new(0),
-                aggregation_result: None,
-                renderer_names: Vec::new(),
-            },
+            source: LogSource::new(name, reader).with_path(path).into_disabled(),
             scroll_position: 0,
             selected_line: 0,
             watcher: None,
@@ -469,30 +371,12 @@ impl TabState {
         let source_count = sources.len();
         let combined = CombinedReader::new(sources);
         let total_lines = combined.total_lines();
-        let line_indices: Vec<usize> = (0..total_lines).collect();
         let selected_line = total_lines.saturating_sub(1);
         let reader: Arc<Mutex<dyn LogReader + Send>> = Arc::new(Mutex::new(combined));
 
         Self {
-            source: LogSource {
-                name: format!("$all ({} sources)", source_count),
-                source_path: None,
-                mode: ViewMode::Normal,
-                total_lines,
-                line_indices,
-                follow_mode: true,
-                raw_mode: false,
-                reader,
-                filter: FilterConfig::default(),
-                source_status: None,
-                disabled: false,
-                file_size: None,
-                index_reader: None,
-                index_size: None,
-                rate_tracker: LineRateTracker::new(total_lines),
-                aggregation_result: None,
-                renderer_names: Vec::new(),
-            },
+            source: LogSource::new(format!("$all ({} sources)", source_count), reader)
+                .with_lines(total_lines),
             scroll_position: 0,
             selected_line,
             watcher: None,

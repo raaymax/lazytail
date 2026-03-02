@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-#[cfg(not(test))]
 use std::fs;
 use std::path::Path;
 #[cfg(not(test))]
@@ -37,6 +36,7 @@ fn context_key(project_root: Option<&Path>) -> String {
 /// Load the last active source name for the given project context.
 ///
 /// In test builds, returns None to avoid reading the user's real session file.
+/// The core logic in `load_from` is tested directly.
 pub fn load_last_source(project_root: Option<&Path>) -> Option<String> {
     #[cfg(test)]
     {
@@ -47,20 +47,14 @@ pub fn load_last_source(project_root: Option<&Path>) -> Option<String> {
     #[cfg(not(test))]
     {
         let path = session_file_path()?;
-        if !path.exists() {
-            return None;
-        }
-
-        let content = fs::read_to_string(&path).ok()?;
-        let session: SessionFile = serde_json::from_str(&content).ok()?;
-        let key = context_key(project_root);
-        session.contexts.get(&key).map(|e| e.last_source.clone())
+        load_from(&path, project_root)
     }
 }
 
 /// Save the last active source name for the given project context.
 ///
 /// In test builds, this is a no-op to avoid corrupting the user's real session file.
+/// The core logic in `save_to` is tested directly.
 pub fn save_last_source(project_root: Option<&Path>, name: &str) {
     #[cfg(test)]
     {
@@ -73,54 +67,68 @@ pub fn save_last_source(project_root: Option<&Path>, name: &str) {
         let Some(path) = session_file_path() else {
             return;
         };
+        save_to(&path, project_root, name);
+    }
+}
 
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                return;
-            }
+fn load_from(path: &Path, project_root: Option<&Path>) -> Option<String> {
+    if !path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(path).ok()?;
+    let session: SessionFile = serde_json::from_str(&content).ok()?;
+    let key = context_key(project_root);
+    session.contexts.get(&key).map(|e| e.last_source.clone())
+}
+
+fn save_to(path: &Path, project_root: Option<&Path>, name: &str) {
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
         }
+    }
 
-        // Load existing session or start fresh
-        let mut session: SessionFile = path
-            .exists()
-            .then(|| {
-                fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|c| serde_json::from_str(&c).ok())
-            })
-            .flatten()
-            .unwrap_or_default();
+    // Load existing session or start fresh
+    let mut session: SessionFile = path
+        .exists()
+        .then(|| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+        })
+        .flatten()
+        .unwrap_or_default();
 
-        let key = context_key(project_root);
-        session.contexts.insert(
-            key,
-            ContextEntry {
-                last_source: name.to_string(),
-            },
-        );
+    let key = context_key(project_root);
+    session.contexts.insert(
+        key,
+        ContextEntry {
+            last_source: name.to_string(),
+        },
+    );
 
-        // Cap entries to prevent unbounded growth
-        if session.contexts.len() > MAX_CONTEXTS {
-            // Remove oldest entries (arbitrary since HashMap has no order,
-            // but this prevents unbounded growth)
-            let excess = session.contexts.len() - MAX_CONTEXTS;
-            let keys_to_remove: Vec<String> =
-                session.contexts.keys().take(excess).cloned().collect();
-            for k in keys_to_remove {
-                session.contexts.remove(&k);
-            }
+    // Cap entries to prevent unbounded growth
+    if session.contexts.len() > MAX_CONTEXTS {
+        // Remove oldest entries (arbitrary since HashMap has no order,
+        // but this prevents unbounded growth)
+        let excess = session.contexts.len() - MAX_CONTEXTS;
+        let keys_to_remove: Vec<String> = session.contexts.keys().take(excess).cloned().collect();
+        for k in keys_to_remove {
+            session.contexts.remove(&k);
         }
+    }
 
-        if let Ok(content) = serde_json::to_string_pretty(&session) {
-            let _ = fs::write(&path, content);
-        }
+    if let Ok(content) = serde_json::to_string_pretty(&session) {
+        let _ = fs::write(path, content);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_session_roundtrip() {
@@ -180,5 +188,42 @@ mod tests {
         }
 
         assert_eq!(session.contexts.len(), MAX_CONTEXTS);
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.json");
+
+        let project = Path::new("/test/project");
+        save_to(&path, Some(project), "my-source");
+
+        let loaded = load_from(&path, Some(project));
+        assert_eq!(loaded.as_deref(), Some("my-source"));
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+
+        let loaded = load_from(&path, None);
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_global_and_project_contexts() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.json");
+
+        let project = Path::new("/test/project");
+        save_to(&path, Some(project), "project-source");
+        save_to(&path, None, "global-source");
+
+        assert_eq!(
+            load_from(&path, Some(project)).as_deref(),
+            Some("project-source")
+        );
+        assert_eq!(load_from(&path, None).as_deref(), Some("global-source"));
     }
 }
