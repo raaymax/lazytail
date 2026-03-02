@@ -104,7 +104,8 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     };
     let content_width = available_width.saturating_sub(prefix_width);
 
-    // Preset rendering setup
+    // Raw mode and preset rendering setup
+    let raw_mode = tab.source.raw_mode;
     let tab_renderer_names = tab.source.renderer_names.clone();
     let tab_filename = tab
         .source
@@ -120,13 +121,14 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
     // Adjust start_idx so the selected expanded line fits on screen
     if !expanded_lines.is_empty() {
+        let wrap_fn = if raw_mode { wrap_plain } else { wrap_content };
         let end = selected_idx.min(total_lines.saturating_sub(1));
         let mut visual_rows = 0usize;
         for i in start_idx..=end {
             if let Some(&ln) = tab.source.line_indices.get(i) {
                 let h = if expanded_lines.contains(&ln) && content_width > 0 {
                     let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
-                    wrap_content(&expand_tabs(&raw), content_width).len()
+                    wrap_fn(&expand_tabs(&raw), content_width).len()
                 } else {
                     1
                 };
@@ -137,7 +139,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             if let Some(&ln) = tab.source.line_indices.get(start_idx) {
                 let h = if expanded_lines.contains(&ln) && content_width > 0 {
                     let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
-                    wrap_content(&expand_tabs(&raw), content_width).len()
+                    wrap_fn(&expand_tabs(&raw), content_width).len()
                 } else {
                     1
                 };
@@ -159,7 +161,11 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
             // Pre-compute wrapped lines and item height
             let wrapped = if is_expanded && content_width > 0 {
-                Some(wrap_content(&line_text, content_width))
+                if raw_mode {
+                    Some(wrap_plain(&line_text, content_width))
+                } else {
+                    Some(wrap_content(&line_text, content_width))
+                }
             } else {
                 None
             };
@@ -270,28 +276,6 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             } else {
                 // Not expanded: single line (truncated if too long)
 
-                // Try preset rendering first
-                let line_flags: Option<u32> = if is_combined {
-                    None // Combined view doesn't have per-line flags yet
-                } else {
-                    index_reader.and_then(|ir| ir.flags(line_number))
-                };
-
-                let renderer_names = if is_combined {
-                    let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
-                    combined
-                        .map(|c| c.renderer_names(line_number))
-                        .unwrap_or(&[])
-                } else {
-                    &tab_renderer_names
-                };
-
-                let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty() {
-                    preset_registry.render_line(&raw_line, renderer_names, line_flags)
-                } else {
-                    preset_registry.render_line_auto(&raw_line, tab_filename.as_deref(), line_flags)
-                };
-
                 let mut final_line = Line::default();
 
                 // Insert source tag for combined view
@@ -305,23 +289,55 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 final_line.spans.push(Span::raw(line_num_part.clone()));
                 final_line.spans.push(Span::raw(line_sep_part));
 
-                if let Some(segments) = preset_segments {
-                    // Use preset-rendered spans
-                    for seg in &segments {
-                        final_line.spans.push(Span::styled(
-                            seg.text.clone(),
-                            to_ratatui_style(&seg.style, Some(palette)),
-                        ));
-                    }
+                if raw_mode {
+                    // Raw mode: plain text, no preset rendering or ANSI parsing
+                    final_line.spans.push(Span::raw(line_text.to_string()));
                 } else {
-                    // Fallback to ANSI parsing
-                    let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
-                        .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
-                    if let Some(first_line) = parsed_text.lines.first() {
-                        for span in &first_line.spans {
-                            final_line
-                                .spans
-                                .push(Span::styled(span.content.to_string(), span.style));
+                    // Try preset rendering first
+                    let line_flags: Option<u32> = if is_combined {
+                        None // Combined view doesn't have per-line flags yet
+                    } else {
+                        index_reader.and_then(|ir| ir.flags(line_number))
+                    };
+
+                    let renderer_names = if is_combined {
+                        let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
+                        combined
+                            .map(|c| c.renderer_names(line_number))
+                            .unwrap_or(&[])
+                    } else {
+                        &tab_renderer_names
+                    };
+
+                    let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty()
+                    {
+                        preset_registry.render_line(&raw_line, renderer_names, line_flags)
+                    } else {
+                        preset_registry.render_line_auto(
+                            &raw_line,
+                            tab_filename.as_deref(),
+                            line_flags,
+                        )
+                    };
+
+                    if let Some(segments) = preset_segments {
+                        // Use preset-rendered spans
+                        for seg in &segments {
+                            final_line.spans.push(Span::styled(
+                                seg.text.clone(),
+                                to_ratatui_style(&seg.style, Some(palette)),
+                            ));
+                        }
+                    } else {
+                        // Fallback to ANSI parsing
+                        let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+                            .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
+                        if let Some(first_line) = parsed_text.lines.first() {
+                            for span in &first_line.spans {
+                                final_line
+                                    .spans
+                                    .push(Span::styled(span.content.to_string(), span.style));
+                            }
                         }
                     }
                 }
@@ -411,6 +427,53 @@ fn format_source_tag(name: &str, max_width: usize) -> String {
         name.to_string()
     };
     format!("[{:<width$}] ", truncated, width = inner_max)
+}
+
+/// Wrap plain text without ANSI interpretation (for raw mode).
+fn wrap_plain(content: &str, available_width: usize) -> Vec<Line<'static>> {
+    if available_width == 0 {
+        return vec![Line::default()];
+    }
+
+    let total_width: usize = content.width();
+    if total_width <= available_width {
+        return vec![Line::from(Span::raw(content.to_string()))];
+    }
+
+    let mut result_lines: Vec<Line<'static>> = Vec::new();
+    let mut remaining = content;
+
+    while !remaining.is_empty() {
+        let mut break_pos = 0;
+        let mut break_width = 0;
+
+        for (idx, ch) in remaining.char_indices() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if break_width + ch_width > available_width {
+                break;
+            }
+            break_width += ch_width;
+            break_pos = idx + ch.len_utf8();
+        }
+
+        if break_pos == 0 {
+            if let Some(ch) = remaining.chars().next() {
+                break_pos = ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+
+        let (part, rest) = remaining.split_at(break_pos);
+        result_lines.push(Line::from(Span::raw(part.to_string())));
+        remaining = rest;
+    }
+
+    if result_lines.is_empty() {
+        vec![Line::default()]
+    } else {
+        result_lines
+    }
 }
 
 /// Wrap content to fit within the available width, preserving ANSI styles.
@@ -580,5 +643,61 @@ mod wrap_content_tests {
             let width: usize = line.spans.iter().map(|s| s.content.width()).sum();
             assert!(width <= 10, "line width {} exceeds 10", width);
         }
+    }
+}
+
+#[cfg(test)]
+mod wrap_plain_tests {
+    use super::*;
+
+    fn plain_text(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn short_content_single_line() {
+        let lines = wrap_plain("hello", 20);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plain_text(&lines), vec!["hello"]);
+    }
+
+    #[test]
+    fn long_content_wraps_to_multiple_lines() {
+        let lines = wrap_plain("abcdefghij", 4);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(plain_text(&lines), vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn content_exactly_at_width() {
+        let lines = wrap_plain("abcd", 4);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plain_text(&lines), vec!["abcd"]);
+    }
+
+    #[test]
+    fn zero_width_returns_default() {
+        let lines = wrap_plain("hello", 0);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn preserves_ansi_escape_sequences_literally() {
+        // In raw mode, ANSI escape codes should appear as literal characters
+        let content = "\x1b[31mred\x1b[0m";
+        let lines = wrap_plain(content, 100);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, content);
+        // Should be unstyled (no color interpretation)
+        assert_eq!(lines[0].spans.len(), 1);
+        assert_eq!(lines[0].spans[0].style, Style::default());
     }
 }

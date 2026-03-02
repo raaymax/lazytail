@@ -201,6 +201,7 @@ fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         KeyCode::Char('z') => vec![AppEvent::EnterZMode],
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
+        KeyCode::Char('r') => vec![AppEvent::ToggleRawMode],
         KeyCode::Char('y') => vec![AppEvent::CopySelectedLine],
         KeyCode::Char('R') if app.active_tab().is_combined => {
             vec![AppEvent::RefreshCombinedView]
@@ -619,6 +620,14 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_toggle_raw_mode() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::ToggleRawMode]);
     }
 
     #[test]

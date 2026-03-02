@@ -1435,6 +1435,10 @@ impl App {
             AppEvent::DisableFollowMode => {
                 self.active_tab_mut().source.follow_mode = false;
             }
+            AppEvent::ToggleRawMode => {
+                let tab = self.active_tab_mut();
+                tab.source.raw_mode = !tab.source.raw_mode;
+            }
 
             // Aggregation navigation events
             AppEvent::AggregationDown => {

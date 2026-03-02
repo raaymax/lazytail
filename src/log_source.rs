@@ -135,6 +135,8 @@ pub struct LogSource {
     pub line_indices: Vec<usize>,
     /// Follow mode - auto-scroll to latest logs
     pub follow_mode: bool,
+    /// Raw mode - bypass preset rendering and ANSI parsing
+    pub raw_mode: bool,
     /// Per-source reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Filter configuration and state
