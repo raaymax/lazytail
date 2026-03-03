@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1](https://github.com/raaymax/lazytail/compare/v0.8.0...v0.8.1) (2026-03-03)
+
+
+### Bug Fixes
+
+* **ci:** add actions:write permission to release-pr workflow ([c798853](https://github.com/raaymax/lazytail/commit/c798853ac2f8e6af0bb0e9b499614a730acb55fd))
+* logfmt exclude bypass, URL decoding, safety docs, dead code, bounds checks ([#71](https://github.com/raaymax/lazytail/issues/71)) ([a1b4e39](https://github.com/raaymax/lazytail/commit/a1b4e3998c776267e596132751a69ca536bac677))
+* reduce unnecessary work in event loop and combined reader reload ([c7d8918](https://github.com/raaymax/lazytail/commit/c7d8918823f770d4b2cd651cb5ca50b04aea54d3))
+
 ## [0.8.0](https://github.com/raaymax/lazytail/compare/v0.7.0...v0.8.0) (2026-03-02)
 
 
