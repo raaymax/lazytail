@@ -139,6 +139,7 @@ impl<T: ColumnElement> ColumnReader<T> {
             });
         }
 
+        // SAFETY: File handle remains valid for mmap lifetime. Read-only access.
         let mmap = unsafe { Mmap::map(&file)? };
         let file_entries = mmap.len() / T::SIZE;
         let entry_count = expected_entries.min(file_entries);

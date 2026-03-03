@@ -468,12 +468,44 @@ fn parse_query_params(query: &str) -> HashMap<String, String> {
             continue;
         }
         if let Some((k, v)) = pair.split_once('=') {
-            out.insert(k.to_string(), v.to_string());
+            out.insert(url_decode(k), url_decode(v));
         } else {
-            out.insert(pair.to_string(), String::new());
+            out.insert(url_decode(pair), String::new());
         }
     }
     out
+}
+
+/// Decode a percent-encoded URL component (`+` → space, `%XX` → byte).
+/// Invalid or truncated percent sequences are left as-is.
+fn url_decode(input: &str) -> String {
+    let raw = input.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        match raw[i] {
+            b'+' => {
+                bytes.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < raw.len() => {
+                let hi = (raw[i + 1] as char).to_digit(16);
+                let lo = (raw[i + 2] as char).to_digit(16);
+                if let (Some(h), Some(l)) = (hi, lo) {
+                    bytes.push((h * 16 + l) as u8);
+                    i += 3;
+                } else {
+                    bytes.push(b'%');
+                    i += 1;
+                }
+            }
+            c => {
+                bytes.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 fn parse_usize_query(query: &HashMap<String, String>, key: &str) -> Option<usize> {
@@ -558,4 +590,54 @@ fn delete_ended_source(tab: &TabState, state: &WebState) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_decode_plus_becomes_space() {
+        assert_eq!(url_decode("hello+world"), "hello world");
+    }
+
+    #[test]
+    fn url_decode_percent_encoding() {
+        assert_eq!(url_decode("hello%20world"), "hello world");
+        assert_eq!(url_decode("%2F"), "/");
+        assert_eq!(url_decode("100%25"), "100%");
+    }
+
+    #[test]
+    fn url_decode_passthrough() {
+        assert_eq!(url_decode("plain"), "plain");
+        assert_eq!(url_decode(""), "");
+    }
+
+    #[test]
+    fn url_decode_truncated_percent() {
+        // Truncated %XX sequence — preserved as-is
+        assert_eq!(url_decode("abc%2"), "abc%2");
+        assert_eq!(url_decode("abc%"), "abc%");
+    }
+
+    #[test]
+    fn url_decode_invalid_hex_preserved() {
+        // Invalid hex digits after % — preserved as-is
+        assert_eq!(url_decode("%GG"), "%GG");
+        assert_eq!(url_decode("%2G"), "%2G");
+    }
+
+    #[test]
+    fn parse_query_params_decodes_values() {
+        let params = parse_query_params("filter=error%20log&page=1");
+        assert_eq!(params.get("filter"), Some(&"error log".to_string()));
+        assert_eq!(params.get("page"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn parse_query_params_decodes_plus() {
+        let params = parse_query_params("q=hello+world");
+        assert_eq!(params.get("q"), Some(&"hello world".to_string()));
+    }
 }

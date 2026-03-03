@@ -117,11 +117,12 @@ pub struct FilterConfig {
     pub drill_down_pattern: Option<String>,
 }
 
-/// Domain-only state for a log source, shared across TUI/Web/MCP adapters.
+/// Domain-only state for a log source, shared across TUI and Web adapters.
 ///
 /// Contains all the core data needed for log viewing: reader, index,
 /// filter state, line indices, and source metadata. Does NOT contain
 /// adapter-specific state like viewport, expansion, or watchers.
+/// Note: MCP builds its own readers directly and does not use LogSource.
 pub struct LogSource {
     /// Display name (filename or source name)
     pub name: String,

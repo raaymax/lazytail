@@ -1,7 +1,10 @@
 use crate::app::{App, FilterState, InputMode, TabState, ViewMode};
 use crate::index::flags::Severity;
+use crate::index::reader::IndexReader;
 use crate::reader::combined_reader::CombinedReader;
+use crate::reader::LogReader;
 use crate::renderer::segment::{to_ratatui_style, StyledSegment};
+use crate::renderer::PresetRegistry;
 use crate::theme::UiColors;
 use anyhow::Result;
 use ratatui::{
@@ -202,163 +205,34 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let line_sep_part = " ";
 
             if let Some(wrapped_lines) = wrapped {
-                let mut item_lines: Vec<Line<'static>> = Vec::new();
-
-                let severity_color = severity_bg(severity, ui);
-
-                for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
-                    if wrap_idx == 0 {
-                        // First line: number part with severity bg, then separator
-                        let num_style = severity_color
-                            .map(|bg| Style::default().bg(bg))
-                            .unwrap_or_default();
-                        wrapped_line
-                            .spans
-                            .insert(0, Span::styled(line_sep_part, Style::default()));
-                        wrapped_line
-                            .spans
-                            .insert(0, Span::styled(line_num_part.clone(), num_style));
-                        // Insert source tag for combined view
-                        if let Some((ref name, color)) = source_tag {
-                            let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
-                            wrapped_line
-                                .spans
-                                .insert(0, Span::styled(tag, Style::default().fg(color)));
-                        }
-                    } else {
-                        wrapped_line
-                            .spans
-                            .insert(0, Span::raw(" ".repeat(prefix_width)));
-                    }
-
-                    // Apply styling based on selection/expansion state
-                    if is_selected {
-                        for span in &mut wrapped_line.spans {
-                            span.style = apply_selection_style(span.style, ui);
-                        }
-                    } else {
-                        // Expanded but not selected: subtle dark background for content spans
-                        // Skip prefix spans on first line
-                        let skip = if wrap_idx == 0 {
-                            if source_tag.is_some() {
-                                3
-                            } else {
-                                2
-                            }
-                        } else {
-                            1
-                        };
-                        for span in wrapped_line.spans.iter_mut().skip(skip) {
-                            span.style = span.style.bg(ui.expanded_bg);
-                        }
-                        // Separator gets expanded bg on first line
-                        if wrap_idx == 0 {
-                            let sep_idx = if source_tag.is_some() { 2 } else { 1 };
-                            if let Some(sep_span) = wrapped_line.spans.get_mut(sep_idx) {
-                                sep_span.style = sep_span.style.bg(ui.expanded_bg);
-                            }
-                            // Number part gets expanded bg only if no severity color
-                            let num_idx = if source_tag.is_some() { 1 } else { 0 };
-                            if severity_color.is_none() {
-                                if let Some(num_span) = wrapped_line.spans.get_mut(num_idx) {
-                                    num_span.style = num_span.style.bg(ui.expanded_bg);
-                                }
-                            }
-                        } else {
-                            // Continuation indent gets expanded bg
-                            if let Some(indent_span) = wrapped_line.spans.first_mut() {
-                                indent_span.style = indent_span.style.bg(ui.expanded_bg);
-                            }
-                        }
-                    }
-
-                    item_lines.push(wrapped_line);
-                }
-
-                items.push(ListItem::new(item_lines));
+                items.push(build_expanded_item(
+                    wrapped_lines,
+                    &line_num_part,
+                    line_sep_part,
+                    &source_tag,
+                    severity,
+                    is_selected,
+                    prefix_width,
+                    ui,
+                ));
             } else {
-                // Not expanded: single line (truncated if too long)
-
-                let mut final_line = Line::default();
-
-                // Insert source tag for combined view
-                if let Some((ref name, color)) = source_tag {
-                    let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
-                    final_line
-                        .spans
-                        .push(Span::styled(tag, Style::default().fg(color)));
-                }
-
-                final_line.spans.push(Span::raw(line_num_part.clone()));
-                final_line.spans.push(Span::raw(line_sep_part));
-
-                if raw_mode {
-                    // Raw mode: plain text, no preset rendering or ANSI parsing
-                    final_line.spans.push(Span::raw(line_text.to_string()));
-                } else {
-                    // Try preset rendering first
-                    let line_flags: Option<u32> = if is_combined {
-                        None // Combined view doesn't have per-line flags yet
-                    } else {
-                        index_reader.and_then(|ir| ir.flags(line_number))
-                    };
-
-                    let renderer_names = if is_combined {
-                        let combined = reader_guard.as_any().downcast_ref::<CombinedReader>();
-                        combined
-                            .map(|c| c.renderer_names(line_number))
-                            .unwrap_or(&[])
-                    } else {
-                        &tab_renderer_names
-                    };
-
-                    let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty()
-                    {
-                        preset_registry.render_line(&raw_line, renderer_names, line_flags)
-                    } else {
-                        preset_registry.render_line_auto(
-                            &raw_line,
-                            tab_filename.as_deref(),
-                            line_flags,
-                        )
-                    };
-
-                    if let Some(segments) = preset_segments {
-                        // Use preset-rendered spans
-                        for seg in &segments {
-                            final_line.spans.push(Span::styled(
-                                seg.text.clone(),
-                                to_ratatui_style(&seg.style, Some(palette)),
-                            ));
-                        }
-                    } else {
-                        // Fallback to ANSI parsing
-                        let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
-                            .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.clone()));
-                        if let Some(first_line) = parsed_text.lines.first() {
-                            for span in &first_line.spans {
-                                final_line
-                                    .spans
-                                    .push(Span::styled(span.content.to_string(), span.style));
-                            }
-                        }
-                    }
-                }
-
-                // Apply line styling: selection takes priority, then severity on number only
-                if is_selected {
-                    for span in &mut final_line.spans {
-                        span.style = apply_selection_style(span.style, ui);
-                    }
-                } else if let Some(bg) = severity_bg(severity, ui) {
-                    // Color only the line number background, not the separator or content
-                    let num_idx = if source_tag.is_some() { 1 } else { 0 };
-                    if let Some(num_span) = final_line.spans.get_mut(num_idx) {
-                        num_span.style = num_span.style.bg(bg);
-                    }
-                }
-
-                items.push(ListItem::new(final_line));
+                items.push(build_single_line_item(
+                    &raw_line,
+                    &line_text,
+                    line_number,
+                    &source_tag,
+                    severity,
+                    is_selected,
+                    is_combined,
+                    raw_mode,
+                    &tab_renderer_names,
+                    tab_filename.as_deref(),
+                    index_reader,
+                    &*reader_guard,
+                    &preset_registry,
+                    palette,
+                    ui,
+                ));
             }
 
             visual_rows_used += item_height;
@@ -386,6 +260,174 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     f.render_widget(list, area);
 
     Ok(())
+}
+
+/// Build a ListItem from wrapped (expanded) lines with prefix and styling.
+#[allow(clippy::too_many_arguments)]
+fn build_expanded_item(
+    wrapped_lines: Vec<Line<'static>>,
+    line_num_part: &str,
+    line_sep_part: &'static str,
+    source_tag: &Option<(String, Color)>,
+    severity: Severity,
+    is_selected: bool,
+    prefix_width: usize,
+    ui: &UiColors,
+) -> ListItem<'static> {
+    let mut item_lines: Vec<Line<'static>> = Vec::new();
+    let severity_color = severity_bg(severity, ui);
+
+    for (wrap_idx, mut wrapped_line) in wrapped_lines.into_iter().enumerate() {
+        if wrap_idx == 0 {
+            let num_style = severity_color
+                .map(|bg| Style::default().bg(bg))
+                .unwrap_or_default();
+            wrapped_line
+                .spans
+                .insert(0, Span::styled(line_sep_part, Style::default()));
+            wrapped_line
+                .spans
+                .insert(0, Span::styled(line_num_part.to_string(), num_style));
+            if let Some((ref name, color)) = source_tag {
+                let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
+                wrapped_line
+                    .spans
+                    .insert(0, Span::styled(tag, Style::default().fg(*color)));
+            }
+        } else {
+            wrapped_line
+                .spans
+                .insert(0, Span::raw(" ".repeat(prefix_width)));
+        }
+
+        if is_selected {
+            for span in &mut wrapped_line.spans {
+                span.style = apply_selection_style(span.style, ui);
+            }
+        } else {
+            let skip = if wrap_idx == 0 {
+                if source_tag.is_some() {
+                    3
+                } else {
+                    2
+                }
+            } else {
+                1
+            };
+            for span in wrapped_line.spans.iter_mut().skip(skip) {
+                span.style = span.style.bg(ui.expanded_bg);
+            }
+            if wrap_idx == 0 {
+                let sep_idx = if source_tag.is_some() { 2 } else { 1 };
+                if let Some(sep_span) = wrapped_line.spans.get_mut(sep_idx) {
+                    sep_span.style = sep_span.style.bg(ui.expanded_bg);
+                }
+                let num_idx = if source_tag.is_some() { 1 } else { 0 };
+                if severity_color.is_none() {
+                    if let Some(num_span) = wrapped_line.spans.get_mut(num_idx) {
+                        num_span.style = num_span.style.bg(ui.expanded_bg);
+                    }
+                }
+            } else if let Some(indent_span) = wrapped_line.spans.first_mut() {
+                indent_span.style = indent_span.style.bg(ui.expanded_bg);
+            }
+        }
+
+        item_lines.push(wrapped_line);
+    }
+
+    ListItem::new(item_lines)
+}
+
+/// Build a ListItem for a single (non-expanded) line with content rendering.
+#[allow(clippy::too_many_arguments)]
+fn build_single_line_item(
+    raw_line: &str,
+    line_text: &str,
+    line_number: usize,
+    source_tag: &Option<(String, Color)>,
+    severity: Severity,
+    is_selected: bool,
+    is_combined: bool,
+    raw_mode: bool,
+    tab_renderer_names: &[String],
+    tab_filename: Option<&str>,
+    index_reader: Option<&IndexReader>,
+    reader: &dyn LogReader,
+    preset_registry: &PresetRegistry,
+    palette: &crate::theme::Palette,
+    ui: &UiColors,
+) -> ListItem<'static> {
+    let line_num_part = format!("{:6} |", line_number + 1);
+    let line_sep_part = " ";
+    let mut final_line = Line::default();
+
+    if let Some((ref name, color)) = source_tag {
+        let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
+        final_line
+            .spans
+            .push(Span::styled(tag, Style::default().fg(*color)));
+    }
+
+    final_line.spans.push(Span::raw(line_num_part));
+    final_line.spans.push(Span::raw(line_sep_part));
+
+    if raw_mode {
+        final_line.spans.push(Span::raw(line_text.to_string()));
+    } else {
+        let line_flags: Option<u32> = if is_combined {
+            None
+        } else {
+            index_reader.and_then(|ir| ir.flags(line_number))
+        };
+
+        let renderer_names = if is_combined {
+            let combined = reader.as_any().downcast_ref::<CombinedReader>();
+            combined
+                .map(|c| c.renderer_names(line_number))
+                .unwrap_or(&[])
+        } else {
+            tab_renderer_names
+        };
+
+        let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty() {
+            preset_registry.render_line(raw_line, renderer_names, line_flags)
+        } else {
+            preset_registry.render_line_auto(raw_line, tab_filename, line_flags)
+        };
+
+        if let Some(segments) = preset_segments {
+            for seg in &segments {
+                final_line.spans.push(Span::styled(
+                    seg.text.clone(),
+                    to_ratatui_style(&seg.style, Some(palette)),
+                ));
+            }
+        } else {
+            let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+                .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.to_string()));
+            if let Some(first_line) = parsed_text.lines.first() {
+                for span in &first_line.spans {
+                    final_line
+                        .spans
+                        .push(Span::styled(span.content.to_string(), span.style));
+                }
+            }
+        }
+    }
+
+    if is_selected {
+        for span in &mut final_line.spans {
+            span.style = apply_selection_style(span.style, ui);
+        }
+    } else if let Some(bg) = severity_bg(severity, ui) {
+        let num_idx = if source_tag.is_some() { 1 } else { 0 };
+        if let Some(num_span) = final_line.spans.get_mut(num_idx) {
+            num_span.style = num_span.style.bg(bg);
+        }
+    }
+
+    ListItem::new(final_line)
 }
 
 fn build_title(tab: &TabState) -> String {
