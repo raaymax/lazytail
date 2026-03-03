@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/raaymax/lazytail/compare/v0.8.1...v0.8.2) (2026-03-03)
+
+
+### Bug Fixes
+
+* eliminate render bottleneck and reduce combined reader overhead ([6f3eca9](https://github.com/raaymax/lazytail/commit/6f3eca97ab8e1fb80a6892cb094490af876bca31))
+
 ## [0.8.1](https://github.com/raaymax/lazytail/compare/v0.8.0...v0.8.1) (2026-03-03)
 
 
