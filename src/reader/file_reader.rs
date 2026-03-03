@@ -37,6 +37,11 @@ pub struct FileReader {
 
     /// Number of lines covered by columnar_offsets
     indexed_lines: usize,
+
+    /// Last line read (via any path) — enables O(1) sequential reads.
+    /// When the next get_line(N+1) follows get_line(N), the reader is already
+    /// positioned at the right byte offset so no seek is needed.
+    last_read_line: Option<usize>,
 }
 
 impl FileReader {
@@ -60,6 +65,7 @@ impl FileReader {
             scanned_up_to: 0,
             columnar_offsets: None,
             indexed_lines: 0,
+            last_read_line: None,
         };
 
         if !reader.try_seed_from_index() {
@@ -244,32 +250,43 @@ impl FileReader {
         Ok(())
     }
 
-    /// Read a specific line. Uses O(1) columnar offset when available,
-    /// falls back to sparse index seek + scan for unindexed lines.
+    /// Read a specific line. Detects sequential access first (no seek needed),
+    /// then falls back to columnar offsets (O(1) seek) or sparse index (seek + scan).
     fn read_line_at(&mut self, line_num: usize) -> Result<Option<String>> {
         if line_num >= self.sparse_index.total_lines() {
             return Ok(None);
         }
 
-        // Fast path: O(1) direct seek via columnar offsets
+        // Sequential access fast path: if we just read line N-1 (common in render loops),
+        // the reader is already positioned at line N — just read, no seek needed.
+        // Works regardless of whether the previous read used columnar or sparse path.
+        if self.last_read_line == Some(line_num.wrapping_sub(1)) {
+            let mut line_buffer = String::new();
+            if self.reader.read_line(&mut line_buffer)? == 0 {
+                self.last_read_line = None;
+                return Ok(None);
+            }
+            self.last_read_line = Some(line_num);
+            trim_newline(&mut line_buffer);
+            return Ok(Some(line_buffer));
+        }
+
+        // Columnar path: O(1) direct seek via mmap-backed offsets
         if line_num < self.indexed_lines {
             if let Some(offset) = self.columnar_offsets.as_ref().and_then(|c| c.get(line_num)) {
                 self.reader.seek(SeekFrom::Start(offset))?;
                 let mut line_buffer = String::new();
                 if self.reader.read_line(&mut line_buffer)? == 0 {
+                    self.last_read_line = None;
                     return Ok(None);
                 }
-                if line_buffer.ends_with('\n') {
-                    line_buffer.pop();
-                    if line_buffer.ends_with('\r') {
-                        line_buffer.pop();
-                    }
-                }
+                self.last_read_line = Some(line_num);
+                trim_newline(&mut line_buffer);
                 return Ok(Some(line_buffer));
             }
         }
 
-        // Slow path: sparse index locate + forward scan
+        // Sparse index path: locate nearest entry + forward scan
         let (offset, skip) = self.sparse_index.locate(line_num);
         self.reader.seek(SeekFrom::Start(offset))?;
 
@@ -277,22 +294,19 @@ impl FileReader {
         for _ in 0..skip {
             line_buffer.clear();
             if self.reader.read_line(&mut line_buffer)? == 0 {
+                self.last_read_line = None;
                 return Ok(None);
             }
         }
 
         line_buffer.clear();
         if self.reader.read_line(&mut line_buffer)? == 0 {
+            self.last_read_line = None;
             return Ok(None);
         }
 
-        if line_buffer.ends_with('\n') {
-            line_buffer.pop();
-            if line_buffer.ends_with('\r') {
-                line_buffer.pop();
-            }
-        }
-
+        self.last_read_line = Some(line_num);
+        trim_newline(&mut line_buffer);
         Ok(Some(line_buffer))
     }
 
@@ -300,6 +314,16 @@ impl FileReader {
     #[cfg(test)]
     pub fn index_memory_usage(&self) -> usize {
         self.sparse_index.memory_usage()
+    }
+}
+
+/// Strip trailing newline (and optional carriage return) from a line buffer.
+fn trim_newline(buf: &mut String) {
+    if buf.ends_with('\n') {
+        buf.pop();
+        if buf.ends_with('\r') {
+            buf.pop();
+        }
     }
 }
 
@@ -326,6 +350,7 @@ impl LogReader for FileReader {
 
         let file = File::open(&self.path)?;
         self.reader = BufReader::new(file);
+        self.last_read_line = None;
 
         if new_size >= self.scanned_up_to {
             // File grew — refresh columnar offsets from the index that

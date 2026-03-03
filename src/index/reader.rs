@@ -25,6 +25,8 @@ pub struct IndexReader {
     flags: Vec<u32>,
     checkpoints: Vec<Checkpoint>,
     timestamps: Vec<u64>,
+    /// Cached severity counts, maintained incrementally on refresh.
+    cached_severity_counts: SeverityCounts,
 }
 
 impl IndexReader {
@@ -64,15 +66,38 @@ impl IndexReader {
             Vec::new()
         };
 
+        let cached_severity_counts = Self::count_severity(&flags);
         Some(Self {
             flags,
             checkpoints,
             timestamps,
+            cached_severity_counts,
         })
+    }
+
+    /// Count severity from a slice of flags into a SeverityCounts struct.
+    fn count_severity(flags: &[u32]) -> SeverityCounts {
+        use crate::index::flags::SEVERITY_MASK;
+        let mut counts = SeverityCounts::default();
+        for &f in flags {
+            match f & SEVERITY_MASK {
+                1 => counts.trace += 1,
+                2 => counts.debug += 1,
+                3 => counts.info += 1,
+                4 => counts.warn += 1,
+                5 => counts.error += 1,
+                6 => counts.fatal += 1,
+                _ => counts.unknown += 1,
+            }
+        }
+        counts
     }
 
     /// Refresh flags and checkpoints from disk if the index has grown.
     /// Called periodically to pick up new data written by capture's `sync()`.
+    ///
+    /// Incrementally extends existing Vecs with only the new entries, avoiding
+    /// re-reading the entire column on each refresh.
     pub fn refresh(&mut self, log_path: &Path) {
         let idx_dir = index_dir_for_log(log_path);
         let meta = match IndexMeta::read_from(idx_dir.join("meta")).ok() {
@@ -85,19 +110,31 @@ impl IndexReader {
             return; // No new data
         }
 
+        let old_count = self.flags.len();
+
         if let Ok(col_reader) = ColumnReader::<u32>::open(idx_dir.join("flags"), new_count) {
-            self.flags = col_reader.iter().collect();
+            // Only read new entries (old_count..new_count)
+            let new_flags: Vec<u32> = (old_count..new_count)
+                .filter_map(|i| col_reader.get(i))
+                .collect();
+            // Update cached severity counts with new entries
+            let delta = Self::count_severity(&new_flags);
+            self.cached_severity_counts += delta;
+            self.flags.extend(new_flags);
         }
 
         if meta.has_column(ColumnBit::Checkpoints) {
             if let Ok(r) = CheckpointReader::open(idx_dir.join("checkpoints")) {
+                // Checkpoints are small — always replace
                 self.checkpoints = r.iter().collect();
             }
         }
 
         if meta.has_column(ColumnBit::Time) {
             if let Ok(col) = ColumnReader::<u64>::open(idx_dir.join("time"), new_count) {
-                self.timestamps = col.iter().collect();
+                // Only read new entries (old_count..new_count)
+                self.timestamps
+                    .extend((old_count..new_count).filter_map(|i| col.get(i)));
             }
         }
     }
@@ -139,20 +176,7 @@ impl IndexReader {
     /// Compute live severity counts from the flags column.
     /// Unlike checkpoint-based counts, this reflects every indexed line immediately.
     pub fn severity_counts(&self) -> SeverityCounts {
-        use crate::index::flags::SEVERITY_MASK;
-        let mut counts = SeverityCounts::default();
-        for &f in &self.flags {
-            match f & SEVERITY_MASK {
-                1 => counts.trace += 1,
-                2 => counts.debug += 1,
-                3 => counts.info += 1,
-                4 => counts.warn += 1,
-                5 => counts.error += 1,
-                6 => counts.fatal += 1,
-                _ => counts.unknown += 1,
-            }
-        }
-        counts
+        self.cached_severity_counts
     }
 
     /// Collect line indices where `(flags & mask) == want`.
@@ -303,10 +327,13 @@ mod tests {
     use crate::index::flags::*;
 
     fn reader_from(flags_data: &[u32]) -> IndexReader {
+        let flags = flags_data.to_vec();
+        let cached_severity_counts = IndexReader::count_severity(&flags);
         IndexReader {
-            flags: flags_data.to_vec(),
+            flags,
             checkpoints: Vec::new(),
             timestamps: Vec::new(),
+            cached_severity_counts,
         }
     }
 

@@ -19,6 +19,18 @@ pub struct SeverityCounts {
     pub fatal: u32,
 }
 
+impl std::ops::AddAssign for SeverityCounts {
+    fn add_assign(&mut self, rhs: Self) {
+        self.unknown += rhs.unknown;
+        self.trace += rhs.trace;
+        self.debug += rhs.debug;
+        self.info += rhs.info;
+        self.warn += rhs.warn;
+        self.error += rhs.error;
+        self.fatal += rhs.fatal;
+    }
+}
+
 /// A 64-byte checkpoint entry for granular validation and approximate stats.
 ///
 /// Written once per `checkpoint_interval` lines. Contains the log position,

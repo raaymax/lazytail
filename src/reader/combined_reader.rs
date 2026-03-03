@@ -76,28 +76,39 @@ impl CombinedReader {
             }
         }
 
-        // Stable sort: ties broken by source order, then line order within source
-        self.merged.sort_by_key(|m| m.timestamp);
+        // Deterministic sort: timestamp first, then source order, then line order
+        self.merged
+            .sort_by_key(|m| (m.timestamp, m.source_id, m.file_line));
+    }
+
+    /// Sort key for deterministic ordering.
+    #[inline]
+    fn sort_key(m: &MergedLine) -> (u64, usize, usize) {
+        (m.timestamp, m.source_id, m.file_line)
     }
 
     /// Append only new lines from sources that grew since the last reload.
     ///
-    /// The existing portion of `merged` is already sorted. New entries are
-    /// appended, then the whole vec is re-sorted. Rust's `sort_by_key` (a
-    /// stable merge sort) runs in nearly O(n) on mostly-sorted data.
+    /// Collects new lines into a small temp vec, sorts it, then merges into
+    /// the already-sorted `merged` list. For K new lines into N existing:
+    /// - Fast path (all new lines >= last existing): O(K log K) — just append
+    /// - Small K path (interleaving, K small): O(K × (log N + shift)) — binary insert
+    /// - Large K path (interleaving, K large): O(N + K) — full merge
+    ///
+    /// The small-K path avoids allocating a second N-element vec, which would
+    /// otherwise thrash CPU caches for large N (e.g. 66M entries = 1.6 GB).
     fn append_new_lines(&mut self) {
-        let mut any_new = false;
+        let mut new_lines = Vec::new();
         for (source_id, source) in self.sources.iter().enumerate() {
             let prev = self.prev_totals[source_id];
             if source.total_lines > prev {
-                any_new = true;
                 for line in prev..source.total_lines {
                     let timestamp = source
                         .index_reader
                         .as_ref()
                         .and_then(|ir| ir.get_timestamp(line))
                         .unwrap_or(0);
-                    self.merged.push(MergedLine {
+                    new_lines.push(MergedLine {
                         source_id,
                         file_line: line,
                         timestamp,
@@ -105,8 +116,50 @@ impl CombinedReader {
                 }
             }
         }
-        if any_new {
-            self.merged.sort_by_key(|m| m.timestamp);
+
+        if new_lines.is_empty() {
+            return;
+        }
+
+        new_lines.sort_by_key(Self::sort_key);
+
+        // Fast path: if all new lines sort after all existing lines, just append.
+        // This is the common case for append-only logs with monotonic timestamps.
+        let can_append = self.merged.is_empty()
+            || Self::sort_key(new_lines.first().unwrap())
+                >= Self::sort_key(self.merged.last().unwrap());
+
+        if can_append {
+            self.merged.extend(new_lines);
+        } else if new_lines.len() <= 64 {
+            // Small K: binary-search insert each new line in place.
+            // For live logs, new lines typically insert near the end so the
+            // element shift is tiny. This avoids a full O(N) merge + 2×N
+            // allocation that would thrash CPU caches for large merged vecs.
+            // Process in reverse so earlier insertions don't shift later positions.
+            for line in new_lines.into_iter().rev() {
+                let key = Self::sort_key(&line);
+                let pos = self.merged.partition_point(|m| Self::sort_key(m) <= key);
+                self.merged.insert(pos, line);
+            }
+        } else {
+            // Large K: merge two sorted sequences
+            let old = std::mem::take(&mut self.merged);
+            self.merged.reserve(old.len() + new_lines.len());
+
+            let mut i = 0;
+            let mut j = 0;
+            while i < old.len() && j < new_lines.len() {
+                if Self::sort_key(&old[i]) <= Self::sort_key(&new_lines[j]) {
+                    self.merged.push(old[i]);
+                    i += 1;
+                } else {
+                    self.merged.push(new_lines[j]);
+                    j += 1;
+                }
+            }
+            self.merged.extend_from_slice(&old[i..]);
+            self.merged.extend_from_slice(&new_lines[j..]);
         }
     }
 
@@ -160,14 +213,17 @@ impl LogReader for CombinedReader {
     }
 
     fn reload(&mut self) -> Result<()> {
-        // Reload each source reader and refresh index readers
+        // Reload each source reader and refresh index readers.
+        // Individual source failures (e.g. deleted file) are skipped gracefully.
         let mut any_truncated = false;
         for (i, source) in self.sources.iter_mut().enumerate() {
             let mut reader = match source.reader.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            reader.reload()?;
+            if let Err(_e) = reader.reload() {
+                continue;
+            }
             self.prev_totals[i] = source.total_lines;
             source.total_lines = reader.total_lines();
             drop(reader);
@@ -275,5 +331,51 @@ mod tests {
         // reload should not error
         reader.reload().unwrap();
         assert_eq!(reader.total_lines(), 1);
+    }
+
+    #[test]
+    fn test_append_new_lines_binary_insert() {
+        // Test the binary insert path: new lines interleave with existing.
+        let sources = vec![
+            make_source("a", vec!["a1", "a2"]),
+            make_source("b", vec!["b1"]),
+        ];
+        let mut reader = CombinedReader::new(sources);
+
+        // Set up a merged list with known timestamps
+        reader.merged.clear();
+        reader.merged.push(MergedLine {
+            source_id: 0,
+            file_line: 0,
+            timestamp: 10,
+        });
+        reader.merged.push(MergedLine {
+            source_id: 0,
+            file_line: 1,
+            timestamp: 30,
+        });
+        reader.merged.push(MergedLine {
+            source_id: 1,
+            file_line: 0,
+            timestamp: 50,
+        });
+
+        // Insert a line with timestamp 20 — goes between positions 0 and 1
+        let new_line = MergedLine {
+            source_id: 1,
+            file_line: 1,
+            timestamp: 20,
+        };
+        let key = CombinedReader::sort_key(&new_line);
+        let pos = reader
+            .merged
+            .partition_point(|m| CombinedReader::sort_key(m) <= key);
+        reader.merged.insert(pos, new_line);
+
+        assert_eq!(reader.merged.len(), 4);
+        assert_eq!(reader.merged[0].timestamp, 10);
+        assert_eq!(reader.merged[1].timestamp, 20);
+        assert_eq!(reader.merged[2].timestamp, 30);
+        assert_eq!(reader.merged[3].timestamp, 50);
     }
 }

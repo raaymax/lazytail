@@ -789,6 +789,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 
         if has_modified {
             modified_categories[tab.source_type() as usize] = true;
+
             let mut reader_guard = match tab.source.reader.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -831,11 +832,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                         Ok(guard) => guard,
                         Err(poisoned) => poisoned.into_inner(),
                     };
-                    if let Err(e) = reader.reload() {
-                        eprintln!(
-                            "Failed to reload combined reader for cat {}: {}",
-                            cat_idx, e
-                        );
+                    if reader.reload().is_err() {
                         continue;
                     }
                     let new_total = reader.total_lines();
@@ -844,7 +841,12 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                     if new_total != old_total {
                         combined.source.total_lines = new_total;
                         if combined.source.mode == ViewMode::Normal {
-                            combined.source.line_indices = (0..new_total).collect();
+                            let old_len = combined.source.line_indices.len();
+                            if new_total > old_len {
+                                combined.source.line_indices.extend(old_len..new_total);
+                            } else {
+                                combined.source.line_indices.truncate(new_total);
+                            }
                         }
 
                         // Follow mode jump for active combined tab

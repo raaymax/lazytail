@@ -56,6 +56,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     } else {
         log_view::render_log_view(f, content_chunks[0], app)?;
     }
+
     status_bar::render_status_bar(f, content_chunks[1], app);
 
     if app.is_entering_filter() {
