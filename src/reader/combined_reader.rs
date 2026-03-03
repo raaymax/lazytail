@@ -40,13 +40,17 @@ pub struct MergedLine {
 pub struct CombinedReader {
     sources: Vec<SourceEntry>,
     merged: Vec<MergedLine>,
+    /// Previous total_lines per source, for incremental append on reload.
+    prev_totals: Vec<usize>,
 }
 
 impl CombinedReader {
     pub fn new(sources: Vec<SourceEntry>) -> Self {
+        let prev_totals = sources.iter().map(|s| s.total_lines).collect();
         let mut reader = Self {
             sources,
             merged: Vec::new(),
+            prev_totals,
         };
         reader.build_merged();
         reader
@@ -74,6 +78,36 @@ impl CombinedReader {
 
         // Stable sort: ties broken by source order, then line order within source
         self.merged.sort_by_key(|m| m.timestamp);
+    }
+
+    /// Append only new lines from sources that grew since the last reload.
+    ///
+    /// The existing portion of `merged` is already sorted. New entries are
+    /// appended, then the whole vec is re-sorted. Rust's `sort_by_key` (a
+    /// stable merge sort) runs in nearly O(n) on mostly-sorted data.
+    fn append_new_lines(&mut self) {
+        let mut any_new = false;
+        for (source_id, source) in self.sources.iter().enumerate() {
+            let prev = self.prev_totals[source_id];
+            if source.total_lines > prev {
+                any_new = true;
+                for line in prev..source.total_lines {
+                    let timestamp = source
+                        .index_reader
+                        .as_ref()
+                        .and_then(|ir| ir.get_timestamp(line))
+                        .unwrap_or(0);
+                    self.merged.push(MergedLine {
+                        source_id,
+                        file_line: line,
+                        timestamp,
+                    });
+                }
+            }
+        }
+        if any_new {
+            self.merged.sort_by_key(|m| m.timestamp);
+        }
     }
 
     /// Get source info for a virtual line index (for rendering source prefix).
@@ -127,14 +161,20 @@ impl LogReader for CombinedReader {
 
     fn reload(&mut self) -> Result<()> {
         // Reload each source reader and refresh index readers
-        for source in &mut self.sources {
+        let mut any_truncated = false;
+        for (i, source) in self.sources.iter_mut().enumerate() {
             let mut reader = match source.reader.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
             reader.reload()?;
+            self.prev_totals[i] = source.total_lines;
             source.total_lines = reader.total_lines();
             drop(reader);
+
+            if source.total_lines < self.prev_totals[i] {
+                any_truncated = true;
+            }
 
             if let (Some(ref mut ir), Some(ref path)) =
                 (&mut source.index_reader, &source.source_path)
@@ -142,7 +182,12 @@ impl LogReader for CombinedReader {
                 ir.refresh(path);
             }
         }
-        self.build_merged();
+
+        if any_truncated {
+            self.build_merged();
+        } else {
+            self.append_new_lines();
+        }
         Ok(())
     }
 

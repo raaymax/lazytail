@@ -750,7 +750,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 
     // First pass: reload files and handle inactive tabs
     let mut active_tab_modification: Option<ActiveTabFileModification> = None;
-    let mut any_file_modified = false;
+    let mut modified_categories = [false; 5];
 
     for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
         // Drain watcher events
@@ -771,7 +771,8 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
         // Periodic file size poll: if the watcher didn't fire but the file grew,
         // treat it as a modification. This catches cases where the OS file watcher
         // fails to deliver events (common on macOS with FSEvents).
-        if !has_modified && force_poll {
+        // Only poll the active tab — inactive tabs catch up when selected.
+        if !has_modified && force_poll && tab_idx == active_tab {
             if let Some(ref path) = tab.source.source_path {
                 if let Ok(meta) = std::fs::metadata(path) {
                     let current_size = meta.len();
@@ -787,7 +788,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
         }
 
         if has_modified {
-            any_file_modified = true;
+            modified_categories[tab.source_type() as usize] = true;
             let mut reader_guard = match tab.source.reader.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -820,9 +821,9 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
         }
     }
 
-    // Propagate file changes to combined tabs
-    if any_file_modified {
-        for cat_idx in 0..5 {
+    // Propagate file changes to combined tabs (only for categories that had modifications)
+    for (cat_idx, cat_modified) in modified_categories.iter().enumerate() {
+        if *cat_modified {
             if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
                 let old_total = combined.source.total_lines;
                 {
