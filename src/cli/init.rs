@@ -71,10 +71,41 @@ fn generate_config_template(project_name: &str) -> String {
 # Project name (optional, defaults to directory name)
 name: {project_name}
 
+# Theme: built-in 'dark' (default) or 'light'
+# Import from terminal emulators: lazytail theme import <file>
+# Supports: Windows Terminal, Alacritty, iTerm2, Ghostty
+# theme: dark
+
+# Rendering presets for structured log lines
+# Built-in renderers: 'json', 'logfmt' (auto-detected)
+# renderers:
+#   - name: app-logs
+#     parser: json                    # json, logfmt, regex, or auto
+#     layout:
+#       - field: timestamp
+#         style: dim
+#         format: datetime:relative   # datetime, duration, bytes
+#       - field: level
+#         style: severity             # auto-colors error/warn/info/debug
+#         width: 5                    # fixed column width
+#       - field: status
+#         style: status_code          # auto-colors HTTP 2xx/3xx/4xx/5xx
+#       - field: message
+#         max_width: 120              # truncate long values
+#       - field: environment
+#         style_map:                  # map values to colors
+#           production: red
+#           staging: yellow
+#           _default: dim
+#       - field: _rest                # all remaining fields
+#         style: dim
+
 # Log sources to display in the viewer
+# Captured sources (via 'cmd | lazytail -n NAME') appear automatically
 # sources:
-#   - name: api           # Display name shown in tabs
+#   - name: api                      # display name shown in tabs
 #     path: /var/log/api.log
+#     renderers: [app-logs]          # apply specific renderers
 #   - name: worker
 #     path: ~/logs/worker.log
 "#,
@@ -97,5 +128,20 @@ mod tests {
         let content = generate_config_template("test");
         assert!(content.contains("# sources:"));
         assert!(content.contains("#   - name: api"));
+    }
+
+    #[test]
+    fn test_generate_config_template_has_renderer_section() {
+        let content = generate_config_template("test");
+        assert!(content.contains("# renderers:"));
+        assert!(content.contains("#     parser: json"));
+        assert!(content.contains("style: severity"));
+    }
+
+    #[test]
+    fn test_generate_config_template_has_theme_section() {
+        let content = generate_config_template("test");
+        assert!(content.contains("# theme: dark"));
+        assert!(content.contains("lazytail theme import"));
     }
 }
