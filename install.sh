@@ -256,13 +256,26 @@ add_mcp_json_config() {
             return 0
         fi
 
-        # Add to existing mcpServers or create mcpServers section
-        if grep -q '"mcpServers"' "$config_file" 2>/dev/null; then
-            # Add to existing mcpServers - insert after "mcpServers": {
-            sed -i 's/"mcpServers"[[:space:]]*:[[:space:]]*{/"mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    },/' "$config_file"
+        # Use python3 for reliable cross-platform JSON manipulation
+        # (avoids sed -i portability issues between macOS and Linux)
+        if command -v python3 &> /dev/null; then
+            python3 -c "
+import json, sys
+config_file, bin_path = sys.argv[1], sys.argv[2]
+with open(config_file, 'r') as f:
+    config = json.load(f)
+config.setdefault('mcpServers', {})['lazytail'] = {
+    'command': bin_path,
+    'args': ['--mcp']
+}
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+" "$config_file" "$LAZYTAIL_BIN"
         else
-            # Add mcpServers section before closing brace
-            sed -i 's/}$/,\n  "mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    }\n  }\n}/' "$config_file"
+            echo -e "  ${YELLOW}⚠ python3 not found. Please add manually to $config_file:${NC}"
+            echo '    "mcpServers": { "lazytail": { "command": "'"$LAZYTAIL_BIN"'", "args": ["--mcp"] } }'
+            return 0
         fi
     else
         # Create new file
