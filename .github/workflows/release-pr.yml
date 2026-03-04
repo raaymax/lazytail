@@ -25,7 +25,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
-          PR_NUMBER=$(gh pr list --state merged --label "autorelease: tagged" --limit 1 --json number --jq '.[0].number' --repo "$GITHUB_REPOSITORY")
+          VERSION=${TAG_NAME#v}
+          PR_NUMBER=$(gh pr list --state merged --search "chore(master): release $VERSION in:title" --limit 1 --json number --jq '.[0].number' --repo "$GITHUB_REPOSITORY")
           if [ -z "$PR_NUMBER" ]; then
             echo "Could not find release PR, skipping"
             exit 0

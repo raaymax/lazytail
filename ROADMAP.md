@@ -160,6 +160,10 @@
 
 ### TUI Interaction
 
+#### Help Overlay 🔴
+- [ ] Fix: help overlay renders as a floating box that overlaps both side panel and log content, leaving fragments of both visible around edges — should be a full-pane overlay or clipped to the log content area
+- [ ] The `↓` scroll indicator in the title (`Help ↓`) is too subtle — add a visible scrollbar or clearer scroll affordance
+
 #### Mouse Controls 🟢
 - [x] Click to select a log line ✅
 - [x] Click source in side panel to switch tabs ✅
@@ -222,6 +226,7 @@
 - [ ] Useful for inspecting LLM training data, API logs, chat transcripts
 
 #### Expandable Entries — Remaining 🟢
+- [ ] Fix: expanding a JSON line just shows raw JSON word-wrapped over multiple lines — should pretty-print with indentation and syntax highlighting instead of plain wrap 🔴
 - [ ] Fix: expanding a line near the bottom of the screen shows empty lines when the expansion doesn't fit — viewport should auto-scroll up so the expanded content is visible 🔴
 - [ ] Scrolling within expanded content — expanded views (especially pretty-printed JSON) can exceed screen height; need internal scroll, viewport clipping, and sensible max-height with scroll indicators
 - [ ] Collapsible JSON nodes (nested objects)
@@ -230,7 +235,9 @@
 
 ### Side Panel
 
+- [ ] Fix: launching with no args lands on `global-source` which shows an empty pane (0 lines) — new users see a blank screen; should default to the first source with content, or show welcome/instruction text 🔴
 - [ ] Fix: selected empty/ended source is invisible — grayed-out dim text has no visible selection highlight, making it unclear which tab is active 🔴
+- [ ] Replace numeric tab indicators (`1`, `2`, `3`...) in side panel with a text-based cursor/focus indicator — `>` already marks the active tab, need a distinct indicator for the focused row during tree navigation (e.g., `▸`, `→`, reverse highlight without numbers) so selection is visible without relying solely on background color 🟡
 - [ ] Preview log source content while navigating the side panel — show a live preview of the highlighted source before switching to it 🟡
 - [ ] Toggle panel visibility keybinding 🟡
 - [ ] Configurable panel width 🟡
@@ -321,6 +328,7 @@
 - [ ] Collapsible stats section
 - [ ] Sidecar index (`.log.idx`) — arrival timestamp + byte offset per line, real-time append during capture
 - [ ] Combined source view — merge sources chronologically using sidecar timestamps
+- [ ] When opening files as arguments (`lazytail file.log`), still show all discovered sources in the side panel under a separate "Args" category — currently only the file arg and global sources appear, hiding project/captured sources
 - [ ] Integration tests for full app behavior
 - [ ] UI snapshot testing
 - [ ] Performance benchmarks in CI
