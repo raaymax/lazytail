@@ -256,24 +256,13 @@ add_mcp_json_config() {
             return 0
         fi
 
-        # Use python3 for reliable cross-platform JSON manipulation
+        # Use jq for reliable cross-platform JSON manipulation
         # (avoids sed -i portability issues between macOS and Linux)
-        if command -v python3 &> /dev/null; then
-            python3 -c "
-import json, sys
-config_file, bin_path = sys.argv[1], sys.argv[2]
-with open(config_file, 'r') as f:
-    config = json.load(f)
-config.setdefault('mcpServers', {})['lazytail'] = {
-    'command': bin_path,
-    'args': ['--mcp']
-}
-with open(config_file, 'w') as f:
-    json.dump(config, f, indent=2)
-    f.write('\n')
-" "$config_file" "$LAZYTAIL_BIN"
+        if command -v jq &> /dev/null; then
+            jq --arg bin "$LAZYTAIL_BIN" '.mcpServers.lazytail = {"command": $bin, "args": ["--mcp"]}' \
+                "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         else
-            echo -e "  ${YELLOW}⚠ python3 not found. Please add manually to $config_file:${NC}"
+            echo -e "  ${YELLOW}⚠ jq not found. Please add manually to $config_file:${NC}"
             echo '    "mcpServers": { "lazytail": { "command": "'"$LAZYTAIL_BIN"'", "args": ["--mcp"] } }'
             return 0
         fi
