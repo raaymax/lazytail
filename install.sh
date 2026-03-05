@@ -256,13 +256,15 @@ add_mcp_json_config() {
             return 0
         fi
 
-        # Add to existing mcpServers or create mcpServers section
-        if grep -q '"mcpServers"' "$config_file" 2>/dev/null; then
-            # Add to existing mcpServers - insert after "mcpServers": {
-            sed -i 's/"mcpServers"[[:space:]]*:[[:space:]]*{/"mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    },/' "$config_file"
+        # Use jq for reliable cross-platform JSON manipulation
+        # (avoids sed -i portability issues between macOS and Linux)
+        if command -v jq &> /dev/null; then
+            jq --arg bin "$LAZYTAIL_BIN" '.mcpServers.lazytail = {"command": $bin, "args": ["--mcp"]}' \
+                "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         else
-            # Add mcpServers section before closing brace
-            sed -i 's/}$/,\n  "mcpServers": {\n    "lazytail": {\n      "command": "'"$LAZYTAIL_BIN"'",\n      "args": ["--mcp"]\n    }\n  }\n}/' "$config_file"
+            echo -e "  ${YELLOW}⚠ jq not found. Please add manually to $config_file:${NC}"
+            echo '    "mcpServers": { "lazytail": { "command": "'"$LAZYTAIL_BIN"'", "args": ["--mcp"] } }'
+            return 0
         fi
     else
         # Create new file
