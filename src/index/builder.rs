@@ -276,14 +276,36 @@ impl LineIndexer {
     }
 
     pub fn resume(index_dir: &Path) -> Result<Self> {
+        let meta = IndexMeta::read_from(index_dir.join("meta"))?;
+        Self::resume_at(
+            index_dir,
+            meta.entry_count,
+            meta.log_file_size,
+            meta.checkpoint_interval,
+        )
+    }
+
+    /// Resume from a validated state, truncating columns to the trusted entry count.
+    ///
+    /// Use this after `validate_index()` returns partial trust — the columns are
+    /// truncated to `entry_count` and new lines will be appended from `file_size`.
+    /// `checkpoint_interval` comes from the meta that the caller already read.
+    pub fn resume_at(
+        index_dir: &Path,
+        entry_count: u64,
+        file_size: u64,
+        checkpoint_interval: u16,
+    ) -> Result<Self> {
         let Some(lock) = IndexWriteLock::try_acquire(index_dir)? else {
             bail!("index is being written by another process, skipping");
         };
 
-        let meta = IndexMeta::read_from(index_dir.join("meta"))?;
-
-        // Restore cumulative severity counts and last content hash from the last checkpoint
-        let last_cp = CheckpointReader::open(index_dir.join("checkpoints"))?.last();
+        // Restore cumulative severity counts and last content hash from the last
+        // checkpoint that falls within the trusted entry range
+        let last_cp = CheckpointReader::open(index_dir.join("checkpoints"))?
+            .iter()
+            .take_while(|cp| cp.line_number <= entry_count)
+            .last();
         let (severity_counts, last_content_hash) = match last_cp {
             Some(cp) => (cp.severity_counts, cp.content_hash),
             None => (SeverityCounts::default(), 0),
@@ -293,29 +315,29 @@ impl LineIndexer {
             _lock: Some(lock),
             offset_writer: ColumnWriter::truncate_and_open(
                 index_dir.join("offsets"),
-                meta.entry_count as usize,
+                entry_count as usize,
             )?,
             length_writer: ColumnWriter::truncate_and_open(
                 index_dir.join("lengths"),
-                meta.entry_count as usize,
+                entry_count as usize,
             )?,
             flags_writer: ColumnWriter::truncate_and_open(
                 index_dir.join("flags"),
-                meta.entry_count as usize,
+                entry_count as usize,
             )?,
             time_writer: ColumnWriter::truncate_and_open(
                 index_dir.join("time"),
-                meta.entry_count as usize,
+                entry_count as usize,
             )?,
             checkpoint_writer: CheckpointWriter::truncate_and_open(
                 index_dir.join("checkpoints"),
-                meta.entry_count,
+                entry_count,
             )?,
-            checkpoint_interval: meta.checkpoint_interval,
-            line_count: meta.entry_count,
-            current_offset: meta.log_file_size,
+            checkpoint_interval,
+            line_count: entry_count,
+            current_offset: file_size,
             severity_counts,
-            last_line_offset: meta.log_file_size,
+            last_line_offset: file_size,
             last_content_hash,
         })
     }
@@ -336,7 +358,7 @@ impl LineIndexer {
 
         let flags = detect_flags_bytes(content);
         let line_offset = self.current_offset;
-        let hash = xxhash_rust::xxh3::xxh3_64(content);
+        let hash = xxhash_rust::xxh3::xxh3_64(&content[..content.len().min(256)]);
 
         self.offset_writer.push(line_offset)?;
         self.length_writer.push(content.len() as u32)?;

@@ -2,6 +2,7 @@ use super::sparse_index::SparseIndex;
 use super::LogReader;
 use crate::index::column::ColumnReader;
 use crate::index::meta::IndexMeta;
+use crate::index::validate::validate_index;
 use crate::source::index_dir_for_log;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -75,8 +76,8 @@ impl FileReader {
     }
 
     /// Try to load the columnar index's offsets column for O(1) line access.
-    /// Falls back to sparse index seeding if the full column can't be opened.
-    /// Returns true if successful.
+    /// Uses `validate_index()` for structural and checkpoint-based validation
+    /// with partial trust support. Returns true if successful.
     fn try_seed_from_index(&mut self) -> bool {
         let idx_dir = index_dir_for_log(&self.path);
         let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
@@ -84,15 +85,12 @@ impl FileReader {
             Err(_) => return false,
         };
 
-        // Validate index is usable: reject if file was truncated (smaller than indexed size).
-        // If the file grew, the index is still valid for the lines it covers — the file
-        // watcher will pick up the new tail incrementally.
-        let file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
-        if file_size < meta.log_file_size {
-            return false;
-        }
+        let validated = match validate_index(&idx_dir, &self.path, &meta) {
+            Some(v) => v,
+            None => return false,
+        };
 
-        let indexed_lines = meta.entry_count as usize;
+        let indexed_lines = validated.trusted_entries;
         if indexed_lines == 0 {
             self.sparse_index.set_total_lines(0);
             return true;
@@ -103,35 +101,23 @@ impl FileReader {
             _ => return false,
         };
 
-        // Spot-check: verify indexed offsets align with actual newlines in the file.
-        // Catches stale indexes when a log file was deleted and recreated with different content.
-        if indexed_lines >= 2 {
-            if offsets.get(0) != Some(0) {
-                return false;
-            }
-            if let Some(next_offset) = offsets.get(1) {
-                if next_offset > 0 && self.reader.seek(SeekFrom::Start(next_offset - 1)).is_ok() {
-                    let mut buf = [0u8; 1];
-                    if self.reader.read_exact(&mut buf).is_ok() && buf[0] != b'\n' {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        // Keep the full mmap-backed offsets column for O(1) line access.
-        // For lines beyond the indexed range (file grew), sparse index handles the tail.
+        // Keep the mmap-backed offsets column for O(1) line access.
+        // For lines beyond the trusted range, sparse index handles the tail.
         self.columnar_offsets = Some(offsets);
         self.indexed_lines = indexed_lines;
 
-        // If the file grew beyond the index, scan only the new tail
-        if file_size > meta.log_file_size {
-            if self.scan_tail(indexed_lines, meta.log_file_size).is_err() {
+        // If the file extends beyond the trusted region, scan only the new tail
+        let file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if file_size > validated.trusted_file_size {
+            if self
+                .scan_tail(indexed_lines, validated.trusted_file_size)
+                .is_err()
+            {
                 return false;
             }
         } else {
             self.sparse_index.set_total_lines(indexed_lines);
-            self.scanned_up_to = meta.log_file_size;
+            self.scanned_up_to = validated.trusted_file_size;
         }
 
         true

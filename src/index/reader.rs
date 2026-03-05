@@ -218,35 +218,14 @@ impl IndexReader {
     /// if the index directory doesn't exist or meta cannot be read.
     pub fn stats(log_path: &Path) -> Option<IndexStats> {
         use crate::index::flags::SEVERITY_MASK;
+        use crate::index::validate::validate_index;
 
         let idx_dir = index_dir_for_log(log_path);
         let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
 
-        // Validate index against actual file — reject stale indexes
-        let file_size = std::fs::metadata(log_path).ok()?.len();
-        if file_size < meta.log_file_size {
-            return None;
-        }
-        if meta.entry_count >= 2 && meta.has_column(ColumnBit::Offsets) {
-            let offsets =
-                ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize)
-                    .ok()?;
-            if offsets.get(0) != Some(0) {
-                return None;
-            }
-            if let Some(next_offset) = offsets.get(1) {
-                if next_offset > 0 {
-                    let mut file = std::fs::File::open(log_path).ok()?;
-                    use std::io::{Read, Seek, SeekFrom};
-                    file.seek(SeekFrom::Start(next_offset - 1)).ok()?;
-                    let mut buf = [0u8; 1];
-                    file.read_exact(&mut buf).ok()?;
-                    if buf[0] != b'\n' {
-                        return None;
-                    }
-                }
-            }
-        }
+        // Validate index against actual file with partial trust
+        let validated = validate_index(&idx_dir, log_path, &meta)?;
+        let trusted_entries = validated.trusted_entries;
 
         let column_names = [
             (ColumnBit::Offsets, "offsets"),
@@ -263,7 +242,7 @@ impl IndexReader {
 
         // Compute severity counts from the flags column (live, not checkpoint-delayed)
         let severity_counts = if meta.has_column(ColumnBit::Flags) {
-            ColumnReader::<u32>::open(idx_dir.join("flags"), meta.entry_count as usize)
+            ColumnReader::<u32>::open(idx_dir.join("flags"), trusted_entries)
                 .ok()
                 .map(|col| {
                     let mut counts = SeverityCounts::default();
@@ -292,7 +271,7 @@ impl IndexReader {
         };
 
         Some(IndexStats {
-            indexed_lines: meta.entry_count,
+            indexed_lines: trusted_entries as u64,
             log_file_size: meta.log_file_size,
             columns,
             severity_counts,

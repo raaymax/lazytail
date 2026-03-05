@@ -9,8 +9,8 @@
 
 use crate::config::DiscoveryResult;
 use crate::index::builder::{now_millis, LineIndexer};
-use crate::index::column::ColumnReader;
 use crate::index::meta::IndexMeta;
+use crate::index::validate::validate_index;
 use crate::renderer::segment::segments_to_ansi;
 use crate::renderer::PresetRegistry;
 use crate::signal::setup_shutdown_handlers;
@@ -21,8 +21,7 @@ use crate::source::{
 use crate::theme::Palette;
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader, Write};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -87,9 +86,23 @@ pub fn run_capture_mode(
 
     // 8. Create or resume indexer for columnar index
     let idx_dir = index_dir_for_log(&log_path);
-    let mut indexer = if idx_dir.join("meta").exists() && is_index_consistent(&idx_dir, &log_path) {
-        LineIndexer::resume(&idx_dir)
-            .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
+    let resume_info = idx_dir
+        .join("meta")
+        .exists()
+        .then(|| {
+            let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
+            let v = validate_index(&idx_dir, &log_path, &meta)?;
+            Some((v, meta.checkpoint_interval))
+        })
+        .flatten();
+    let mut indexer = if let Some((v, interval)) = resume_info {
+        LineIndexer::resume_at(
+            &idx_dir,
+            v.trusted_entries as u64,
+            v.trusted_file_size,
+            interval,
+        )
+        .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
     } else {
         LineIndexer::create(&idx_dir)
             .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?
@@ -172,62 +185,6 @@ pub fn run_capture_mode(
     remove_marker_for_context(&name, discovery)?;
 
     Ok(())
-}
-
-/// Check whether an existing index is consistent with the current log file.
-///
-/// Verifies that the file hasn't been truncated below the indexed range,
-/// and spot-checks that indexed line boundaries align with actual newlines.
-/// Returns false if the index is stale (e.g., log file was deleted and recreated).
-fn is_index_consistent(idx_dir: &Path, log_path: &Path) -> bool {
-    let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-
-    let file_size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
-    if file_size < meta.log_file_size {
-        return false;
-    }
-
-    // Empty or single-line index — nothing to spot-check
-    if meta.entry_count < 2 {
-        return true;
-    }
-
-    let offsets =
-        match ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize) {
-            Ok(r) => r,
-            Err(_) => return false,
-        };
-
-    // First line must start at byte 0
-    if offsets.get(0) != Some(0) {
-        return false;
-    }
-
-    // Byte just before offset[1] must be a newline
-    if let Some(second_offset) = offsets.get(1) {
-        if second_offset == 0 {
-            return false;
-        }
-        let mut file = match std::fs::File::open(log_path) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-        if file.seek(SeekFrom::Start(second_offset - 1)).is_err() {
-            return false;
-        }
-        let mut buf = [0u8; 1];
-        if file.read_exact(&mut buf).is_err() {
-            return false;
-        }
-        if buf[0] != b'\n' {
-            return false;
-        }
-    }
-
-    true
 }
 
 #[cfg(test)]
