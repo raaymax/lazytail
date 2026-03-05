@@ -86,17 +86,23 @@ pub fn run_capture_mode(
 
     // 8. Create or resume indexer for columnar index
     let idx_dir = index_dir_for_log(&log_path);
-    let validated = idx_dir
+    let resume_info = idx_dir
         .join("meta")
         .exists()
         .then(|| {
             let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
-            validate_index(&idx_dir, &log_path, &meta)
+            let v = validate_index(&idx_dir, &log_path, &meta)?;
+            Some((v, meta.checkpoint_interval))
         })
         .flatten();
-    let mut indexer = if let Some(v) = validated {
-        LineIndexer::resume_at(&idx_dir, v.trusted_entries as u64, v.trusted_file_size)
-            .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
+    let mut indexer = if let Some((v, interval)) = resume_info {
+        LineIndexer::resume_at(
+            &idx_dir,
+            v.trusted_entries as u64,
+            v.trusted_file_size,
+            interval,
+        )
+        .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
     } else {
         LineIndexer::create(&idx_dir)
             .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?

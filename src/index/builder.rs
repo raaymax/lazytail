@@ -277,19 +277,28 @@ impl LineIndexer {
 
     pub fn resume(index_dir: &Path) -> Result<Self> {
         let meta = IndexMeta::read_from(index_dir.join("meta"))?;
-        Self::resume_at(index_dir, meta.entry_count, meta.log_file_size)
+        Self::resume_at(
+            index_dir,
+            meta.entry_count,
+            meta.log_file_size,
+            meta.checkpoint_interval,
+        )
     }
 
     /// Resume from a validated state, truncating columns to the trusted entry count.
     ///
     /// Use this after `validate_index()` returns partial trust — the columns are
     /// truncated to `entry_count` and new lines will be appended from `file_size`.
-    pub fn resume_at(index_dir: &Path, entry_count: u64, file_size: u64) -> Result<Self> {
+    /// `checkpoint_interval` comes from the meta that the caller already read.
+    pub fn resume_at(
+        index_dir: &Path,
+        entry_count: u64,
+        file_size: u64,
+        checkpoint_interval: u16,
+    ) -> Result<Self> {
         let Some(lock) = IndexWriteLock::try_acquire(index_dir)? else {
             bail!("index is being written by another process, skipping");
         };
-
-        let meta = IndexMeta::read_from(index_dir.join("meta"))?;
 
         // Restore cumulative severity counts and last content hash from the last
         // checkpoint that falls within the trusted entry range
@@ -324,7 +333,7 @@ impl LineIndexer {
                 index_dir.join("checkpoints"),
                 entry_count,
             )?,
-            checkpoint_interval: meta.checkpoint_interval,
+            checkpoint_interval,
             line_count: entry_count,
             current_offset: file_size,
             severity_counts,

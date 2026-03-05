@@ -41,7 +41,7 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
         });
     }
 
-    // Structural check: offsets column must have exactly entry_count entries
+    // Structural check: offsets column must have at least entry_count entries
     let offsets = ColumnReader::<u64>::open(idx_dir.join("offsets"), entry_count).ok()?;
     if offsets.len() != entry_count {
         return None;
@@ -203,8 +203,7 @@ fn find_line_end(log_path: &Path, offset: u64) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::index::builder::IndexBuilder;
-    use crate::index::checkpoint::{Checkpoint, CheckpointReader, SeverityCounts};
-    use crate::index::meta::IndexMeta;
+    use crate::index::checkpoint::CheckpointReader;
     use std::io::Write;
     use tempfile::tempdir;
 
