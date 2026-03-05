@@ -482,6 +482,7 @@ impl LazyTailMcp {
     }
 
     /// Assemble a SearchResponse from collected filter results — shared by search and query paths.
+    #[allow(clippy::too_many_arguments)]
     fn build_search_response(
         path: &Path,
         mut matching_indices: Vec<usize>,
@@ -771,6 +772,7 @@ impl LazyTailMcp {
         Ok(matches)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_context_impl(
         &self,
         path: &Path,
