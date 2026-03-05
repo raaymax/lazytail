@@ -45,6 +45,9 @@ pub struct GetLinesRequest {
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
+    /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
+    #[serde(default)]
+    pub full_content: bool,
 }
 
 /// Response containing lines from a log file.
@@ -117,6 +120,9 @@ pub struct SearchRequest {
     /// Example: {"parser": "json", "filters": [{"field": "level", "op": "eq", "value": "error"}]}
     #[serde(default)]
     pub query: Option<FilterQuery>,
+    /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
+    #[serde(default)]
+    pub full_content: bool,
 }
 
 /// Response containing search results.
@@ -169,6 +175,9 @@ pub struct GetTailRequest {
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
+    /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
+    #[serde(default)]
+    pub full_content: bool,
 }
 
 /// Request to get context around a specific line in a lazytail source.
@@ -190,6 +199,9 @@ pub struct GetContextRequest {
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
+    /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
+    #[serde(default)]
+    pub full_content: bool,
 }
 
 /// Response containing context around a line.
