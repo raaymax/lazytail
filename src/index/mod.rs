@@ -5,3 +5,4 @@ pub mod flags;
 pub mod lock;
 pub mod meta;
 pub mod reader;
+pub mod validate;
