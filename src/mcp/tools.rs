@@ -300,6 +300,7 @@ impl LazyTailMcp {
         count: usize,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let count = count.min(1000);
 
@@ -346,7 +347,9 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
-        truncate_lines_response(&mut response);
+        if !full_content {
+            truncate_lines_response(&mut response);
+        }
 
         format_lines(&response, output)
     }
@@ -358,6 +361,7 @@ impl LazyTailMcp {
         since_line: Option<usize>,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let count = count.min(1000);
 
@@ -415,7 +419,9 @@ impl LazyTailMcp {
         if !raw {
             strip_lines_response(&mut response);
         }
-        truncate_lines_response(&mut response);
+        if !full_content {
+            truncate_lines_response(&mut response);
+        }
 
         format_lines(&response, output)
     }
@@ -430,6 +436,7 @@ impl LazyTailMcp {
         context_lines: usize,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
@@ -470,6 +477,7 @@ impl LazyTailMcp {
             context_lines,
             raw,
             output,
+            full_content,
         )
     }
 
@@ -482,6 +490,7 @@ impl LazyTailMcp {
         context_lines: usize,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let total_matches = matching_indices.len();
         let truncated = total_matches > max_results;
@@ -506,7 +515,9 @@ impl LazyTailMcp {
         if !raw {
             strip_search_response(&mut response);
         }
-        truncate_search_response(&mut response);
+        if !full_content {
+            truncate_search_response(&mut response);
+        }
 
         format_search(&response, output)
     }
@@ -555,6 +566,7 @@ impl LazyTailMcp {
         context_lines: usize,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
@@ -613,6 +625,7 @@ impl LazyTailMcp {
             context_lines,
             raw,
             output,
+            full_content,
         )
     }
 
@@ -766,6 +779,7 @@ impl LazyTailMcp {
         after: usize,
         raw: bool,
         output: OutputFormat,
+        full_content: bool,
     ) -> String {
         let before_count = before.min(50);
         let after_count = after.min(50);
@@ -863,7 +877,9 @@ impl LazyTailMcp {
         if !raw {
             strip_context_response(&mut response);
         }
-        truncate_context_response(&mut response);
+        if !full_content {
+            truncate_context_response(&mut response);
+        }
 
         format_context(&response, output)
     }
@@ -880,7 +896,14 @@ impl LazyTailMcp {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        self.get_lines_impl(&path, req.start, req.count, req.raw, req.output)
+        self.get_lines_impl(
+            &path,
+            req.start,
+            req.count,
+            req.raw,
+            req.output,
+            req.full_content,
+        )
     }
 
     /// Fetch the last N lines from a lazytail source.
@@ -892,7 +915,14 @@ impl LazyTailMcp {
             Ok(p) => p,
             Err(e) => return error_response(e),
         };
-        self.get_tail_impl(&path, req.count, req.since_line, req.raw, req.output)
+        self.get_tail_impl(
+            &path,
+            req.count,
+            req.since_line,
+            req.raw,
+            req.output,
+            req.full_content,
+        )
     }
 
     /// Search for patterns in a lazytail source using plain text, regex, or structured query.
@@ -912,6 +942,7 @@ impl LazyTailMcp {
                 req.context_lines,
                 req.raw,
                 req.output,
+                req.full_content,
             )
         } else {
             Self::search_impl(
@@ -923,6 +954,7 @@ impl LazyTailMcp {
                 req.context_lines,
                 req.raw,
                 req.output,
+                req.full_content,
             )
         }
     }
@@ -943,6 +975,7 @@ impl LazyTailMcp {
             req.after,
             req.raw,
             req.output,
+            req.full_content,
         )
     }
 
@@ -1093,7 +1126,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "[INFO] Server started");
         assert_eq!(resp.lines[1].content, "[ERROR] Connection failed");
@@ -1104,7 +1137,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b[1;32m"));
         assert!(resp.lines[1].content.contains("\x1b[1;31m"));
@@ -1115,7 +1148,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines.len(), 2);
         assert_eq!(resp.lines[0].content, "plain line with no escapes");
@@ -1125,7 +1158,7 @@ plain line with no escapes\n\
     #[test]
     fn get_tail_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_tail_impl(f.path(), 5, None, true, OutputFormat::Json);
+        let result = test_mcp().get_tail_impl(f.path(), 5, None, true, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].content.contains("\x1b["));
     }
@@ -1138,7 +1171,8 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = test_mcp().get_tail_impl(f.path(), 100, Some(2), false, OutputFormat::Json);
+        let result =
+            test_mcp().get_tail_impl(f.path(), 100, Some(2), false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines.len(), 2);
@@ -1158,7 +1192,8 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = test_mcp().get_tail_impl(f.path(), 2, Some(5), false, OutputFormat::Json);
+        let result =
+            test_mcp().get_tail_impl(f.path(), 2, Some(5), false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines.len(), 2);
@@ -1177,7 +1212,8 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = test_mcp().get_tail_impl(f.path(), 100, Some(4), false, OutputFormat::Json);
+        let result =
+            test_mcp().get_tail_impl(f.path(), 100, Some(4), false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert!(resp.lines.is_empty());
@@ -1193,7 +1229,8 @@ plain line with no escapes\n\
         }
         f.flush().unwrap();
 
-        let result = test_mcp().get_tail_impl(f.path(), 100, Some(100), false, OutputFormat::Json);
+        let result =
+            test_mcp().get_tail_impl(f.path(), 100, Some(100), false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert!(resp.lines.is_empty());
@@ -1215,6 +1252,7 @@ plain line with no escapes\n\
             1,
             false,
             OutputFormat::Json,
+            false,
         );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.total_matches, 1);
@@ -1239,6 +1277,7 @@ plain line with no escapes\n\
             0,
             true,
             OutputFormat::Json,
+            false,
         );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.matches[0].content.contains("\x1b[1;31m"));
@@ -1249,7 +1288,8 @@ plain line with no escapes\n\
     #[test]
     fn get_context_strips_ansi_by_default() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_context_impl(f.path(), 2, 1, 1, false, OutputFormat::Json);
+        let result =
+            test_mcp().get_context_impl(f.path(), 2, 1, 1, false, OutputFormat::Json, false);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.target_line.content, "[DEBUG] Processing request");
         assert_eq!(resp.before_lines[0].content, "[ERROR] Connection failed");
@@ -1259,7 +1299,8 @@ plain line with no escapes\n\
     #[test]
     fn get_context_preserves_ansi_when_raw() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_context_impl(f.path(), 0, 0, 0, true, OutputFormat::Json);
+        let result =
+            test_mcp().get_context_impl(f.path(), 0, 0, 0, true, OutputFormat::Json, false);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.target_line.content.contains("\x1b[1;32m"));
     }
@@ -1281,7 +1322,7 @@ plain line with no escapes\n\
         writeln!(f, "{line2_ansi}").unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.lines[0].content, line0);
@@ -1322,12 +1363,13 @@ plain line with no escapes\n\
         f.flush().unwrap();
 
         // Raw mode should preserve ESC bytes
-        let raw_result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let raw_result =
+            test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json, false);
         let raw_resp: GetLinesResponse = serde_json::from_str(&raw_result).unwrap();
         assert!(raw_resp.lines[0].content.contains('\x1b'));
 
         // Stripped mode (default)
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         // Line 0: ANSI stripped, nested JSON intact
@@ -1363,7 +1405,7 @@ plain line with no escapes\n\
         writeln!(f, "{}", ansi_wrap("33", line)).unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, true, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         // Raw should keep ANSI and JSON intact
         assert!(resp.lines[0].content.contains("\x1b[33m"));
@@ -1391,6 +1433,7 @@ plain line with no escapes\n\
             1,
             false,
             OutputFormat::Json,
+            false,
         );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.total_matches, 1);
@@ -1407,7 +1450,7 @@ plain line with no escapes\n\
         writeln!(f, "just plain text").unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "no ansi here");
         assert_eq!(resp.lines[1].content, "just plain text");
@@ -1423,7 +1466,7 @@ plain line with no escapes\n\
         writeln!(f, "plain log line").unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text, false);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 2\n"));
         assert!(result.contains("--- has_more: false\n"));
@@ -1442,7 +1485,7 @@ plain line with no escapes\n\
         writeln!(f, "line 2").unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Text);
+        let result = test_mcp().get_tail_impl(f.path(), 2, None, false, OutputFormat::Text, false);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- has_more: true\n"));
         assert!(result.contains("[L1] line 1\n"));
@@ -1468,6 +1511,7 @@ plain line with no escapes\n\
             1,
             false,
             OutputFormat::Text,
+            false,
         );
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_matches: 1\n"));
@@ -1491,7 +1535,8 @@ plain line with no escapes\n\
         writeln!(f, "line 4").unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text);
+        let result =
+            test_mcp().get_context_impl(f.path(), 2, 2, 2, false, OutputFormat::Text, false);
         assert!(result.starts_with("--- "));
         assert!(result.contains("--- total_lines: 5\n"));
         assert!(result.contains("  [L0] line 0\n"));
@@ -1504,7 +1549,7 @@ plain line with no escapes\n\
     #[test]
     fn get_lines_text_format_strips_ansi() {
         let f = write_ansi_tempfile();
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Text, false);
         assert!(result.starts_with("--- "));
         // ANSI should be stripped
         assert!(result.contains("[L0] [INFO] Server started\n"));
@@ -1529,6 +1574,7 @@ plain line with no escapes\n\
             0,
             false,
             OutputFormat::Text,
+            false,
         );
         assert!(result.contains("--- total_matches: 2\n"));
         // Two match blocks separated by blank line
@@ -1550,7 +1596,8 @@ plain line with no escapes\n\
         // Verify the source field deserializes correctly
         assert_eq!(req.source, "myapp");
         // Use _impl to verify default output format is text
-        let result = test_mcp().get_lines_impl(f.path(), req.start, req.count, req.raw, req.output);
+        let result =
+            test_mcp().get_lines_impl(f.path(), req.start, req.count, req.raw, req.output, false);
         // Default should be text format (starts with ---)
         assert!(result.starts_with("--- "));
     }
@@ -1619,7 +1666,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 2);
@@ -1638,7 +1686,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 2);
@@ -1658,7 +1707,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 1);
@@ -1676,7 +1726,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 1);
@@ -1694,7 +1745,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 3);
@@ -1727,6 +1779,7 @@ plain line with no escapes\n\
             req.context_lines,
             req.raw,
             OutputFormat::Json,
+            false,
         );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
@@ -1744,7 +1797,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         assert!(result.contains("error"));
         assert!(result.contains("Invalid"));
     }
@@ -1760,7 +1814,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 1, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 1, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 1);
@@ -1779,7 +1834,8 @@ plain line with no escapes\n\
         )
         .unwrap();
 
-        let result = LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json);
+        let result =
+            LazyTailMcp::query_impl(f.path(), query, 100, 0, false, OutputFormat::Json, false);
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
 
         assert_eq!(resp.total_matches, 1);
@@ -1909,11 +1965,60 @@ plain line with no escapes\n\
         writeln!(f, "{}", "x".repeat(1000)).unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.lines[0].content, "short");
         assert!(resp.lines[1].content.len() < 1000);
         assert!(resp.lines[1].content.contains("…[+"));
+    }
+
+    #[test]
+    fn get_lines_full_content_skips_truncation() {
+        let mut f = NamedTempFile::new().unwrap();
+        let long = "x".repeat(1000);
+        writeln!(f, "{long}").unwrap();
+        f.flush().unwrap();
+
+        let result = test_mcp().get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, true);
+        let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.lines[0].content.len(), 1000);
+        assert!(!resp.lines[0].content.contains("…[+"));
+    }
+
+    #[test]
+    fn search_full_content_skips_truncation() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "error {}", "b".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result = LazyTailMcp::search_impl(
+            f.path(),
+            "error",
+            SearchMode::Plain,
+            false,
+            100,
+            0,
+            false,
+            OutputFormat::Json,
+            true,
+        );
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert!(!resp.matches[0].content.contains("…[+"));
+        assert!(resp.matches[0].content.len() > 1000);
+    }
+
+    #[test]
+    fn get_context_full_content_skips_truncation() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{}", "a".repeat(1000)).unwrap();
+        writeln!(f, "{}", "b".repeat(1000)).unwrap();
+        f.flush().unwrap();
+
+        let result =
+            test_mcp().get_context_impl(f.path(), 0, 0, 1, false, OutputFormat::Json, true);
+        let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(resp.target_line.content.len(), 1000);
+        assert!(!resp.after_lines[0].content.contains("…[+"));
     }
 
     #[test]
@@ -1933,6 +2038,7 @@ plain line with no escapes\n\
             1,
             false,
             OutputFormat::Json,
+            false,
         );
         let resp: SearchResponse = serde_json::from_str(&result).unwrap();
         assert_eq!(resp.total_matches, 1);
@@ -1950,7 +2056,8 @@ plain line with no escapes\n\
         writeln!(f, "{}", "c".repeat(1000)).unwrap();
         f.flush().unwrap();
 
-        let result = test_mcp().get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json);
+        let result =
+            test_mcp().get_context_impl(f.path(), 1, 1, 1, false, OutputFormat::Json, false);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.before_lines[0].content.contains("…[+"));
         assert!(resp.target_line.content.contains("…[+"));
@@ -2036,7 +2143,7 @@ plain line with no escapes\n\
     fn get_lines_with_rendered() {
         let f = write_json_tempfile();
         let mcp = test_mcp_with_renderer_for(&file_stem(&f));
-        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
 
         // JSON lines get rendered field
@@ -2057,7 +2164,7 @@ plain line with no escapes\n\
         writeln!(f, "just a plain line").unwrap();
         f.flush().unwrap();
 
-        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json);
+        let result = mcp.get_lines_impl(f.path(), 0, 100, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         assert!(resp.lines[0].rendered.is_none());
     }
@@ -2066,7 +2173,7 @@ plain line with no escapes\n\
     fn get_tail_with_rendered() {
         let f = write_json_tempfile();
         let mcp = test_mcp_with_renderer_for(&file_stem(&f));
-        let result = mcp.get_tail_impl(f.path(), 10, None, false, OutputFormat::Json);
+        let result = mcp.get_tail_impl(f.path(), 10, None, false, OutputFormat::Json, false);
         let resp: GetLinesResponse = serde_json::from_str(&result).unwrap();
         // At least one JSON line should have rendered
         assert!(resp.lines[0].rendered.is_some());
@@ -2076,7 +2183,7 @@ plain line with no escapes\n\
     fn get_context_with_rendered() {
         let f = write_json_tempfile();
         let mcp = test_mcp_with_renderer_for(&file_stem(&f));
-        let result = mcp.get_context_impl(f.path(), 0, 0, 1, false, OutputFormat::Json);
+        let result = mcp.get_context_impl(f.path(), 0, 0, 1, false, OutputFormat::Json, false);
         let resp: GetContextResponse = serde_json::from_str(&result).unwrap();
         // Target line is JSON → rendered
         assert!(resp.target_line.rendered.is_some());
