@@ -84,6 +84,7 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
         Line::from("  c             Collapse all"),
         Line::from("  f             Toggle follow mode"),
         Line::from("  r             Toggle raw mode"),
+        Line::from("  w             Toggle line wrap"),
         Line::from("  y             Copy line to clipboard"),
         Line::from(""),
         Line::from(vec![Span::styled(

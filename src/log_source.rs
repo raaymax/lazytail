@@ -138,6 +138,8 @@ pub struct LogSource {
     pub follow_mode: bool,
     /// Raw mode - bypass preset rendering and ANSI parsing
     pub raw_mode: bool,
+    /// Line wrap mode - wrap long lines instead of truncating
+    pub line_wrap: bool,
     /// Per-source reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Filter configuration and state
@@ -174,6 +176,7 @@ impl LogSource {
             line_indices: Vec::new(),
             follow_mode: true,
             raw_mode: false,
+            line_wrap: false,
             reader,
             filter: FilterConfig::default(),
             source_status: None,

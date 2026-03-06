@@ -107,8 +107,9 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     };
     let content_width = available_width.saturating_sub(prefix_width);
 
-    // Raw mode and preset rendering setup
+    // Raw mode, line wrap, and preset rendering setup
     let raw_mode = tab.source.raw_mode;
+    let line_wrap = tab.source.line_wrap;
     let tab_renderer_names = tab.source.renderer_names.clone();
     let tab_filename = tab
         .source
@@ -125,14 +126,17 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     let index_reader = tab.source.index_reader.as_ref();
     let total_lines = tab.source.line_indices.len();
 
-    // Adjust start_idx so the selected expanded line fits on screen
-    if !expanded_lines.is_empty() {
+    // When lines can span multiple visual rows (expanded or line_wrap),
+    // adjust start_idx so the selected line fits on screen.
+    let has_multi_row = line_wrap || !expanded_lines.is_empty();
+    if has_multi_row {
         let wrap_fn = if raw_mode { wrap_plain } else { wrap_content };
         let end = selected_idx.min(total_lines.saturating_sub(1));
         let mut visual_rows = 0usize;
         for i in start_idx..=end {
             if let Some(&ln) = tab.source.line_indices.get(i) {
-                let h = if expanded_lines.contains(&ln) && content_width > 0 {
+                let needs_wrap = (line_wrap || expanded_lines.contains(&ln)) && content_width > 0;
+                let h = if needs_wrap {
                     let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
                     wrap_fn(&expand_tabs(&raw), content_width).len()
                 } else {
@@ -143,7 +147,8 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         }
         while visual_rows > visible_height && start_idx < selected_idx {
             if let Some(&ln) = tab.source.line_indices.get(start_idx) {
-                let h = if expanded_lines.contains(&ln) && content_width > 0 {
+                let needs_wrap = (line_wrap || expanded_lines.contains(&ln)) && content_width > 0;
+                let h = if needs_wrap {
                     let raw = reader_guard.get_line(ln).ok().flatten().unwrap_or_default();
                     wrap_fn(&expand_tabs(&raw), content_width).len()
                 } else {
@@ -165,15 +170,38 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
             let is_selected = i == selected_idx;
             let is_expanded = expanded_lines.contains(&line_number);
 
+            // Determine wrapping: expanded lines and line_wrap lines get wrapped
+            let should_wrap = (is_expanded || line_wrap) && content_width > 0;
+
             // Pre-compute wrapped lines and item height
-            let wrapped = if is_expanded && content_width > 0 {
-                if raw_mode {
-                    Some(wrap_plain(&line_text, content_width))
+            let (wrapped, use_expanded_bg) = if should_wrap {
+                let wrapped_lines = if is_expanded {
+                    // Expanded lines: wrap raw/ANSI content (existing behavior)
+                    if raw_mode {
+                        wrap_plain(&line_text, content_width)
+                    } else {
+                        wrap_content(&line_text, content_width)
+                    }
                 } else {
-                    Some(wrap_content(&line_text, content_width))
-                }
+                    // Line-wrap mode: format through presets, then wrap styled spans
+                    let spans = format_line_spans(
+                        &raw_line,
+                        &line_text,
+                        line_number,
+                        is_combined,
+                        raw_mode,
+                        &tab_renderer_names,
+                        tab_filename.as_deref(),
+                        index_reader,
+                        &*reader_guard,
+                        &preset_registry,
+                        palette,
+                    );
+                    wrap_spans(spans, content_width)
+                };
+                (Some(wrapped_lines), is_expanded)
             } else {
-                None
+                (None, false)
             };
             let item_height = wrapped.as_ref().map_or(1, |w| w.len());
 
@@ -212,6 +240,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                     &source_tag,
                     severity,
                     is_selected,
+                    use_expanded_bg,
                     prefix_width,
                     ui,
                 ));
@@ -262,7 +291,10 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     Ok(())
 }
 
-/// Build a ListItem from wrapped (expanded) lines with prefix and styling.
+/// Build a ListItem from wrapped lines with prefix and styling.
+/// When `use_expanded_bg` is true, applies the expanded background color
+/// to non-selected content spans (used for expanded lines).
+/// When false, no special background is applied (used for line-wrap mode).
 #[allow(clippy::too_many_arguments)]
 fn build_expanded_item(
     wrapped_lines: Vec<Line<'static>>,
@@ -271,6 +303,7 @@ fn build_expanded_item(
     source_tag: &Option<(String, Color)>,
     severity: Severity,
     is_selected: bool,
+    use_expanded_bg: bool,
     prefix_width: usize,
     ui: &UiColors,
 ) -> ListItem<'static> {
@@ -304,7 +337,7 @@ fn build_expanded_item(
             for span in &mut wrapped_line.spans {
                 span.style = apply_selection_style(span.style, ui);
             }
-        } else {
+        } else if use_expanded_bg {
             let skip = if wrap_idx == 0 {
                 if source_tag.is_some() {
                     3
@@ -330,6 +363,14 @@ fn build_expanded_item(
                 }
             } else if let Some(indent_span) = wrapped_line.spans.first_mut() {
                 indent_span.style = indent_span.style.bg(ui.expanded_bg);
+            }
+        } else if wrap_idx == 0 {
+            // Line-wrap mode (no expanded bg): apply severity bg to line number only
+            if let Some(bg) = severity_color {
+                let num_idx = if source_tag.is_some() { 1 } else { 0 };
+                if let Some(num_span) = wrapped_line.spans.get_mut(num_idx) {
+                    num_span.style = num_span.style.bg(bg);
+                }
             }
         }
 
@@ -474,6 +515,72 @@ fn format_source_tag(name: &str, max_width: usize) -> String {
     format!("[{:<width$}] ", truncated, width = inner_max)
 }
 
+/// Format a line through preset rendering and return styled spans.
+/// Used by both single-line and line-wrap rendering paths.
+#[allow(clippy::too_many_arguments)]
+fn format_line_spans(
+    raw_line: &str,
+    line_text: &str,
+    line_number: usize,
+    is_combined: bool,
+    raw_mode: bool,
+    tab_renderer_names: &[String],
+    tab_filename: Option<&str>,
+    index_reader: Option<&IndexReader>,
+    reader: &dyn LogReader,
+    preset_registry: &PresetRegistry,
+    palette: &crate::theme::Palette,
+) -> Vec<Span<'static>> {
+    if raw_mode {
+        return vec![Span::raw(line_text.to_string())];
+    }
+
+    let line_flags: Option<u32> = if is_combined {
+        None
+    } else {
+        index_reader.and_then(|ir| ir.flags(line_number))
+    };
+
+    let renderer_names = if is_combined {
+        let combined = reader.as_any().downcast_ref::<CombinedReader>();
+        combined
+            .map(|c| c.renderer_names(line_number))
+            .unwrap_or(&[])
+    } else {
+        tab_renderer_names
+    };
+
+    let preset_segments: Option<Vec<StyledSegment>> = if !renderer_names.is_empty() {
+        preset_registry.render_line(raw_line, renderer_names, line_flags)
+    } else {
+        preset_registry.render_line_auto(raw_line, tab_filename, line_flags)
+    };
+
+    if let Some(segments) = preset_segments {
+        segments
+            .iter()
+            .map(|seg| {
+                Span::styled(
+                    seg.text.clone(),
+                    to_ratatui_style(&seg.style, Some(palette)),
+                )
+            })
+            .collect()
+    } else {
+        let parsed_text = ansi_to_tui::IntoText::into_text(&line_text)
+            .unwrap_or_else(|_| ratatui::text::Text::raw(line_text.to_string()));
+        if let Some(first_line) = parsed_text.lines.first() {
+            first_line
+                .spans
+                .iter()
+                .map(|s| Span::styled(s.content.to_string(), s.style))
+                .collect()
+        } else {
+            vec![Span::raw(line_text.to_string())]
+        }
+    }
+}
+
 /// Wrap plain text without ANSI interpretation (for raw mode).
 fn wrap_plain(content: &str, available_width: usize) -> Vec<Line<'static>> {
     if available_width == 0 {
@@ -543,6 +650,16 @@ fn wrap_content(content: &str, available_width: usize) -> Vec<Line<'static>> {
                 .collect()
         })
         .unwrap_or_default();
+
+    wrap_spans(spans, available_width)
+}
+
+/// Wrap pre-styled spans to fit within the available width.
+/// Returns a vector of Lines, where each Line contains styled spans.
+fn wrap_spans(spans: Vec<Span<'static>>, available_width: usize) -> Vec<Line<'static>> {
+    if available_width == 0 {
+        return vec![Line::default()];
+    }
 
     // If content fits on one line, return as-is
     let total_width: usize = spans.iter().map(|s| s.content.width()).sum();
@@ -744,5 +861,80 @@ mod wrap_plain_tests {
         // Should be unstyled (no color interpretation)
         assert_eq!(lines[0].spans.len(), 1);
         assert_eq!(lines[0].spans[0].style, Style::default());
+    }
+}
+
+#[cfg(test)]
+mod wrap_spans_tests {
+    use super::*;
+
+    fn plain_text(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn short_spans_single_line() {
+        let spans = vec![
+            Span::styled("hello", Style::default().fg(Color::Red)),
+            Span::raw(" world"),
+        ];
+        let lines = wrap_spans(spans, 20);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plain_text(&lines), vec!["hello world"]);
+    }
+
+    #[test]
+    fn wraps_styled_spans_across_lines() {
+        let spans = vec![
+            Span::styled("abcd", Style::default().fg(Color::Red)),
+            Span::styled("efgh", Style::default().fg(Color::Blue)),
+            Span::raw("ij"),
+        ];
+        let lines = wrap_spans(spans, 4);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(plain_text(&lines), vec!["abcd", "efgh", "ij"]);
+        // First line should retain red style
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Red));
+        // Second line should retain blue style
+        assert_eq!(lines[1].spans[0].style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn splits_single_span_across_lines() {
+        let spans = vec![Span::styled(
+            "abcdefghij",
+            Style::default().fg(Color::Green),
+        )];
+        let lines = wrap_spans(spans, 4);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(plain_text(&lines), vec!["abcd", "efgh", "ij"]);
+        // All parts should retain the green style
+        for line in &lines {
+            for span in &line.spans {
+                assert_eq!(span.style.fg, Some(Color::Green));
+            }
+        }
+    }
+
+    #[test]
+    fn zero_width_returns_default() {
+        let spans = vec![Span::raw("hello")];
+        let lines = wrap_spans(spans, 0);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn empty_spans_single_line() {
+        let spans: Vec<Span<'static>> = vec![];
+        let lines = wrap_spans(spans, 10);
+        assert_eq!(lines.len(), 1);
     }
 }
