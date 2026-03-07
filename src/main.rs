@@ -699,8 +699,8 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         let mut events = Vec::new();
         events.extend(collect_file_events(app, force_poll));
         events.extend(collect_filter_progress(app));
-        collect_stream_events(app); // Handle stream events directly (modifies tabs)
-        events.extend(collect_input_events(terminal, app)?);
+        let has_pending_stream = collect_stream_events(app);
+        events.extend(collect_input_events(terminal, app, has_pending_stream)?);
 
         // Phase 4: Process all events
         app.has_start_filter_in_batch = events
@@ -974,15 +974,18 @@ fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
 
 /// Collect and process stream events from background readers (pipes/stdin)
 /// This modifies tabs directly rather than returning events
-fn collect_stream_events(app: &mut App) {
+fn collect_stream_events(app: &mut App) -> bool {
     use std::sync::mpsc::TryRecvError;
 
+    let mut has_pending = false;
     for tab in app.tabs.iter_mut() {
         if tab.stream_receiver.is_none() {
             continue;
         }
 
-        // Drain all available messages
+        // Drain available messages, but limit per tick to keep TUI responsive
+        const MAX_BATCHES_PER_TICK: usize = 5;
+        let mut batches_processed = 0;
         loop {
             let msg = {
                 let receiver = tab.stream_receiver.as_ref().unwrap();
@@ -1000,6 +1003,11 @@ fn collect_stream_events(app: &mut App) {
             match msg {
                 StreamMessage::Lines(lines) => {
                     tab.append_stream_lines(lines);
+                    batches_processed += 1;
+                    if batches_processed >= MAX_BATCHES_PER_TICK {
+                        has_pending = true;
+                        break; // Yield to render loop
+                    }
                 }
                 StreamMessage::Complete => {
                     tab.mark_stream_complete();
@@ -1013,6 +1021,7 @@ fn collect_stream_events(app: &mut App) {
             }
         }
     }
+    has_pending
 }
 
 /// Collect input events from keyboard and mouse
@@ -1020,13 +1029,15 @@ fn collect_stream_events(app: &mut App) {
 fn collect_input_events<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &App,
+    has_pending_stream: bool,
 ) -> Result<Vec<AppEvent>> {
     use crossterm_event::MouseEventKind;
 
     let mut events = Vec::new();
 
-    // Wait for at least one event (with timeout)
-    if !crossterm_event::poll(Duration::from_millis(INPUT_POLL_DURATION_MS))? {
+    // Use short poll when stream data is pending to cycle back quickly
+    let poll_ms = if has_pending_stream { 0 } else { INPUT_POLL_DURATION_MS };
+    if !crossterm_event::poll(Duration::from_millis(poll_ms))? {
         return Ok(events);
     }
 

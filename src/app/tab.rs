@@ -471,13 +471,13 @@ impl TabState {
         if let Ok(idx) = self.source.line_indices.binary_search(&anchor_line) {
             self.selected_line = idx;
         } else {
-            // If not found exactly, find nearest
+            // If not found exactly, use binary_search's insertion point as nearest
+            let len = self.source.line_indices.len();
             self.selected_line = self
                 .source
                 .line_indices
-                .iter()
-                .position(|&l| l >= anchor_line)
-                .unwrap_or(self.source.line_indices.len().saturating_sub(1));
+                .binary_search(&anchor_line)
+                .unwrap_or_else(|insert_pos| insert_pos.min(len.saturating_sub(1)));
         }
     }
 

@@ -132,8 +132,15 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     if has_multi_row {
         let wrap_fn = if raw_mode { wrap_plain } else { wrap_content };
         let end = selected_idx.min(total_lines.saturating_sub(1));
+        // Bound scan: each line takes at least 1 row, so start no earlier than
+        // visible_height lines before selected_idx to avoid O(N) scan
+        let bounded_start = if end >= visible_height {
+            start_idx.max(end - visible_height)
+        } else {
+            start_idx
+        };
         let mut visual_rows = 0usize;
-        for i in start_idx..=end {
+        for i in bounded_start..=end {
             if let Some(&ln) = tab.source.line_indices.get(i) {
                 let needs_wrap = (line_wrap || expanded_lines.contains(&ln)) && content_width > 0;
                 let h = if needs_wrap {
@@ -145,6 +152,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 visual_rows += h;
             }
         }
+        start_idx = bounded_start;
         while visual_rows > visible_height && start_idx < selected_idx {
             if let Some(&ln) = tab.source.line_indices.get(start_idx) {
                 let needs_wrap = (line_wrap || expanded_lines.contains(&ln)) && content_width > 0;

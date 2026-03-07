@@ -272,6 +272,35 @@ impl FileReader {
             }
         }
 
+        // Columnar tail path: line is beyond indexed range but we can use the last
+        // indexed offset as a starting point instead of falling through to sparse index
+        // (which may scan from the start of the file if it has no entries for the tail).
+        if let Some(ref col) = self.columnar_offsets {
+            if self.indexed_lines > 0 {
+                if let Some(last_offset) = col.get(self.indexed_lines - 1) {
+                    // Seek to the last indexed line and skip forward
+                    self.reader.seek(SeekFrom::Start(last_offset))?;
+                    let skip = line_num - (self.indexed_lines - 1);
+                    let mut line_buffer = String::new();
+                    for _ in 0..skip {
+                        line_buffer.clear();
+                        if self.reader.read_line(&mut line_buffer)? == 0 {
+                            self.last_read_line = None;
+                            return Ok(None);
+                        }
+                    }
+                    line_buffer.clear();
+                    if self.reader.read_line(&mut line_buffer)? == 0 {
+                        self.last_read_line = None;
+                        return Ok(None);
+                    }
+                    self.last_read_line = Some(line_num);
+                    trim_newline(&mut line_buffer);
+                    return Ok(Some(line_buffer));
+                }
+            }
+        }
+
         // Sparse index path: locate nearest entry + forward scan
         let (offset, skip) = self.sparse_index.locate(line_num);
         self.reader.seek(SeekFrom::Start(offset))?;
