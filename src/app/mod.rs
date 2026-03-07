@@ -1276,6 +1276,10 @@ impl App {
                 let tab = self.active_tab_mut();
                 tab.source.raw_mode = !tab.source.raw_mode;
             }
+            AppEvent::ToggleLineWrap => {
+                let tab = self.active_tab_mut();
+                tab.source.line_wrap = !tab.source.line_wrap;
+            }
 
             // Line expansion
             AppEvent::ToggleLineExpansion => self.active_tab_mut().toggle_expansion(),

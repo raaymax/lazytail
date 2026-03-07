@@ -202,6 +202,10 @@ fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
         KeyCode::Char('r') => vec![AppEvent::ToggleRawMode],
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            vec![AppEvent::CloseCurrentTab]
+        }
+        KeyCode::Char('w') => vec![AppEvent::ToggleLineWrap],
         KeyCode::Char('y') => vec![AppEvent::CopySelectedLine],
         KeyCode::Char('R') if app.active_tab().is_combined => {
             vec![AppEvent::RefreshCombinedView]
@@ -216,9 +220,6 @@ fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         }
         // Close current tab
         KeyCode::Char('x') => vec![AppEvent::CloseCurrentTab],
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            vec![AppEvent::CloseCurrentTab]
-        }
         _ => vec![],
     }
 }
@@ -628,6 +629,22 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::ToggleRawMode]);
+    }
+
+    #[test]
+    fn test_toggle_line_wrap() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::ToggleLineWrap]);
+    }
+
+    #[test]
+    fn test_ctrl_w_closes_tab_not_wrap() {
+        let (app, _file) = create_test_app();
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let events = handle_input_event(key, &app);
+        assert_eq!(events, vec![AppEvent::CloseCurrentTab]);
     }
 
     #[test]
