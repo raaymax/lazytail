@@ -12,7 +12,9 @@
 | **v0.5.0** | Config system (`lazytail.yaml`), project scoping (`.lazytail/`), query language (`json \| level == "error"`), MCP query integration, logfmt parser, plain text MCP output, `y` to copy source path |
 | **v0.6.0** | Columnar index, severity detection & coloring, bitmap-accelerated filtering, severity histogram, line count/file size in side panel, MCP `get_stats`, incremental indexing, O(1) mmap line access |
 | **v0.7.0** | Self-update (`lazytail update`) |
-| **post-v0.7.0** | Scrollable help overlay (j/k navigation), MCP `get_tail` `since_line`, copy line to clipboard (`y` + OSC 52), mouse click (side panel tab switch, log line select, category expand/collapse) |
+| **v0.8.0** | Rendering presets (builtin + external YAML), MCP rendering, theme import (Windows Terminal/Alacritty/Ghostty/iTerm2), session persistence, raw mode toggle, SIMD benchmark CLI, app decomposition refactor |
+| **v0.8.1–v0.8.2** | Event loop & combined reader perf fixes, render bottleneck elimination, logfmt safety fixes |
+| **post-v0.8.2** | Scrollable help overlay (j/k navigation), MCP `get_tail` `since_line`, copy line to clipboard (`y` + OSC 52), mouse click (side panel tab switch, log line select, category expand/collapse), capture-mode rendering with presets, stale index detection with partial trust, MCP `full_content` option, line wrap toggle (`w`) with preset rendering |
 
 ---
 
@@ -145,6 +147,7 @@
 - [ ] **`fields`** — sample N lines, return field names/types/examples. Critical for LLM consumers
 
 #### Enhancements 🟡
+- [x] `full_content` option for `search`/`get_lines`/`get_tail`/`get_context` to skip line truncation ✅
 - [ ] `time_range` param for `search`
 - [ ] Search pagination / cursor (offset for results > 1000)
 - [ ] **`summarize`** tool — time range, top patterns, error rate
@@ -190,6 +193,9 @@
 - [ ] Quick filter: show ERROR and above
 - [ ] Keybinding to cycle minimum severity level
 - [ ] Click severity in stats panel to filter
+
+#### Line Wrap ✅
+- [x] Toggle line wrapping mode (`w` key) — switch between truncation (current default) and soft-wrap for long lines, with preset rendering preserved ✅
 
 #### Filter UI Polish 🟢
 - [ ] Save current input as draft when navigating history with arrow keys (so user can arrow back down to restore)
@@ -248,13 +254,14 @@
 
 ### Capture Mode
 
+- [x] Display captured logs formatted with rendering presets in the terminal during `cmd | lazytail -n name` ✅
+- [x] `--raw` flag to bypass rendering preset formatting and output unmodified log lines during capture ✅
+- [x] Detect and recover from stale/corrupt columnar indexes with partial trust (checkpoint-based validation) ✅
 - [ ] Keybinding to rebuild/reindex the current source's columnar index (useful when index is stale or corrupted) 🟡
 - [ ] Truncate log file by default on `lazytail -n` (add `--append`/`-a` to keep old behavior) 🟡
 - [ ] Session ID per capture run (UUID in marker + log boundary marker + filter by session) 🟡
 - [ ] `--file <path>` for custom log file location 🟡
 - [ ] `--max-size <size>` for log rotation 🟡
-- [ ] Display captured logs formatted with rendering presets in the terminal during `cmd | lazytail -n name` (apply preset formatting to passthrough output) 🟡
-- [ ] `--raw` flag to bypass rendering preset formatting and output unmodified log lines during capture 🟡
 
 ---
 
@@ -280,7 +287,8 @@
 - [ ] Allow manual severity format override per source 🟡
 - [ ] Theme/colors config via `lazytail.yaml` (named + hex colors, built-in themes) 🟢
 - [ ] Theme and color overrides should support customizing the app background color (not just text/severity colors) 🟢
-- [ ] Theme-aware rendering presets — preset styles resolve colors from `theme.palette` instead of fixed ANSI names, so changing themes also affects log line formatting 🟢
+- [x] Theme-aware rendering presets — preset styles resolve colors from `theme.palette` instead of fixed ANSI names, so changing themes also affects log line formatting ✅
+- [ ] Config option and `--no-mouse` CLI flag to disable mouse capture (fixes tmux responsiveness when lazytail runs in a split pane) 🟡
 - [ ] Keybindings config via `lazytail.yaml` 🟢
 - [ ] In-app configuration UI — TUI overlay with two sections: Global (`~/.config/lazytail/config.yaml`) and Project (`lazytail.yaml`), for editing theme, display options, and per-source settings without manually editing config files 🟢
 
