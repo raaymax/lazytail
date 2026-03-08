@@ -245,7 +245,10 @@ fn detect_corrupt_offset_at_checkpoint() {
     data[4 * 8 + 1] ^= 0xFF;
     fs::write(&offsets_path, &data).unwrap();
 
-    assert!(fix.validate(&meta).is_none(), "corrupt offset must be rejected");
+    assert!(
+        fix.validate(&meta).is_none(),
+        "corrupt offset must be rejected"
+    );
 }
 
 #[test]
@@ -264,7 +267,10 @@ fn detect_file_replaced_same_length() {
     replacement.truncate(original.len());
     fix.write_log(&replacement);
 
-    assert!(fix.validate(&meta).is_none(), "replaced content must be rejected");
+    assert!(
+        fix.validate(&meta).is_none(),
+        "replaced content must be rejected"
+    );
 
     let reader = fix.open_reader();
     assert!(!reader.has_columnar_offsets());
@@ -284,7 +290,10 @@ fn detect_file_truncation() {
     }
     fix.write_log(&new_content);
 
-    assert!(fix.validate(&meta).is_none(), "truncated file must be rejected");
+    assert!(
+        fix.validate(&meta).is_none(),
+        "truncated file must be rejected"
+    );
 
     let reader = fix.open_reader();
     assert!(!reader.has_columnar_offsets());
@@ -517,7 +526,8 @@ fn resume_over_orphan_gap_produces_correct_offsets() {
     // The new lines' offsets must point to their actual file positions,
     // not into the orphan region.
     let meta = IndexMeta::read_from(idx_dir.join("meta")).unwrap();
-    let offsets = ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize).unwrap();
+    let offsets =
+        ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize).unwrap();
 
     // Read the actual file to find where "line 100" really starts
     let file_content = fs::read_to_string(fix.log_path()).unwrap();
@@ -728,10 +738,7 @@ fn multiple_kills_must_not_silently_corrupt() {
 
     // Lines 0-9 must always be correct
     for i in 0..10 {
-        assert_eq!(
-            reader.get_line(i).unwrap().unwrap(),
-            format!("line {i}"),
-        );
+        assert_eq!(reader.get_line(i).unwrap().unwrap(), format!("line {i}"),);
     }
 
     // If the reader loaded columnar offsets, the new lines must be correct too
@@ -792,7 +799,8 @@ fn orphan_gap_plus_external_append_offsets_correct() {
     let actual_pos = file_content.find("line 500\n").unwrap() as u64;
 
     let meta = IndexMeta::read_from(idx_dir.join("meta")).unwrap();
-    let offsets = ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize).unwrap();
+    let offsets =
+        ColumnReader::<u64>::open(idx_dir.join("offsets"), meta.entry_count as usize).unwrap();
     let recorded = offsets.get(10).unwrap();
 
     assert_eq!(
@@ -944,13 +952,8 @@ fn resume_with_mismatched_interval_must_be_consistent() {
     assert_eq!(meta.checkpoint_interval, 5);
 
     // Resume with wrong interval
-    let mut indexer = LineIndexer::resume_at(
-        &idx_dir,
-        meta.entry_count,
-        meta.log_file_size,
-        7,
-    )
-    .unwrap();
+    let mut indexer =
+        LineIndexer::resume_at(&idx_dir, meta.entry_count, meta.log_file_size, 7).unwrap();
     for line in extra.lines() {
         indexer
             .push_line(format!("{line}\n").as_bytes(), now)
@@ -1150,7 +1153,11 @@ fn manual_insert_lines_in_middle_must_invalidate_index() {
 
     // Reader must return correct content for ALL lines (now 23 lines)
     let mut reader = fix.open_reader();
-    assert_eq!(reader.total_lines(), 23, "should see 23 lines after insertion");
+    assert_eq!(
+        reader.total_lines(),
+        23,
+        "should see 23 lines after insertion"
+    );
     assert_eq!(reader.get_line(5).unwrap().unwrap(), "line 5");
     assert_eq!(reader.get_line(6).unwrap().unwrap(), "INSERTED LINE A");
     assert_eq!(reader.get_line(7).unwrap().unwrap(), "INSERTED LINE B");
@@ -1243,7 +1250,11 @@ fn truncate_to_zero_and_rewrite_while_open() {
 
     // After reload, must see new content
     reader.reload().unwrap();
-    assert_eq!(reader.total_lines(), 8, "should see 8 lines after truncate+rewrite");
+    assert_eq!(
+        reader.total_lines(),
+        8,
+        "should see 8 lines after truncate+rewrite"
+    );
     assert_eq!(
         reader.get_line(0).unwrap().unwrap(),
         "line 300",
@@ -1299,15 +1310,13 @@ fn external_append_visible_after_reload() {
     fix.append_to_log("EXTERNAL LINE 1\nEXTERNAL LINE 2\n");
 
     reader.reload().unwrap();
-    assert_eq!(reader.total_lines(), 12, "should see 12 lines after external append");
     assert_eq!(
-        reader.get_line(10).unwrap().unwrap(),
-        "EXTERNAL LINE 1",
+        reader.total_lines(),
+        12,
+        "should see 12 lines after external append"
     );
-    assert_eq!(
-        reader.get_line(11).unwrap().unwrap(),
-        "EXTERNAL LINE 2",
-    );
+    assert_eq!(reader.get_line(10).unwrap().unwrap(), "EXTERNAL LINE 1",);
+    assert_eq!(reader.get_line(11).unwrap().unwrap(), "EXTERNAL LINE 2",);
 }
 
 // ---------------------------------------------------------------------------

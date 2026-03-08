@@ -159,7 +159,10 @@ impl FileReader {
             return;
         }
         if self.indexed_lines > 0 {
-            let last_old = self.columnar_offsets.as_ref().and_then(|c| c.get(self.indexed_lines - 1));
+            let last_old = self
+                .columnar_offsets
+                .as_ref()
+                .and_then(|c| c.get(self.indexed_lines - 1));
             let first_new = offsets.get(self.indexed_lines);
             if let (Some(old), Some(new)) = (last_old, first_new) {
                 if new <= old {
@@ -277,7 +280,9 @@ impl FileReader {
                     .as_ref()
                     .and_then(|c| c.get(line_num))
                     .is_none_or(|expected| {
-                        self.reader.stream_position().is_ok_and(|pos| pos == expected)
+                        self.reader
+                            .stream_position()
+                            .is_ok_and(|pos| pos == expected)
                     })
             } else {
                 true

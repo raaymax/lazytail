@@ -91,7 +91,11 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
     // Structural check: byte before each offset must be a newline.
     // For large indexes, sample to keep validation fast.
     if entry_count >= 2 {
-        let step = if entry_count > 100_000 { entry_count / 1000 } else { 1 };
+        let step = if entry_count > 100_000 {
+            entry_count / 1000
+        } else {
+            1
+        };
         let mut file = File::open(log_path).ok()?;
         let mut buf = [0u8; 1];
         for i in (1..entry_count).step_by(step) {
@@ -126,14 +130,9 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
                     // Verify content hash against actual file.
                     // Cap read to meta.log_file_size so appended bytes don't
                     // change the hash when the file has grown.
-                    let max_bytes =
-                        (meta.log_file_size.saturating_sub(cp.byte_offset)) as usize;
-                    if !verify_checkpoint_hash(
-                        log_path,
-                        cp.byte_offset,
-                        cp.content_hash,
-                        max_bytes,
-                    ) {
+                    let max_bytes = (meta.log_file_size.saturating_sub(cp.byte_offset)) as usize;
+                    if !verify_checkpoint_hash(log_path, cp.byte_offset, cp.content_hash, max_bytes)
+                    {
                         continue;
                     }
 
