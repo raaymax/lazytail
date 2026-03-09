@@ -3,7 +3,7 @@
 use crate::app::TabState;
 use crate::app::{FilterState, ViewMode};
 use crate::filter::engine::FilterProgress;
-use crate::filter::orchestrator::FilterOrchestrator;
+use crate::filter_orchestrator::FilterOrchestrator;
 use crate::filter::FilterMode;
 use crate::source::{self, SourceLocation, SourceStatus};
 use crate::watcher::{DirEvent, DirectoryWatcher, FileEvent};

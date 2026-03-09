@@ -464,89 +464,8 @@ impl<'a> QueryTextParser<'a> {
 // Logfmt Parser
 // ============================================================================
 
-/// Parse a logfmt line into key-value pairs.
-///
-/// Logfmt format: `key=value key2="quoted value" key3=unquoted`
-pub fn parse_logfmt(line: &str) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-    let mut chars = line.char_indices().peekable();
-
-    while let Some((_, ch)) = chars.peek().copied() {
-        // Skip whitespace
-        if ch.is_whitespace() {
-            chars.next();
-            continue;
-        }
-
-        // Parse key
-        let key_start = chars.peek().map(|(i, _)| *i).unwrap_or(line.len());
-        while let Some(&(_, ch)) = chars.peek() {
-            if ch == '=' || ch.is_whitespace() {
-                break;
-            }
-            chars.next();
-        }
-        let key_end = chars.peek().map(|(i, _)| *i).unwrap_or(line.len());
-        let key = &line[key_start..key_end];
-
-        if key.is_empty() {
-            break;
-        }
-
-        // Expect =
-        if chars.peek().map(|(_, ch)| *ch) != Some('=') {
-            // No value, skip this key
-            continue;
-        }
-        chars.next(); // consume '='
-
-        // Parse value
-        let value = if chars.peek().map(|(_, ch)| *ch) == Some('"') {
-            // Quoted value
-            chars.next(); // consume opening quote
-            let value_start = chars.peek().map(|(i, _)| *i).unwrap_or(line.len());
-            let mut value_end = value_start;
-            let mut escaped = false;
-
-            for (i, ch) in chars.by_ref() {
-                if escaped {
-                    escaped = false;
-                    value_end = i + ch.len_utf8();
-                } else if ch == '\\' {
-                    escaped = true;
-                    value_end = i + ch.len_utf8();
-                } else if ch == '"' {
-                    break;
-                } else {
-                    value_end = i + ch.len_utf8();
-                }
-            }
-
-            // Handle escape sequences in the value
-            let raw_value = &line[value_start..value_end];
-            raw_value
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\")
-                .replace("\\n", "\n")
-                .replace("\\t", "\t")
-        } else {
-            // Unquoted value
-            let value_start = chars.peek().map(|(i, _)| *i).unwrap_or(line.len());
-            while let Some(&(_, ch)) = chars.peek() {
-                if ch.is_whitespace() {
-                    break;
-                }
-                chars.next();
-            }
-            let value_end = chars.peek().map(|(i, _)| *i).unwrap_or(line.len());
-            line[value_start..value_end].to_string()
-        };
-
-        result.insert(key.to_string(), value);
-    }
-
-    result
-}
+// Re-export from shared parsing module
+pub use crate::parsing::parse_logfmt;
 
 /// Comparison operators for field filtering.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -646,7 +565,7 @@ impl FilterQuery {
     /// - Empty-line exclusion
     /// - Severity level from `level == "value"` filters (exact match only)
     pub fn index_mask(&self) -> Option<(u32, u32)> {
-        use lazytail::index::flags::{
+        use crate::index::flags::{
             FLAG_FORMAT_JSON, FLAG_FORMAT_LOGFMT, FLAG_IS_EMPTY, SEVERITY_MASK,
         };
 
@@ -684,8 +603,8 @@ impl FilterQuery {
 }
 
 /// Map a level filter value to a Severity enum for index pre-filtering.
-fn severity_from_level_value(value: &str) -> Option<lazytail::index::flags::Severity> {
-    use lazytail::index::flags::Severity;
+fn severity_from_level_value(value: &str) -> Option<crate::index::flags::Severity> {
+    use crate::index::flags::Severity;
 
     match value.to_ascii_lowercase().as_str() {
         "trace" => Some(Severity::Trace),
@@ -708,30 +627,8 @@ pub struct QueryFilter {
     not_regex_patterns: Vec<Option<Regex>>,
 }
 
-/// Extract a field value from a JSON object.
-///
-/// Supports dot notation for nested field access: "user.id" -> json["user"]["id"]
-pub fn extract_json_field(json: &serde_json::Value, field: &str) -> Option<String> {
-    let mut current = json;
-
-    for part in field.split('.') {
-        if current.is_array() {
-            if let Ok(index) = part.parse::<usize>() {
-                current = current.get(index)?;
-                continue;
-            }
-        }
-        current = current.get(part)?;
-    }
-
-    Some(match current {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Null => "null".to_string(),
-        _ => current.to_string(),
-    })
-}
+// Re-export from shared parsing module
+pub use crate::parsing::extract_json_field;
 
 impl QueryFilter {
     /// Create a new QueryFilter from a FilterQuery.
@@ -1683,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_json_level_error() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         let query = parse_query("json | level == \"error\"").unwrap();
         let (mask, want) = query.index_mask().unwrap();
@@ -1699,7 +1596,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_logfmt_level_warn() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         let query = parse_query("logfmt | level == warn").unwrap();
         let (mask, want) = query.index_mask().unwrap();
@@ -1711,7 +1608,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_json_no_level_filter() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         let query = parse_query("json | service == \"api\"").unwrap();
         let (mask, want) = query.index_mask().unwrap();
@@ -1725,7 +1622,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_json_only() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         let query = parse_query("json").unwrap();
         let (mask, want) = query.index_mask().unwrap();
@@ -1748,7 +1645,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_ne_no_severity() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         // level != "error" cannot be expressed as a simple mask
         let query = parse_query("json | level != \"error\"").unwrap();
@@ -1761,7 +1658,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_severity_aliases() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         // "err" is an alias for error
         let query = FilterQuery {
@@ -1808,7 +1705,7 @@ mod tests {
 
     #[test]
     fn test_index_mask_unknown_level_no_severity() {
-        use lazytail::index::flags::*;
+        use crate::index::flags::*;
 
         // "notice" is not a known severity
         let query = FilterQuery {

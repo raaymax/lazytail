@@ -1,7 +1,6 @@
 pub mod aggregation;
 pub mod cancel;
 pub mod engine;
-pub mod orchestrator;
 pub mod query;
 pub mod regex_filter;
 pub mod search_engine;
@@ -385,8 +384,8 @@ mod index_filter_integration_tests {
     use super::query::{self, QueryFilter};
     use super::streaming_filter;
     use super::Filter;
-    use lazytail::index::builder::IndexBuilder;
-    use lazytail::index::reader::IndexReader;
+    use crate::index::builder::IndexBuilder;
+    use crate::index::reader::IndexReader;
     use std::io::Write;
     use std::sync::Arc;
     use tempfile::tempdir;

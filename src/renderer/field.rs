@@ -1,4 +1,4 @@
-use crate::filter::query::{extract_json_field, parse_logfmt};
+use crate::parsing::{extract_json_field, parse_logfmt};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
