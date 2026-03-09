@@ -1036,7 +1036,11 @@ fn collect_input_events<B: ratatui::backend::Backend>(
     let mut events = Vec::new();
 
     // Use short poll when stream data is pending to cycle back quickly
-    let poll_ms = if has_pending_stream { 0 } else { INPUT_POLL_DURATION_MS };
+    let poll_ms = if has_pending_stream {
+        0
+    } else {
+        INPUT_POLL_DURATION_MS
+    };
     if !crossterm_event::poll(Duration::from_millis(poll_ms))? {
         return Ok(events);
     }
