@@ -96,10 +96,15 @@ pub fn run_capture_mode(
         })
         .flatten();
     let mut indexer = if let Some((v, interval)) = resume_info {
+        // Use actual file size (not trusted_file_size) so current_offset accounts
+        // for any orphan bytes beyond the trusted region.
+        let actual_file_size = std::fs::metadata(&log_path)
+            .map(|m| m.len())
+            .unwrap_or(v.trusted_file_size);
         LineIndexer::resume_at(
             &idx_dir,
             v.trusted_entries as u64,
-            v.trusted_file_size,
+            actual_file_size,
             interval,
         )
         .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?

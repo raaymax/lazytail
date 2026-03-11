@@ -125,7 +125,10 @@ impl FileReader {
 
     /// Refresh columnar offsets from the index that capture is building in real-time.
     /// Re-mmaps the offsets column if the index has grown since we last loaded it.
-    /// This keeps `get_line()` on the O(1) path for lines the indexer has already processed.
+    ///
+    /// Uses lightweight structural checks (not full checkpoint validation) since
+    /// during live capture the indexer is trusted. The sequential read path also
+    /// verifies position against columnar offsets to catch orphan gaps.
     fn try_refresh_columnar_offsets(&mut self) {
         let idx_dir = index_dir_for_log(&self.path);
         let meta = match IndexMeta::read_from(idx_dir.join("meta")) {
@@ -138,11 +141,35 @@ impl FileReader {
             return; // No new indexed lines
         }
 
+        // Sanity check: log file must be at least as large as meta claims
+        let file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if file_size < meta.log_file_size {
+            return;
+        }
+
         // Re-mmap the offsets column with the updated size
         let offsets = match ColumnReader::<u64>::open(idx_dir.join("offsets"), new_indexed) {
             Ok(r) if r.len() == new_indexed => r,
             _ => return,
         };
+
+        // Verify new offsets are structurally sound: first offset must be 0
+        // and the boundary between old and new must be monotonic
+        if offsets.get(0) != Some(0) {
+            return;
+        }
+        if self.indexed_lines > 0 {
+            let last_old = self
+                .columnar_offsets
+                .as_ref()
+                .and_then(|c| c.get(self.indexed_lines - 1));
+            let first_new = offsets.get(self.indexed_lines);
+            if let (Some(old), Some(new)) = (last_old, first_new) {
+                if new <= old {
+                    return; // Not monotonically increasing
+                }
+            }
+        }
 
         self.columnar_offsets = Some(offsets);
         self.indexed_lines = new_indexed;
@@ -245,16 +272,32 @@ impl FileReader {
 
         // Sequential access fast path: if we just read line N-1 (common in render loops),
         // the reader is already positioned at line N — just read, no seek needed.
-        // Works regardless of whether the previous read used columnar or sparse path.
+        // For indexed lines, verify position matches columnar offset to catch orphan gaps
+        // (where the file has unindexed bytes between consecutive indexed lines).
         if self.last_read_line == Some(line_num.wrapping_sub(1)) {
-            let mut line_buffer = String::new();
-            if self.reader.read_line(&mut line_buffer)? == 0 {
-                self.last_read_line = None;
-                return Ok(None);
+            let position_ok = if line_num < self.indexed_lines {
+                self.columnar_offsets
+                    .as_ref()
+                    .and_then(|c| c.get(line_num))
+                    .is_none_or(|expected| {
+                        self.reader
+                            .stream_position()
+                            .is_ok_and(|pos| pos == expected)
+                    })
+            } else {
+                true
+            };
+
+            if position_ok {
+                let mut line_buffer = String::new();
+                if self.reader.read_line(&mut line_buffer)? == 0 {
+                    self.last_read_line = None;
+                    return Ok(None);
+                }
+                self.last_read_line = Some(line_num);
+                trim_newline(&mut line_buffer);
+                return Ok(Some(line_buffer));
             }
-            self.last_read_line = Some(line_num);
-            trim_newline(&mut line_buffer);
-            return Ok(Some(line_buffer));
         }
 
         // Columnar path: O(1) direct seek via mmap-backed offsets
@@ -329,6 +372,18 @@ impl FileReader {
     #[cfg(test)]
     pub fn index_memory_usage(&self) -> usize {
         self.sparse_index.memory_usage()
+    }
+
+    /// Whether this reader has loaded columnar offsets for O(1) line access.
+    #[cfg(test)]
+    pub(crate) fn has_columnar_offsets(&self) -> bool {
+        self.columnar_offsets.is_some()
+    }
+
+    /// Number of lines covered by the columnar index.
+    #[cfg(test)]
+    pub(crate) fn columnar_line_count(&self) -> usize {
+        self.indexed_lines
     }
 }
 

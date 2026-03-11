@@ -47,18 +47,61 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
         return None;
     }
 
+    // Structural check: other column sizes must match entry_count
+    if meta.has_column(ColumnBit::Lengths) {
+        let expected_bytes = entry_count * std::mem::size_of::<u32>();
+        let actual_bytes = std::fs::metadata(idx_dir.join("lengths")).ok()?.len() as usize;
+        if actual_bytes < expected_bytes {
+            return None;
+        }
+    }
+    if meta.has_column(ColumnBit::Flags) {
+        let expected_bytes = entry_count * std::mem::size_of::<u8>();
+        let actual_bytes = std::fs::metadata(idx_dir.join("flags")).ok()?.len() as usize;
+        if actual_bytes < expected_bytes {
+            return None;
+        }
+    }
+    if meta.has_column(ColumnBit::Time) {
+        let expected_bytes = entry_count * std::mem::size_of::<u64>();
+        let actual_bytes = std::fs::metadata(idx_dir.join("time")).ok()?.len() as usize;
+        if actual_bytes < expected_bytes {
+            return None;
+        }
+    }
+
     // Structural check: first line must start at byte 0
     if offsets.get(0) != Some(0) {
         return None;
     }
 
-    // Structural check: byte before second line must be a newline
+    // Structural check: offsets must be monotonically increasing and within file bounds
+    let mut prev_offset = 0u64;
+    for i in 0..entry_count {
+        let offset = offsets.get(i)?;
+        if i > 0 && offset <= prev_offset {
+            return None;
+        }
+        if offset >= file_size {
+            return None;
+        }
+        prev_offset = offset;
+    }
+
+    // Structural check: byte before each offset must be a newline.
+    // For large indexes, sample to keep validation fast.
     if entry_count >= 2 {
-        if let Some(next_offset) = offsets.get(1) {
-            if next_offset > 0 {
-                let mut file = File::open(log_path).ok()?;
-                file.seek(SeekFrom::Start(next_offset - 1)).ok()?;
-                let mut buf = [0u8; 1];
+        let step = if entry_count > 100_000 {
+            entry_count / 1000
+        } else {
+            1
+        };
+        let mut file = File::open(log_path).ok()?;
+        let mut buf = [0u8; 1];
+        for i in (1..entry_count).step_by(step) {
+            let offset = offsets.get(i)?;
+            if offset > 0 {
+                file.seek(SeekFrom::Start(offset - 1)).ok()?;
                 file.read_exact(&mut buf).ok()?;
                 if buf[0] != b'\n' {
                     return None;
@@ -69,52 +112,47 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
 
     // Checkpoint walk (partial trust)
     if meta.has_column(ColumnBit::Checkpoints) {
-        if let Ok(ckpt_reader) = CheckpointReader::open(idx_dir.join("checkpoints")) {
-            if !ckpt_reader.is_empty() {
-                for i in (0..ckpt_reader.len()).rev() {
-                    if let Some(cp) = ckpt_reader.get(i) {
-                        if cp.line_number == 0 || cp.line_number > meta.entry_count {
-                            continue;
-                        }
-
-                        // Cross-check: offset in column must match checkpoint
-                        let line_idx = (cp.line_number - 1) as usize;
-                        if offsets.get(line_idx) != Some(cp.byte_offset) {
-                            continue;
-                        }
-
-                        // Verify content hash against actual file.
-                        // Cap read to meta.log_file_size so appended bytes don't
-                        // change the hash when the file has grown.
-                        let max_bytes =
-                            (meta.log_file_size.saturating_sub(cp.byte_offset)) as usize;
-                        if !verify_checkpoint_hash(
-                            log_path,
-                            cp.byte_offset,
-                            cp.content_hash,
-                            max_bytes,
-                        ) {
-                            continue;
-                        }
-
-                        // This checkpoint validates
-                        let trusted = cp.line_number as usize;
-                        let trusted_file_size = if trusted == entry_count {
-                            meta.log_file_size
-                        } else {
-                            find_line_end(log_path, cp.byte_offset)?
-                        };
-
-                        return Some(ValidatedIndex {
-                            trusted_entries: trusted,
-                            trusted_file_size,
-                        });
+        // Missing checkpoints file when meta says present = corruption
+        let ckpt_reader = CheckpointReader::open(idx_dir.join("checkpoints")).ok()?;
+        if !ckpt_reader.is_empty() {
+            for i in (0..ckpt_reader.len()).rev() {
+                if let Some(cp) = ckpt_reader.get(i) {
+                    if cp.line_number == 0 || cp.line_number > meta.entry_count {
+                        continue;
                     }
-                }
 
-                // All checkpoints failed
-                return None;
+                    // Cross-check: offset in column must match checkpoint
+                    let line_idx = (cp.line_number - 1) as usize;
+                    if offsets.get(line_idx) != Some(cp.byte_offset) {
+                        continue;
+                    }
+
+                    // Verify content hash against actual file.
+                    // Cap read to meta.log_file_size so appended bytes don't
+                    // change the hash when the file has grown.
+                    let max_bytes = (meta.log_file_size.saturating_sub(cp.byte_offset)) as usize;
+                    if !verify_checkpoint_hash(log_path, cp.byte_offset, cp.content_hash, max_bytes)
+                    {
+                        continue;
+                    }
+
+                    // This checkpoint validates
+                    let trusted = cp.line_number as usize;
+                    let trusted_file_size = if trusted == entry_count {
+                        meta.log_file_size
+                    } else {
+                        find_line_end(log_path, cp.byte_offset)?
+                    };
+
+                    return Some(ValidatedIndex {
+                        trusted_entries: trusted,
+                        trusted_file_size,
+                    });
+                }
             }
+
+            // All checkpoints failed
+            return None;
         }
     }
 
