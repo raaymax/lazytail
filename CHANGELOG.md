@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0](https://github.com/raaymax/lazytail/compare/v0.8.2...v0.9.0) (2026-03-12)
+
+
+### Features
+
+* detect stale columnar indexes with partial trust ([#81](https://github.com/raaymax/lazytail/issues/81)) ([cf99bff](https://github.com/raaymax/lazytail/commit/cf99bff5f8e993fc38bce2d8d4df64a8c7c3695e))
+* **mcp:** add full_content option to skip line truncation ([#80](https://github.com/raaymax/lazytail/issues/80)) ([f8431c5](https://github.com/raaymax/lazytail/commit/f8431c5654f84be15953ce6d89ef004d69efdc09))
+* **tui:** add line wrap mode ([#82](https://github.com/raaymax/lazytail/issues/82)) ([8708b4f](https://github.com/raaymax/lazytail/commit/8708b4f36c2d46e198420b73ba09fb2130cec26c))
+
+
+### Bug Fixes
+
+* **index:** harden columnar index against corruption and crash recovery ([#83](https://github.com/raaymax/lazytail/issues/83)) ([64be910](https://github.com/raaymax/lazytail/commit/64be9100ca4a66bb0456cb227f81cef0e5f21654))
+* **perf:** resolve 1.2s/frame render freeze on large files with partial index ([3828b4f](https://github.com/raaymax/lazytail/commit/3828b4f59f61cccd2bbf9499fa81e56c303f83d6))
+* strip carriage return from version in install script ([61b1d37](https://github.com/raaymax/lazytail/commit/61b1d37bddd13565e14ef9160f66e281e5697a42))
+* use jq for JSON config manipulation in install script ([#78](https://github.com/raaymax/lazytail/issues/78)) ([b2c3aaf](https://github.com/raaymax/lazytail/commit/b2c3aaffc05524309ee5a7936731c171330d2c26))
+* **viewport:** eliminate O(N) freeze when opening large files ([950c3a4](https://github.com/raaymax/lazytail/commit/950c3a406de766c79f9cbff4a6022d056305aada))
+
+
+### Performance Improvements
+
+* add benchmark suites and CI performance testing ([#84](https://github.com/raaymax/lazytail/issues/84)) ([a65dc1d](https://github.com/raaymax/lazytail/commit/a65dc1d2e6b1e71df1f923742d62c509b94f4f19))
+
 ## [0.8.2](https://github.com/raaymax/lazytail/compare/v0.8.1...v0.8.2) (2026-03-03)
 
 
