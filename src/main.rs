@@ -13,10 +13,10 @@ mod mcp;
 mod parsing;
 mod reader;
 mod renderer;
-mod text_wrap;
 mod session;
 mod signal;
 mod source;
+mod text_wrap;
 mod theme;
 mod tui;
 #[cfg(feature = "self-update")]

@@ -137,7 +137,14 @@ fn generate_test_file(path: &Path, target_size_mb: usize) -> (u64, usize) {
             format!(
                 r#"{{"level":"{}","message":"{}","service":"{}","timestamp":"{}","request_id":"req-{:06}","duration_ms":{},"extra_field_1":"value_{}","extra_field_2":"another_value_{}"}}
 "#,
-                lvl, msg, svc, ts, line_count, line_count % 5000, line_count, line_count,
+                lvl,
+                msg,
+                svc,
+                ts,
+                line_count,
+                line_count % 5000,
+                line_count,
+                line_count,
             )
         } else if line_count % 3 == 1 {
             format!(
@@ -209,8 +216,7 @@ fn make_cases(test_file: &Path) -> Vec<FilterBenchCase> {
     let string_ci = FilterBenchCase {
         name: "string/case_insensitive",
         run: Box::new(move |_| {
-            let filter: Arc<dyn Filter> =
-                Arc::new(StringFilter::new("connection refused", false));
+            let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("connection refused", false));
             let rx = streaming_filter::run_streaming_filter(p.clone(), filter, CancelToken::new())
                 .unwrap();
             collect_matches(rx)
@@ -221,8 +227,7 @@ fn make_cases(test_file: &Path) -> Vec<FilterBenchCase> {
     let string_cs = FilterBenchCase {
         name: "string/case_sensitive",
         run: Box::new(move |_| {
-            let filter: Arc<dyn Filter> =
-                Arc::new(StringFilter::new("connection refused", true));
+            let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("connection refused", true));
             let rx = streaming_filter::run_streaming_filter(p.clone(), filter, CancelToken::new())
                 .unwrap();
             collect_matches(rx)
@@ -248,8 +253,7 @@ fn make_cases(test_file: &Path) -> Vec<FilterBenchCase> {
     let string_rare = FilterBenchCase {
         name: "string/rare_pattern",
         run: Box::new(move |_| {
-            let filter: Arc<dyn Filter> =
-                Arc::new(StringFilter::new("TLS handshake", false));
+            let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("TLS handshake", false));
             let rx = streaming_filter::run_streaming_filter(p.clone(), filter, CancelToken::new())
                 .unwrap();
             collect_matches(rx)
@@ -260,8 +264,7 @@ fn make_cases(test_file: &Path) -> Vec<FilterBenchCase> {
     let regex_simple = FilterBenchCase {
         name: "regex/simple",
         run: Box::new(move |_| {
-            let filter: Arc<dyn Filter> =
-                Arc::new(RegexFilter::new(r"error|warn", false).unwrap());
+            let filter: Arc<dyn Filter> = Arc::new(RegexFilter::new(r"error|warn", false).unwrap());
             let rx = streaming_filter::run_streaming_filter(p.clone(), filter, CancelToken::new())
                 .unwrap();
             collect_matches(rx)
@@ -387,8 +390,7 @@ fn make_cases(test_file: &Path) -> Vec<FilterBenchCase> {
     let engine_string = FilterBenchCase {
         name: "engine/string_dispatch",
         run: Box::new(move |_| {
-            let filter: Arc<dyn Filter> =
-                Arc::new(StringFilter::new("connection refused", false));
+            let filter: Arc<dyn Filter> = Arc::new(StringFilter::new("connection refused", false));
             let rx = SearchEngine::search_file(&p, filter, None, None, None, CancelToken::new())
                 .unwrap();
             collect_matches(rx)
@@ -460,11 +462,7 @@ fn main() {
 
     eprintln!("Generating {} MB test file...", size_mb);
     let (file_bytes, line_count) = generate_test_file(&test_file, size_mb);
-    eprintln!(
-        "Generated {} ({} lines)",
-        fmt_size(file_bytes),
-        line_count
-    );
+    eprintln!("Generated {} ({} lines)", fmt_size(file_bytes), line_count);
 
     // Build index for indexed benchmarks
     eprintln!("Building index...");
@@ -555,10 +553,7 @@ fn main() {
     }
 
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json_results).unwrap()
-        );
+        println!("{}", serde_json::to_string_pretty(&json_results).unwrap());
     } else {
         println!();
     }

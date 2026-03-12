@@ -169,7 +169,12 @@ fn generate_test_file(path: &Path, target_size_mb: usize) -> (u64, usize) {
         } else {
             format!(
                 "{} {} [{}] {} request_id=req-{:06} duration={}ms\n",
-                ts, lvl.to_uppercase(), svc, msg, line_count, line_count % 5000,
+                ts,
+                lvl.to_uppercase(),
+                svc,
+                msg,
+                line_count,
+                line_count % 5000,
             )
         };
 
@@ -451,16 +456,11 @@ fn run_bench(case: &BenchCase, lines: &[String], trials: usize) -> Vec<Duration>
         let start = Instant::now();
 
         for line in lines {
-            if let Some(segments) =
-                case.registry
-                    .render_line(line, &case.renderer_names, None)
-            {
+            if let Some(segments) = case.registry.render_line(line, &case.renderer_names, None) {
                 if let Some(width) = case.wrap_width {
                     let spans: Vec<Span<'static>> = segments
                         .into_iter()
-                        .map(|seg| {
-                            Span::styled(seg.text, to_ratatui_style(&seg.style, None))
-                        })
+                        .map(|seg| Span::styled(seg.text, to_ratatui_style(&seg.style, None)))
                         .collect();
                     std::hint::black_box(wrap_spans(spans, width));
                 } else {
@@ -484,11 +484,7 @@ fn run_bench_auto(registry: &PresetRegistry, lines: &[String], trials: usize) ->
 
     // Pre-compute flags matching the generation pattern (line_idx % 3):
     //   0 → JSON, 1 → logfmt, 2 → plain text (no format flag)
-    let flags_cycle = [
-        Some(FLAG_FORMAT_JSON),
-        Some(FLAG_FORMAT_LOGFMT),
-        Some(0u32),
-    ];
+    let flags_cycle = [Some(FLAG_FORMAT_JSON), Some(FLAG_FORMAT_LOGFMT), Some(0u32)];
 
     for i in 0..total {
         let start = Instant::now();
@@ -534,11 +530,7 @@ fn main() {
 
     eprintln!("Generating {} MB test file...", size_mb);
     let (file_bytes, line_count) = generate_test_file(&test_file, size_mb);
-    eprintln!(
-        "Generated {} ({} lines)",
-        fmt_size(file_bytes),
-        line_count
-    );
+    eprintln!("Generated {} ({} lines)", fmt_size(file_bytes), line_count);
 
     // Load all lines into memory (we're benchmarking rendering, not I/O)
     eprintln!("Loading lines into memory...");
@@ -680,7 +672,8 @@ fn main() {
                 "lines_per_sec": lines.len() as f64 / stats.mean.as_secs_f64(),
             }));
         } else {
-            println!("  {:<30}  mean: {:>10}  p50: {:>10}  p95: {:>10}  stddev: {:>10}  {}  {}",
+            println!(
+                "  {:<30}  mean: {:>10}  p50: {:>10}  p95: {:>10}  stddev: {:>10}  {}  {}",
                 case.name,
                 fmt_dur(stats.mean),
                 fmt_dur(stats.p50),
@@ -714,7 +707,8 @@ fn main() {
                 "lines_per_sec": lines.len() as f64 / stats.mean.as_secs_f64(),
             }));
         } else {
-            println!("  {:<30}  mean: {:>10}  p50: {:>10}  p95: {:>10}  stddev: {:>10}  {}  {}",
+            println!(
+                "  {:<30}  mean: {:>10}  p50: {:>10}  p95: {:>10}  stddev: {:>10}  {}  {}",
                 "auto_detect",
                 fmt_dur(stats.mean),
                 fmt_dur(stats.p50),
@@ -727,10 +721,7 @@ fn main() {
     }
 
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json_results).unwrap()
-        );
+        println!("{}", serde_json::to_string_pretty(&json_results).unwrap());
     } else {
         println!();
     }

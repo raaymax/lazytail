@@ -5,6 +5,7 @@ use crate::reader::combined_reader::CombinedReader;
 use crate::reader::LogReader;
 use crate::renderer::segment::{to_ratatui_style, StyledSegment};
 use crate::renderer::PresetRegistry;
+use crate::text_wrap::{expand_tabs, wrap_content, wrap_plain, wrap_spans};
 use crate::theme::UiColors;
 use anyhow::Result;
 use ratatui::{
@@ -14,7 +15,6 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
     Frame,
 };
-use crate::text_wrap::{expand_tabs, wrap_content, wrap_plain, wrap_spans};
 
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
@@ -564,7 +564,6 @@ fn format_line_spans(
         }
     }
 }
-
 
 #[cfg(test)]
 mod wrap_content_tests {

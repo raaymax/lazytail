@@ -5,9 +5,9 @@ pub mod viewport;
 pub use event::AppEvent;
 pub use tab::{StreamMessage, TabState};
 
-use crate::filter_orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::{FilterHistoryEntry, FilterMode};
+use crate::filter_orchestrator::FilterOrchestrator;
 use crate::history;
 use crate::renderer::PresetRegistry;
 use crate::source::{self, SourceStatus};

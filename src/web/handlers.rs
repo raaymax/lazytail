@@ -2,9 +2,9 @@
 
 use crate::ansi::strip_ansi;
 use crate::app::TabState;
-use crate::filter_orchestrator::FilterOrchestrator;
 use crate::filter::query;
 use crate::filter::regex_filter::RegexFilter;
+use crate::filter_orchestrator::FilterOrchestrator;
 use crate::source::SourceStatus;
 
 use std::collections::HashMap;
