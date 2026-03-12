@@ -131,39 +131,43 @@ impl Viewport {
 
         let padding = self.edge_padding.min(self.height / 4);
 
-        // Count visual rows from scroll_position to selected_index
-        let mut rows_above: usize = 0;
-        for i in self.scroll_position..selected_index.min(total_lines) {
-            rows_above += line_height(i);
-        }
-        let selected_h = line_height(selected_index.min(total_lines - 1));
-        let total_rows_through_selected = rows_above + selected_h;
-
         // Selection is above the viewport — scroll up
         if selected_index < self.scroll_position {
             self.scroll_position = selected_index;
-            // Apply top padding: try to show `padding` visual rows above
             let mut pad_rows = 0;
             while self.scroll_position > 0 && pad_rows < padding {
                 self.scroll_position -= 1;
                 pad_rows += line_height(self.scroll_position);
             }
+            return;
         }
+
+        // Fast path: if selection is far below scroll_position, jump directly
+        // near the selection instead of counting millions of rows.
+        let gap = selected_index - self.scroll_position;
+        if gap > self.height * 2 {
+            // Jump scroll_position close to selection, then fine-tune below
+            self.scroll_position = selected_index.saturating_sub(self.height.saturating_sub(1));
+        }
+
+        // Count visual rows from scroll_position to selected_index
+        let mut rows_above: usize = 0;
+        let end = selected_index.min(total_lines);
+        for i in self.scroll_position..end {
+            rows_above += line_height(i);
+        }
+        let selected_h = line_height(selected_index.min(total_lines - 1));
+        let total_rows_through_selected = rows_above + selected_h;
+
         // Selection is below the viewport — scroll down
-        else if total_rows_through_selected > self.height {
+        if total_rows_through_selected > self.height {
             // Walk scroll_position forward until selected line fits on screen
-            while total_lines > 0 && self.scroll_position < selected_index {
-                let mut rows: usize = 0;
-                for i in self.scroll_position..=selected_index.min(total_lines - 1) {
-                    rows += line_height(i);
-                }
-                if rows <= self.height {
-                    break;
-                }
+            let mut rows = total_rows_through_selected;
+            while rows > self.height && self.scroll_position < selected_index {
+                rows -= line_height(self.scroll_position);
                 self.scroll_position += 1;
             }
-            // Apply bottom padding: try to show `padding` visual rows below
-            // by scrolling further if there's content below
+            // Apply bottom padding
             let mut pad_rows = 0;
             let mut pad_idx = selected_index + 1;
             while pad_idx < total_lines && pad_rows < padding {
@@ -171,7 +175,6 @@ impl Viewport {
                 pad_idx += 1;
             }
             if pad_rows > 0 {
-                // Check if padding lines fit; if not, scroll more
                 let mut rows: usize = 0;
                 for i in self.scroll_position..pad_idx.min(total_lines) {
                     rows += line_height(i);
@@ -184,12 +187,10 @@ impl Viewport {
         }
         // Selection is within the visible area — check edge padding
         else if padding > 0 {
-            // Top padding: visual rows from scroll_position to selected
+            // Top padding
             let mut top_visual = 0;
-            let mut top_count = 0;
             for i in self.scroll_position..selected_index {
                 top_visual += line_height(i);
-                top_count += 1;
                 if top_visual >= padding {
                     break;
                 }
@@ -202,9 +203,8 @@ impl Viewport {
                 }
             }
 
-            // Bottom padding: visual rows from selected to end of viewport
+            // Bottom padding
             let rows_after = self.height.saturating_sub(total_rows_through_selected);
-            // Count visual rows of `padding` lines below selection
             let mut pad_visual = 0;
             let mut i = selected_index + 1;
             let mut pad_count = 0;
@@ -213,7 +213,6 @@ impl Viewport {
                 pad_count += 1;
                 i += 1;
             }
-            let _ = top_count; // used for padding logic above
             if rows_after < pad_visual.min(padding) {
                 let mut excess = pad_visual.min(padding) - rows_after;
                 while excess > 0 && self.scroll_position < selected_index {
@@ -224,11 +223,7 @@ impl Viewport {
             }
         }
 
-        // Clamp: don't scroll past the point where last line is at bottom
-        // Compute max_scroll in visual terms: find earliest scroll_position
-        // where the last line still fits on screen.
-        // For simplicity (and O(1) for non-wrap), just ensure scroll_position
-        // doesn't exceed total_lines - 1.
+        // Clamp scroll_position
         if self.scroll_position >= total_lines {
             self.scroll_position = total_lines.saturating_sub(1);
         }
@@ -845,5 +840,21 @@ mod tests {
 
         assert_eq!(vp.scroll_position, 0);
         assert_eq!(vp.selected_line(), 9);
+    }
+
+    #[test]
+    fn test_resolve_large_file_scroll_position_zero() {
+        // Simulates opening a large file where anchor is at the end
+        // but scroll_position starts at 0. Must not iterate millions of lines.
+        let total = 50_000_000;
+        let mut vp = Viewport::new(total - 1);
+        vp.scroll_position = 0;
+        let lines: Vec<usize> = (0..total).collect();
+
+        let view = vp.resolve(&lines, 50);
+
+        assert_eq!(view.selected_index, total - 1);
+        // scroll_position should be near the end
+        assert!(view.scroll_position >= total - 50);
     }
 }
