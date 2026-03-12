@@ -113,8 +113,8 @@ fn render_sources_list(
     ui: &UiColors,
 ) -> Option<(Line<'static>, Rect)> {
     let mut items: Vec<ListItem> = Vec::new();
-    let categories = app.tabs_by_category();
-    let is_panel_focused = app.input_mode == InputMode::SourcePanel;
+    let categories = app.tab_mgr.tabs_by_category();
+    let is_panel_focused = app.input.mode == InputMode::SourcePanel;
 
     // Track global tab index for numbering and selected item for overflow overlay
     let mut global_idx = 0usize;
@@ -136,11 +136,11 @@ fn render_sources_list(
             SourceType::Pipe => "Pipes",
         };
         let cat_idx = *cat as usize;
-        let expanded = app.source_panel.expanded[cat_idx];
+        let expanded = app.panel.state.expanded[cat_idx];
         let arrow = if expanded { "▼" } else { "▶" };
 
         let is_cat_selected =
-            is_panel_focused && app.source_panel.selection == Some(TreeSelection::Category(*cat));
+            is_panel_focused && app.panel.state.selection == Some(TreeSelection::Category(*cat));
 
         let cat_style = if is_cat_selected {
             Style::default()
@@ -160,10 +160,10 @@ fn render_sources_list(
         // Category items (if expanded)
         if expanded {
             // Per-category $all entry
-            if let Some(ref combined) = app.combined_tabs[cat_idx] {
-                let is_active = app.active_combined == Some(*cat);
+            if let Some(ref combined) = app.tab_mgr.combined[cat_idx] {
+                let is_active = app.tab_mgr.active_combined == Some(*cat);
                 let is_tree_selected = is_panel_focused
-                    && app.source_panel.selection == Some(TreeSelection::CombinedForCategory(*cat));
+                    && app.panel.state.selection == Some(TreeSelection::CombinedForCategory(*cat));
 
                 if is_tree_selected {
                     selected_row = Some(row_idx);
@@ -184,7 +184,7 @@ fn render_sources_list(
                 // Inline metadata: line count + source count
                 let source_count = tab_indices
                     .iter()
-                    .filter(|&&idx| !app.tabs[idx].source.disabled)
+                    .filter(|&&idx| !app.tab_mgr.tabs[idx].source.disabled)
                     .count();
                 let meta = format!(
                     " {} \u{00b7} {}src",
@@ -215,10 +215,11 @@ fn render_sources_list(
             }
 
             for (in_cat_idx, &tab_idx) in tab_indices.iter().enumerate() {
-                let tab = &app.tabs[tab_idx];
-                let is_active = tab_idx == app.active_tab && app.active_combined.is_none();
+                let tab = &app.tab_mgr.tabs[tab_idx];
+                let is_active =
+                    tab_idx == app.tab_mgr.active && app.tab_mgr.active_combined.is_none();
                 let is_tree_selected = is_panel_focused
-                    && app.source_panel.selection == Some(TreeSelection::Item(*cat, in_cat_idx));
+                    && app.panel.state.selection == Some(TreeSelection::Item(*cat, in_cat_idx));
 
                 if is_tree_selected {
                     selected_row = Some(row_idx);

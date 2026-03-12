@@ -100,24 +100,24 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
     let ui = &app.theme.ui;
     let input = app.get_input();
 
-    let label = app.current_filter_mode.prompt_label();
+    let label = app.filter.current_mode.prompt_label();
     let input_text = format!("{}: {}", label, input);
 
     // Determine border color based on mode and validation state
-    let border_color = if app.query_error.is_some() || app.regex_error.is_some() {
+    let border_color = if app.filter.query_error.is_some() || app.filter.regex_error.is_some() {
         ui.filter_error
-    } else if app.current_filter_mode.is_query() {
+    } else if app.filter.current_mode.is_query() {
         ui.filter_query
-    } else if app.current_filter_mode.is_regex() {
+    } else if app.filter.current_mode.is_regex() {
         ui.filter_regex
     } else {
         ui.filter_plain
     };
 
     // Build help text with mode hint showing next mode Tab will switch to
-    let mode_hint = if app.current_filter_mode.is_query() {
+    let mode_hint = if app.filter.current_mode.is_query() {
         "Tab: Plain"
-    } else if app.current_filter_mode.is_regex() {
+    } else if app.filter.current_mode.is_regex() {
         "Tab: Query"
     } else {
         "Tab: Regex"

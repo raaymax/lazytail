@@ -19,7 +19,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     // Main horizontal layout: side panel + content area
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(app.side_panel_width), Constraint::Min(1)])
+        .constraints([Constraint::Length(app.panel.width), Constraint::Min(1)])
         .split(f.area());
 
     // Render side panel with tabs
@@ -45,12 +45,12 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
 
     if app.active_tab().source.mode == ViewMode::Aggregation {
         let ui = &app.theme.ui;
-        let tab = if let Some(cat) = app.active_combined {
-            app.combined_tabs[cat as usize]
+        let tab = if let Some(cat) = app.tab_mgr.active_combined {
+            app.tab_mgr.combined[cat as usize]
                 .as_mut()
                 .expect("active_combined set but no combined tab for category")
         } else {
-            &mut app.tabs[app.active_tab]
+            &mut app.tab_mgr.tabs[app.tab_mgr.active]
         };
         aggregation_view::render_aggregation_view(f, content_chunks[0], tab, ui);
     } else {
@@ -77,7 +77,7 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
     }
 
     // Render close confirmation dialog on top of everything if active
-    if app.input_mode == InputMode::ConfirmClose {
+    if app.input.mode == InputMode::ConfirmClose {
         help::render_confirm_close_dialog(f, f.area(), app);
     }
 

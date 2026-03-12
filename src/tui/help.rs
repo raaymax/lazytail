@@ -164,18 +164,22 @@ pub(super) fn render_help_overlay(f: &mut Frame, area: Rect, scroll_offset: usiz
 pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) {
     let ui = &app.theme.ui;
     let tab_index = match &app.pending_close_tab {
-        Some((idx, name)) if *idx < app.tabs.len() && app.tabs[*idx].source.name == *name => *idx,
+        Some((idx, name))
+            if *idx < app.tab_mgr.tabs.len() && app.tab_mgr.tabs[*idx].source.name == *name =>
+        {
+            *idx
+        }
         _ => return,
     };
 
-    let tab = &app.tabs[tab_index];
+    let tab = &app.tab_mgr.tabs[tab_index];
     let tab_name = &tab.source.name;
-    let is_last = app.tabs.len() <= 1;
+    let is_last = app.tab_mgr.tabs.len() <= 1;
     let will_delete =
         tab.source.source_status == Some(SourceStatus::Ended) && tab.source.source_path.is_some();
 
     // Truncate name to fit in popup
-    let max_name_len = 30;
+    let max_name_len: usize = 30;
     let display_name = if tab_name.len() > max_name_len {
         let truncate_at = max_name_len.saturating_sub(3);
         let boundary = tab_name.floor_char_boundary(truncate_at);

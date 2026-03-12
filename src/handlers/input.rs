@@ -10,7 +10,7 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         return handle_help_mode(key);
     }
 
-    match app.input_mode {
+    match app.input.mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),
         InputMode::ZPending => handle_z_pending_mode(key),
@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn test_confirm_close_y_confirms() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::ConfirmClose;
+        app.input.mode = InputMode::ConfirmClose;
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::ConfirmCloseTab]);
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn test_confirm_close_enter_confirms() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::ConfirmClose;
+        app.input.mode = InputMode::ConfirmClose;
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::ConfirmCloseTab]);
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn test_confirm_close_n_cancels() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::ConfirmClose;
+        app.input.mode = InputMode::ConfirmClose;
         let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::CancelCloseTab]);
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn test_confirm_close_esc_cancels() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::ConfirmClose;
+        app.input.mode = InputMode::ConfirmClose;
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::CancelCloseTab]);
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn test_confirm_close_ignores_other_keys() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::ConfirmClose;
+        app.input.mode = InputMode::ConfirmClose;
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert!(events.is_empty());
@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn test_source_panel_y_copies_path_not_line() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::SourcePanel;
+        app.input.mode = InputMode::SourcePanel;
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::CopySourcePath]);
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn test_source_panel_x_closes_selected() {
         let (mut app, _file) = create_test_app();
-        app.input_mode = InputMode::SourcePanel;
+        app.input.mode = InputMode::SourcePanel;
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         let events = handle_input_event(key, &app);
         assert_eq!(events, vec![AppEvent::CloseSelectedTab]);

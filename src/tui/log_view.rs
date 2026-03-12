@@ -72,12 +72,12 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
     let ui = &app.theme.ui;
     let palette = &app.theme.palette;
-    let tab = if let Some(cat) = app.active_combined {
-        app.combined_tabs[cat as usize]
+    let tab = if let Some(cat) = app.tab_mgr.active_combined {
+        app.tab_mgr.combined[cat as usize]
             .as_mut()
             .expect("active_combined set but no combined tab for category")
     } else {
-        &mut app.tabs[app.active_tab]
+        &mut app.tab_mgr.tabs[app.tab_mgr.active]
     };
     let visible_height = area.height.saturating_sub(2) as usize;
 
@@ -220,7 +220,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
 
     // Render widget
     let title = build_title(tab);
-    let is_log_focused = app.input_mode != InputMode::SourcePanel;
+    let is_log_focused = app.input.mode != InputMode::SourcePanel;
     let border_style = if is_log_focused {
         Style::default().fg(ui.primary)
     } else {

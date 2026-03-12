@@ -336,7 +336,7 @@ fn main() -> Result<()> {
     app.startup_time = Some(startup);
     app.verbose = verbose;
     app.theme = cfg.theme;
-    app.ensure_combined_tabs();
+    app.tab_mgr.ensure_combined_tabs();
 
     // Restore last active source from session
     let project_root = discovery.project_root.as_deref();
@@ -454,7 +454,7 @@ fn run_discovery_mode(
     app.verbose = verbose;
     app.theme = cfg.theme;
     app.source_renderer_map = source_renderer_map;
-    app.ensure_combined_tabs();
+    app.tab_mgr.ensure_combined_tabs();
 
     // Restore last active source from session
     let project_root = discovery.project_root.as_deref();
@@ -511,10 +511,10 @@ fn run_discovery_mode(
 /// Restore the last active source from session, selecting the matching tab.
 fn restore_last_source(app: &mut App, project_root: Option<&std::path::Path>) {
     if let Some(last_name) = session::load_last_source(project_root) {
-        let categories = app.tabs_by_category();
+        let categories = app.tab_mgr.tabs_by_category();
         for (_, tab_indices) in &categories {
             for &tab_idx in tab_indices {
-                if app.tabs[tab_idx].source.name == last_name {
+                if app.tab_mgr.tabs[tab_idx].source.name == last_name {
                     app.select_tab(tab_idx);
                     return;
                 }
@@ -525,7 +525,7 @@ fn restore_last_source(app: &mut App, project_root: Option<&std::path::Path>) {
 
 /// Save the active source name to session.
 fn save_active_source(app: &App, project_root: Option<&std::path::Path>) {
-    if let Some(tab) = app.tabs.get(app.active_tab) {
+    if let Some(tab) = app.tab_mgr.tabs.get(app.tab_mgr.active) {
         session::save_last_source(project_root, &tab.source.name);
     }
 }
@@ -624,9 +624,9 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         }
 
         // Phase 2: Check for pending debounced filter
-        if let Some(trigger_at) = app.pending_filter_at {
+        if let Some(trigger_at) = app.filter.pending_at {
             if Instant::now() >= trigger_at {
-                app.pending_filter_at = None;
+                app.filter.pending_at = None;
                 app.trigger_filter_preview();
             }
         }
@@ -634,7 +634,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
         // Phase 2.5: Refresh source status for discovered sources (throttled to every 2s)
         if last_status_refresh.elapsed() >= Duration::from_secs(2) {
             last_status_refresh = Instant::now();
-            for tab in &mut app.tabs {
+            for tab in &mut app.tab_mgr.tabs {
                 tab.refresh_source_status();
             }
         }
@@ -646,6 +646,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                     watcher::DirEvent::NewFile(path) => {
                         // Check if we already have this file open
                         let already_open = app
+                            .tab_mgr
                             .tabs
                             .iter()
                             .any(|t| t.source.source_path.as_ref() == Some(&path));
@@ -677,7 +678,7 @@ fn run_app_with_discovery<B: ratatui::backend::Backend>(
                                     TabState::from_discovered_source(source, true, renderers)
                                 {
                                     app.add_tab(tab);
-                                    app.ensure_combined_tabs();
+                                    app.tab_mgr.ensure_combined_tabs();
                                 }
                             }
                         }
@@ -749,13 +750,13 @@ struct ActiveTabFileModification {
 /// When `force_poll` is true, also checks file sizes directly as a safety net
 /// for platforms where the file watcher may miss events (e.g. macOS FSEvents).
 fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
-    let active_tab = app.active_tab;
+    let active_tab = app.tab_mgr.active;
 
     // First pass: reload files and handle inactive tabs
     let mut active_tab_modification: Option<ActiveTabFileModification> = None;
     let mut modified_categories = [false; 5];
 
-    for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
+    for (tab_idx, tab) in app.tab_mgr.tabs.iter_mut().enumerate() {
         // Drain watcher events
         let mut has_modified = false;
         let mut last_error = None;
@@ -812,7 +813,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
                 tab.source.file_size = std::fs::metadata(path).map(|m| m.len()).ok();
             }
 
-            if tab_idx == active_tab && app.active_combined.is_none() {
+            if tab_idx == active_tab && app.tab_mgr.active_combined.is_none() {
                 // Collect for processing after the loop (only when a regular tab is active)
                 active_tab_modification = Some(ActiveTabFileModification {
                     new_total,
@@ -828,7 +829,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
     // Propagate file changes to combined tabs (only for categories that had modifications)
     for (cat_idx, cat_modified) in modified_categories.iter().enumerate() {
         if *cat_modified {
-            if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
+            if let Some(ref mut combined) = app.tab_mgr.combined[cat_idx] {
                 let old_total = combined.source.total_lines;
                 {
                     let mut reader = match combined.source.reader.lock() {
@@ -854,7 +855,7 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 
                         // Follow mode jump for active combined tab
                         let is_active_combined =
-                            app.active_combined == Some(SourceType::from_index(cat_idx));
+                            app.tab_mgr.active_combined == Some(SourceType::from_index(cat_idx));
                         if is_active_combined
                             && combined.source.follow_mode
                             && combined.source.mode == ViewMode::Normal
@@ -886,11 +887,11 @@ fn collect_file_events(app: &mut App, force_poll: bool) -> Vec<AppEvent> {
 /// Collect filter progress from all tabs (regular + combined)
 fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
     let mut events = Vec::new();
-    let active_tab = app.active_tab;
-    let active_combined = app.active_combined;
+    let active_tab = app.tab_mgr.active;
+    let active_combined = app.tab_mgr.active_combined;
 
     // Regular tabs
-    for (tab_idx, tab) in app.tabs.iter_mut().enumerate() {
+    for (tab_idx, tab) in app.tab_mgr.tabs.iter_mut().enumerate() {
         if let Some(ref rx) = tab.source.filter.receiver {
             match rx.try_recv() {
                 Ok(progress) => {
@@ -932,7 +933,7 @@ fn collect_filter_progress(app: &mut App) -> Vec<AppEvent> {
 
     // Combined tabs
     for cat_idx in 0..5 {
-        if let Some(ref mut combined) = app.combined_tabs[cat_idx] {
+        if let Some(ref mut combined) = app.tab_mgr.combined[cat_idx] {
             if let Some(ref rx) = combined.source.filter.receiver {
                 match rx.try_recv() {
                     Ok(progress) => {
@@ -981,7 +982,7 @@ fn collect_stream_events(app: &mut App) -> bool {
     use std::sync::mpsc::TryRecvError;
 
     let mut has_pending = false;
-    for tab in app.tabs.iter_mut() {
+    for tab in app.tab_mgr.tabs.iter_mut() {
         if tab.stream_receiver.is_none() {
             continue;
         }
