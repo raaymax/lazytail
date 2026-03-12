@@ -5,7 +5,8 @@
 name: LazyTail
 
 # Theme: Tokyo Night
-theme: tokyo-night
+#theme: tokyo-night
+theme: dark
 
 # Rendering presets for structured log lines
 renderers:

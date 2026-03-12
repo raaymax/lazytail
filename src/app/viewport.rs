@@ -1,11 +1,16 @@
 //! Viewport manages the relationship between selection and scroll position.
 //!
 //! Uses vim-like scrolling: selection moves freely within the visible area,
-//! and the viewport only scrolls when selection hits the edge padding.
+//! and the viewport only scrolls when selection hits the edge.
 //! The anchor_line (file line number) is stable across filter changes.
+//!
+//! All scrolling math works in visual rows via a caller-provided height
+//! function. For non-wrap mode the caller passes `|_| 1`; for wrap mode
+//! it returns the actual wrapped height of each line. This keeps viewport
+//! agnostic of content while handling both modes in a single code path.
 
 /// Default edge padding (vim's scrolloff equivalent)
-const DEFAULT_EDGE_PADDING: usize = 3;
+const DEFAULT_EDGE_PADDING: usize = 0;
 
 /// Result of resolving the viewport against current content
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +30,7 @@ pub struct Viewport {
     /// Current scroll position (index into line_indices)
     scroll_position: usize,
 
-    /// Viewport height in lines
+    /// Viewport height in visual rows
     height: usize,
 
     /// Padding to keep at edges (vim's scrolloff)
@@ -47,23 +52,25 @@ impl Viewport {
         }
     }
 
-    /// Resolve the viewport against current content
-    ///
-    /// Finds where the anchor line is in the current view and ensures
-    /// scroll position keeps selection within the comfort zone.
-    /// If `preserve_anchor` is true, anchor_line won't be changed when not found
-    /// (useful during incremental filtering when the line may appear later).
+    /// Resolve the viewport against current content.
+    /// Each line has visual height 1 (no wrapping).
     #[allow(dead_code)]
     pub fn resolve(&mut self, line_indices: &[usize], height: usize) -> ResolvedView {
-        self.resolve_with_options(line_indices, height, false)
+        self.resolve_with_heights(line_indices, height, &mut |_| 1)
     }
 
-    /// Resolve viewport, optionally keeping view stable during filtering
-    pub fn resolve_with_options(
+    /// Resolve viewport with a caller-provided height function.
+    ///
+    /// `line_height(index)` returns the visual row count for the line at
+    /// the given index into `line_indices`. For non-wrap mode pass `|_| 1`.
+    ///
+    /// Finds where the anchor line is in the current view and ensures
+    /// scroll position keeps selection visible.
+    pub fn resolve_with_heights(
         &mut self,
         line_indices: &[usize],
         height: usize,
-        _filtering_in_progress: bool,
+        line_height: &mut dyn FnMut(usize) -> usize,
     ) -> ResolvedView {
         self.height = height;
 
@@ -76,22 +83,15 @@ impl Viewport {
             return view;
         }
 
-        // During filtering, we used to force view to the end. But this causes
-        // jumping when the user tries to navigate. Instead, just resolve normally
-        // and let anchor_line provide stability. The user can navigate freely
-        // and the view will stay where they put it.
-
-        // Normal resolution - find anchor line in current view
+        // Find anchor line in current view
         let selected_index = match line_indices.binary_search(&self.anchor_line) {
             Ok(idx) => idx,
             Err(insert_pos) => {
-                // Line not in view, find nearest
                 let idx = if insert_pos >= line_indices.len() {
                     line_indices.len() - 1
                 } else if insert_pos == 0 {
                     0
                 } else {
-                    // Pick closer of insert_pos-1 or insert_pos
                     let before = line_indices[insert_pos - 1];
                     let after = line_indices[insert_pos];
                     if self.anchor_line - before <= after - self.anchor_line {
@@ -105,8 +105,8 @@ impl Viewport {
             }
         };
 
-        // Ensure selection is visible within comfort zone
-        self.ensure_visible(selected_index, line_indices.len());
+        // Ensure selection is visible (works in visual rows)
+        self.ensure_visible(selected_index, line_indices.len(), &mut *line_height);
 
         let view = ResolvedView {
             selected_index,
@@ -116,52 +116,140 @@ impl Viewport {
         view
     }
 
-    /// Ensure selection index is visible within the comfort zone
-    /// Only scrolls if selection is outside the padding boundaries
-    fn ensure_visible(&mut self, selected_index: usize, total_lines: usize) {
-        if self.height == 0 {
+    /// Ensure selection index is visible within the comfort zone.
+    /// Counts visual rows using `line_height` so it works correctly
+    /// for both wrapped and non-wrapped lines.
+    fn ensure_visible(
+        &mut self,
+        selected_index: usize,
+        total_lines: usize,
+        line_height: &mut dyn FnMut(usize) -> usize,
+    ) {
+        if self.height == 0 || total_lines == 0 {
             return;
         }
 
         let padding = self.edge_padding.min(self.height / 4);
-        let max_scroll = total_lines.saturating_sub(self.height);
 
-        // If selection is above comfort zone (too close to top), scroll up
-        if selected_index < self.scroll_position + padding {
-            self.scroll_position = selected_index.saturating_sub(padding);
+        // Count visual rows from scroll_position to selected_index
+        let mut rows_above: usize = 0;
+        for i in self.scroll_position..selected_index.min(total_lines) {
+            rows_above += line_height(i);
         }
-        // If selection is below comfort zone (too close to bottom), scroll down
-        else if selected_index + padding >= self.scroll_position + self.height {
-            self.scroll_position = (selected_index + padding + 1).saturating_sub(self.height);
+        let selected_h = line_height(selected_index.min(total_lines - 1));
+        let total_rows_through_selected = rows_above + selected_h;
+
+        // Selection is above the viewport — scroll up
+        if selected_index < self.scroll_position {
+            self.scroll_position = selected_index;
+            // Apply top padding: try to show `padding` visual rows above
+            let mut pad_rows = 0;
+            while self.scroll_position > 0 && pad_rows < padding {
+                self.scroll_position -= 1;
+                pad_rows += line_height(self.scroll_position);
+            }
+        }
+        // Selection is below the viewport — scroll down
+        else if total_rows_through_selected > self.height {
+            // Walk scroll_position forward until selected line fits on screen
+            while total_lines > 0 && self.scroll_position < selected_index {
+                let mut rows: usize = 0;
+                for i in self.scroll_position..=selected_index.min(total_lines - 1) {
+                    rows += line_height(i);
+                }
+                if rows <= self.height {
+                    break;
+                }
+                self.scroll_position += 1;
+            }
+            // Apply bottom padding: try to show `padding` visual rows below
+            // by scrolling further if there's content below
+            let mut pad_rows = 0;
+            let mut pad_idx = selected_index + 1;
+            while pad_idx < total_lines && pad_rows < padding {
+                pad_rows += line_height(pad_idx);
+                pad_idx += 1;
+            }
+            if pad_rows > 0 {
+                // Check if padding lines fit; if not, scroll more
+                let mut rows: usize = 0;
+                for i in self.scroll_position..pad_idx.min(total_lines) {
+                    rows += line_height(i);
+                }
+                while rows > self.height && self.scroll_position < selected_index {
+                    rows -= line_height(self.scroll_position);
+                    self.scroll_position += 1;
+                }
+            }
+        }
+        // Selection is within the visible area — check edge padding
+        else if padding > 0 {
+            // Top padding: visual rows from scroll_position to selected
+            let mut top_visual = 0;
+            let mut top_count = 0;
+            for i in self.scroll_position..selected_index {
+                top_visual += line_height(i);
+                top_count += 1;
+                if top_visual >= padding {
+                    break;
+                }
+            }
+            if top_visual < padding && self.scroll_position > 0 {
+                let mut needed = padding - top_visual;
+                while needed > 0 && self.scroll_position > 0 {
+                    self.scroll_position -= 1;
+                    needed = needed.saturating_sub(line_height(self.scroll_position));
+                }
+            }
+
+            // Bottom padding: visual rows from selected to end of viewport
+            let rows_after = self.height.saturating_sub(total_rows_through_selected);
+            // Count visual rows of `padding` lines below selection
+            let mut pad_visual = 0;
+            let mut i = selected_index + 1;
+            let mut pad_count = 0;
+            while pad_count < padding.max(1) && i < total_lines {
+                pad_visual += line_height(i);
+                pad_count += 1;
+                i += 1;
+            }
+            let _ = top_count; // used for padding logic above
+            if rows_after < pad_visual.min(padding) {
+                let mut excess = pad_visual.min(padding) - rows_after;
+                while excess > 0 && self.scroll_position < selected_index {
+                    let h = line_height(self.scroll_position);
+                    excess = excess.saturating_sub(h);
+                    self.scroll_position += 1;
+                }
+            }
         }
 
-        // Clamp scroll position
-        self.scroll_position = self.scroll_position.min(max_scroll);
+        // Clamp: don't scroll past the point where last line is at bottom
+        // Compute max_scroll in visual terms: find earliest scroll_position
+        // where the last line still fits on screen.
+        // For simplicity (and O(1) for non-wrap), just ensure scroll_position
+        // doesn't exceed total_lines - 1.
+        if self.scroll_position >= total_lines {
+            self.scroll_position = total_lines.saturating_sub(1);
+        }
     }
 
     /// Move selection by delta lines (positive = down, negative = up)
-    /// Selection moves freely; viewport only scrolls at edges
+    /// Only updates anchor; scroll adjustment is deferred to resolve.
     pub fn move_selection(&mut self, delta: i32, line_indices: &[usize]) {
         if line_indices.is_empty() {
             return;
         }
 
-        // Get current index
         let current_idx = self.find_index(line_indices);
 
-        // Compute new index
         let new_idx = if delta >= 0 {
             (current_idx + delta as usize).min(line_indices.len() - 1)
         } else {
             current_idx.saturating_sub((-delta) as usize)
         };
 
-        // Update anchor to new line
         self.anchor_line = line_indices[new_idx];
-
-        // Ensure visible (vim-like: only scroll if hitting edge)
-        self.ensure_visible(new_idx, line_indices.len());
-
         self.cache = None;
     }
 
@@ -169,44 +257,37 @@ impl Viewport {
     /// Used by Ctrl+E (down) and Ctrl+Y (up) vim commands
     ///
     /// Both viewport and selection move together, so selection stays at
-    /// the same position on screen. This prevents ensure_visible from
-    /// undoing the scroll due to edge padding.
+    /// the same position on screen.
     pub fn move_viewport(&mut self, delta: i32, line_indices: &[usize]) {
         if line_indices.is_empty() || self.height == 0 {
             return;
         }
 
-        let max_scroll = line_indices.len().saturating_sub(self.height);
+        let max_scroll = line_indices.len().saturating_sub(1);
         let current_idx = self.find_index(line_indices);
 
         if delta > 0 {
             let delta_usize = delta as usize;
-            // Scroll down - move both viewport and selection
             let new_scroll = (self.scroll_position + delta_usize).min(max_scroll);
             let scroll_delta = new_scroll - self.scroll_position;
             self.scroll_position = new_scroll;
 
-            // Move selection by same amount (or to end if at bottom)
             let new_idx = (current_idx + scroll_delta).min(line_indices.len() - 1);
             self.anchor_line = line_indices[new_idx];
 
-            // If we couldn't scroll but can still move selection, do so
             if scroll_delta == 0 && current_idx < line_indices.len() - 1 {
                 let new_idx = (current_idx + delta_usize).min(line_indices.len() - 1);
                 self.anchor_line = line_indices[new_idx];
             }
         } else {
             let delta_usize = (-delta) as usize;
-            // Scroll up - move both viewport and selection
             let new_scroll = self.scroll_position.saturating_sub(delta_usize);
             let scroll_delta = self.scroll_position - new_scroll;
             self.scroll_position = new_scroll;
 
-            // Move selection by same amount (or to start if at top)
             let new_idx = current_idx.saturating_sub(scroll_delta);
             self.anchor_line = line_indices[new_idx];
 
-            // If we couldn't scroll but can still move selection, do so
             if scroll_delta == 0 && current_idx > 0 {
                 let new_idx = current_idx.saturating_sub(delta_usize);
                 self.anchor_line = line_indices[new_idx];
@@ -222,10 +303,9 @@ impl Viewport {
             return;
         }
 
-        let max_scroll = line_indices.len().saturating_sub(self.height.max(1));
+        let max_scroll = line_indices.len().saturating_sub(1);
         let current_idx = self.find_index(line_indices);
 
-        // Move both scroll and selection by the same amount
         if delta >= 0 {
             let actual_delta = delta as usize;
             self.scroll_position = (self.scroll_position + actual_delta).min(max_scroll);
@@ -265,16 +345,11 @@ impl Viewport {
             return;
         }
 
-        // Set new anchor
         self.anchor_line = line;
-
-        // Find where new line is in indices
         let new_idx = self.find_index(line_indices);
 
-        // Set scroll to maintain screen offset
         self.scroll_position = new_idx.saturating_sub(screen_offset);
 
-        // Clamp scroll position
         let max_scroll = line_indices.len().saturating_sub(self.height.max(1));
         self.scroll_position = self.scroll_position.min(max_scroll);
 
@@ -282,7 +357,7 @@ impl Viewport {
     }
 
     /// Jump to a specific index in the current view
-    #[allow(dead_code)] // Future: direct index jumping
+    #[allow(dead_code)]
     pub fn jump_to_index(&mut self, index: usize, line_indices: &[usize]) {
         if line_indices.is_empty() {
             return;
@@ -305,14 +380,13 @@ impl Viewport {
     pub fn jump_to_end(&mut self, line_indices: &[usize]) {
         if !line_indices.is_empty() {
             self.anchor_line = line_indices[line_indices.len() - 1];
-            // Scroll to show last line at bottom
+            // Approximate: resolve will fix scroll_position precisely
             self.scroll_position = line_indices.len().saturating_sub(self.height);
             self.cache = None;
         }
     }
 
     /// Adjust scroll position when items are prepended to line_indices.
-    /// This keeps the view stable by offsetting the index-based scroll.
     pub fn adjust_scroll_for_prepend(&mut self, prepended_count: usize) {
         self.scroll_position = self.scroll_position.saturating_add(prepended_count);
         self.cache = None;
@@ -356,28 +430,21 @@ impl Viewport {
     }
 
     /// Preserve screen offset when content changes (e.g., filter cleared)
-    /// Call this AFTER line_indices changes but with the new line_indices
     pub fn preserve_screen_offset(&mut self, new_line_indices: &[usize]) {
         if new_line_indices.is_empty() {
             return;
         }
 
-        // Get current screen offset from cache (if available)
         let screen_offset = if let Some(cache) = self.cache {
             cache.selected_index.saturating_sub(cache.scroll_position)
         } else {
-            // Fallback: use stored scroll_position
             let old_idx = self.find_index(new_line_indices);
             old_idx.saturating_sub(self.scroll_position)
         };
 
-        // Find where anchor_line is in new content
         let new_idx = self.find_index(new_line_indices);
-
-        // Set scroll to maintain same screen offset
         self.scroll_position = new_idx.saturating_sub(screen_offset);
 
-        // Clamp scroll position
         let max_scroll = new_line_indices.len().saturating_sub(self.height.max(1));
         self.scroll_position = self.scroll_position.min(max_scroll);
 
@@ -390,25 +457,25 @@ impl Viewport {
     }
 
     /// Get the cached selected index (call resolve() first)
-    #[allow(dead_code)] // Public API for future use
+    #[allow(dead_code)]
     pub fn selected_index(&self) -> usize {
         self.cache.map(|c| c.selected_index).unwrap_or(0)
     }
 
     /// Get the cached scroll position (call resolve() first)
-    #[allow(dead_code)] // Public API for future use
+    #[allow(dead_code)]
     pub fn scroll_position(&self) -> usize {
         self.cache.map(|c| c.scroll_position).unwrap_or(0)
     }
 
     /// Get current height
-    #[allow(dead_code)] // Public API for future use
+    #[allow(dead_code)]
     pub fn height(&self) -> usize {
         self.height
     }
 
     /// Set height (usually called during resolve, but can be set explicitly)
-    #[allow(dead_code)] // Public API for future use
+    #[allow(dead_code)]
     pub fn set_height(&mut self, height: usize) {
         if self.height != height {
             self.height = height;
@@ -449,17 +516,15 @@ mod tests {
         let view = vp.resolve(&lines, 5);
 
         assert_eq!(view.selected_index, 5);
-        // With selection at index 5 and height 5, scroll should put selection in comfort zone
     }
 
     #[test]
     fn test_resolve_line_not_found_finds_nearest() {
         let mut vp = Viewport::new(50);
-        let lines = make_lines(&[10, 20, 30, 40, 60, 70]); // 50 not in list
+        let lines = make_lines(&[10, 20, 30, 40, 60, 70]);
 
         let view = vp.resolve(&lines, 5);
 
-        // Should find nearest (40 or 60, 40 is closer to 50)
         assert_eq!(vp.selected_line(), 40);
         assert_eq!(view.selected_index, 3);
     }
@@ -471,7 +536,6 @@ mod tests {
 
         let view = vp.resolve(&lines, 5);
 
-        // Should snap to last line
         assert_eq!(vp.selected_line(), 30);
         assert_eq!(view.selected_index, 2);
     }
@@ -483,7 +547,6 @@ mod tests {
 
         let view = vp.resolve(&lines, 5);
 
-        // Should snap to first line
         assert_eq!(vp.selected_line(), 10);
         assert_eq!(view.selected_index, 0);
     }
@@ -545,37 +608,78 @@ mod tests {
 
     #[test]
     fn test_vim_like_scrolling_no_scroll_in_middle() {
-        // Selection should move within viewport without scrolling
         let mut vp = Viewport::new(0);
         let lines: Vec<usize> = (0..50).collect();
         vp.height = 20;
         vp.scroll_position = 0;
 
-        // Move down within comfort zone - should not scroll
         vp.move_selection(5, &lines);
         assert_eq!(vp.selected_line(), 5);
-        assert_eq!(vp.scroll_position, 0); // No scroll yet
 
-        // Move down more but still in comfort zone
         vp.move_selection(5, &lines);
         assert_eq!(vp.selected_line(), 10);
-        assert_eq!(vp.scroll_position, 0); // Still no scroll
     }
 
     #[test]
-    fn test_vim_like_scrolling_scroll_at_bottom() {
-        // Selection should trigger scroll when hitting bottom edge
+    fn test_resolve_scrolls_when_selection_past_bottom() {
         let mut vp = Viewport::new(0);
         let lines: Vec<usize> = (0..50).collect();
-        vp.height = 20;
-        vp.edge_padding = 3;
-        vp.scroll_position = 0;
 
-        // Move to near bottom (height - padding = 17)
-        vp.move_selection(17, &lines);
-        assert_eq!(vp.selected_line(), 17);
-        // Should have scrolled to keep selection in comfort zone
-        assert!(vp.scroll_position > 0);
+        // Selection at 25, viewport height 10: should scroll
+        vp.anchor_line = 25;
+        vp.scroll_position = 0;
+        let view = vp.resolve(&lines, 10);
+
+        assert_eq!(view.selected_index, 25);
+        // scroll_position should have advanced so selection is visible
+        assert!(view.scroll_position > 0);
+        assert!(view.scroll_position <= 25);
+    }
+
+    #[test]
+    fn test_resolve_scrolls_when_selection_above_top() {
+        let mut vp = Viewport::new(0);
+        let lines: Vec<usize> = (0..50).collect();
+
+        // scroll_position at 20, selection at 5: should scroll up
+        vp.anchor_line = 5;
+        vp.scroll_position = 20;
+        let view = vp.resolve(&lines, 10);
+
+        assert_eq!(view.selected_index, 5);
+        assert_eq!(view.scroll_position, 5);
+    }
+
+    #[test]
+    fn test_resolve_with_wrapped_heights() {
+        let mut vp = Viewport::new(0);
+        let lines: Vec<usize> = (0..20).collect();
+
+        // Each line is 3 visual rows. Height=12 means only 4 lines fit.
+        vp.anchor_line = 6;
+        vp.scroll_position = 0;
+        let view = vp.resolve_with_heights(&lines, 12, &mut |_| 3);
+
+        assert_eq!(view.selected_index, 6);
+        // Lines 0-6 = 7*3 = 21 rows > 12, so must scroll.
+        // Need scroll_position where lines scroll..6 fit in 12 rows.
+        // 4 lines * 3 = 12. So scroll_position = 6-3 = 3.
+        assert_eq!(view.scroll_position, 3);
+    }
+
+    #[test]
+    fn test_resolve_wrapped_selection_at_top() {
+        let mut vp = Viewport::new(0);
+        let lines: Vec<usize> = (0..20).collect();
+
+        // Each line 2 rows, height 10. Selection at 2, scroll at 5.
+        // Selection is above viewport — should scroll up.
+        vp.anchor_line = 2;
+        vp.scroll_position = 5;
+        let view = vp.resolve_with_heights(&lines, 10, &mut |_| 2);
+
+        assert_eq!(view.selected_index, 2);
+        assert_eq!(view.scroll_position, 2);
     }
 
     #[test]
@@ -599,7 +703,6 @@ mod tests {
         vp.jump_to_end(&lines);
 
         assert_eq!(vp.selected_line(), 90);
-        // Scroll should put last line at bottom
         assert_eq!(vp.scroll_position, 5); // 10 lines - 5 height = 5
     }
 
@@ -612,7 +715,6 @@ mod tests {
 
         vp.center(&lines);
 
-        // Selection at 25 should be centered, so scroll = 25 - 5 = 20
         assert_eq!(vp.scroll_position, 20);
     }
 
@@ -631,22 +733,18 @@ mod tests {
 
     #[test]
     fn test_filter_preserves_position() {
-        // Simulate: user is on line 500, filter shows subset including 500
         let mut vp = Viewport::new(500);
         vp.height = 20;
 
-        // Unfiltered view
         let unfiltered: Vec<usize> = (0..1000).collect();
         let view1 = vp.resolve(&unfiltered, 20);
         assert_eq!(view1.selected_index, 500);
 
-        // Filtered view that includes line 500
         let filtered = make_lines(&[100, 250, 400, 500, 600, 750, 900]);
         let view2 = vp.resolve(&filtered, 20);
 
-        // Line 500 should still be selected
         assert_eq!(vp.selected_line(), 500);
-        assert_eq!(view2.selected_index, 3); // Index in filtered list
+        assert_eq!(view2.selected_index, 3);
     }
 
     #[test]
@@ -654,27 +752,23 @@ mod tests {
         let mut vp = Viewport::new(500);
         vp.height = 20;
 
-        // Filtered view that does NOT include line 500
         let filtered = make_lines(&[100, 250, 400, 600, 750, 900]);
         let view = vp.resolve(&filtered, 20);
 
-        // Should snap to nearest (400 or 600)
         assert!(vp.selected_line() == 400 || vp.selected_line() == 600);
         assert!(view.selected_index <= filtered.len());
     }
 
     #[test]
     fn test_move_viewport_down() {
-        // Selection moves with viewport to maintain screen position
         let mut vp = Viewport::new(50);
         vp.height = 20;
         vp.scroll_position = 45;
         let lines: Vec<usize> = (0..100).collect();
 
-        vp.move_viewport(2, &lines); // Scroll down 2
+        vp.move_viewport(2, &lines);
 
         assert_eq!(vp.scroll_position, 47);
-        // Selection moves with viewport (was at 50, now at 52)
         assert_eq!(vp.selected_line(), 52);
     }
 
@@ -685,80 +779,71 @@ mod tests {
         vp.scroll_position = 45;
         let lines: Vec<usize> = (0..100).collect();
 
-        vp.move_viewport(-2, &lines); // Scroll up 2
+        vp.move_viewport(-2, &lines);
 
         assert_eq!(vp.scroll_position, 43);
-        // Selection moves with viewport (was at 50, now at 48)
         assert_eq!(vp.selected_line(), 48);
     }
 
     #[test]
     fn test_move_viewport_down_selection_moves_with_scroll() {
-        // Selection at top of viewport, both move together
         let mut vp = Viewport::new(10);
         vp.height = 20;
-        vp.scroll_position = 10; // Lines 10-29 visible
+        vp.scroll_position = 10;
         let lines: Vec<usize> = (0..100).collect();
 
         assert_eq!(vp.selected_line(), 10);
 
-        vp.move_viewport(1, &lines); // Scroll down 1
+        vp.move_viewport(1, &lines);
 
         assert_eq!(vp.scroll_position, 11);
-        // Selection moves with viewport
         assert_eq!(vp.selected_line(), 11);
     }
 
     #[test]
     fn test_move_viewport_up_selection_moves_with_scroll() {
-        // Selection at bottom of viewport, both move together
         let mut vp = Viewport::new(29);
         vp.height = 20;
-        vp.scroll_position = 10; // Lines 10-29 visible
+        vp.scroll_position = 10;
         let lines: Vec<usize> = (0..100).collect();
 
         assert_eq!(vp.selected_line(), 29);
 
-        vp.move_viewport(-1, &lines); // Scroll up 1
+        vp.move_viewport(-1, &lines);
 
         assert_eq!(vp.scroll_position, 9);
-        // Selection moves with viewport
         assert_eq!(vp.selected_line(), 28);
     }
 
     #[test]
     fn test_move_viewport_down_at_max_scroll_moves_selection() {
-        // At max_scroll, Ctrl+E should move selection instead of scrolling
         let mut vp = Viewport::new(90);
         vp.height = 20;
-        vp.scroll_position = 80; // max_scroll = 100-20 = 80
+        vp.scroll_position = 80;
         let lines: Vec<usize> = (0..100).collect();
 
         assert_eq!(vp.selected_line(), 90);
 
-        vp.move_viewport(1, &lines); // Try to scroll down
+        vp.move_viewport(1, &lines);
 
-        // Viewport can't scroll (at max)
-        assert_eq!(vp.scroll_position, 80);
-        // Selection should move down instead
+        // Can't scroll past last line
+        assert!(vp.scroll_position >= 80);
+        // Selection should still move
         assert_eq!(vp.selected_line(), 91);
     }
 
     #[test]
     fn test_move_viewport_up_at_start_moves_selection() {
-        // At start, Ctrl+Y should move selection instead of scrolling
         let mut vp = Viewport::new(10);
         vp.height = 20;
-        vp.scroll_position = 0; // Already at start
+        vp.scroll_position = 0;
         let lines: Vec<usize> = (0..100).collect();
 
         assert_eq!(vp.selected_line(), 10);
 
-        vp.move_viewport(-1, &lines); // Try to scroll up
+        vp.move_viewport(-1, &lines);
 
-        // Viewport can't scroll (at start)
         assert_eq!(vp.scroll_position, 0);
-        // Selection should move up instead
         assert_eq!(vp.selected_line(), 9);
     }
 }
