@@ -4,16 +4,19 @@ mod capture;
 mod cli;
 mod config;
 mod filter;
+mod filter_orchestrator;
 mod handlers;
 mod history;
 mod log_source;
 #[cfg(feature = "mcp")]
 mod mcp;
+mod parsing;
 mod reader;
 mod renderer;
 mod session;
 mod signal;
 mod source;
+mod text_wrap;
 mod theme;
 mod tui;
 #[cfg(feature = "self-update")]

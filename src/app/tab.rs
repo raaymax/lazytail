@@ -759,7 +759,7 @@ impl TabState {
                 if new_total > self.source.filter.last_filtered_line {
                     let mode = self.source.filter.mode;
                     let range = Some((self.source.filter.last_filtered_line, new_total));
-                    if let Err(e) = crate::filter::orchestrator::FilterOrchestrator::trigger(
+                    if let Err(e) = crate::filter_orchestrator::FilterOrchestrator::trigger(
                         &mut self.source,
                         pattern,
                         mode,
@@ -869,7 +869,7 @@ impl TabState {
     /// Cancels any in-progress filter, resets all filter state,
     /// rebuilds line indices, and repositions the viewport.
     pub fn reset_after_truncation(&mut self, new_total: usize) {
-        use crate::filter::orchestrator::FilterOrchestrator;
+        use crate::filter_orchestrator::FilterOrchestrator;
 
         FilterOrchestrator::cancel(&mut self.source);
         self.source.filter.receiver = None;
