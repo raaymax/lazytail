@@ -133,7 +133,7 @@ fn generate_test_file(path: &Path, target_size_mb: usize) -> (u64, usize) {
             line_count % 1000,
         );
 
-        let line = if line_count % 3 == 0 {
+        let line = if line_count.is_multiple_of(3) {
             format!(
                 r#"{{"level":"{}","message":"{}","service":"{}","timestamp":"{}","request_id":"req-{:06}","duration_ms":{},"extra_field_1":"value_{}","extra_field_2":"another_value_{}"}}
 "#,
@@ -206,6 +206,7 @@ fn collect_matches(rx: std::sync::mpsc::Receiver<FilterProgress>) -> (usize, usi
 
 struct FilterBenchCase {
     name: &'static str,
+    #[allow(clippy::type_complexity)]
     run: Box<dyn Fn(&Path) -> (usize, usize)>,
 }
 

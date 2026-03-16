@@ -376,12 +376,14 @@ impl FileReader {
 
     /// Whether this reader has loaded columnar offsets for O(1) line access.
     #[cfg(test)]
+    #[allow(dead_code)] // Used by lib tests (healing_tests), not bin tests
     pub(crate) fn has_columnar_offsets(&self) -> bool {
         self.columnar_offsets.is_some()
     }
 
     /// Number of lines covered by the columnar index.
     #[cfg(test)]
+    #[allow(dead_code)] // Used by lib tests (healing_tests), not bin tests
     pub(crate) fn columnar_line_count(&self) -> usize {
         self.indexed_lines
     }

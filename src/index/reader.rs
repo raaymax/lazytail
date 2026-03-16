@@ -446,9 +446,9 @@ mod tests {
         // Write offsets column
         let mut offsets = ColumnWriter::<u64>::create(idx_dir.join("offsets")).unwrap();
         let mut offset = 0u64;
-        for i in 0..line_count {
+        for line in lines.iter().take(line_count) {
             offsets.push(offset).unwrap();
-            offset += lines[i].len() as u64 + 1; // +1 for newline
+            offset += line.len() as u64 + 1; // +1 for newline
         }
         drop(offsets);
 
@@ -521,7 +521,7 @@ mod tests {
             .append(true)
             .open(&log_path)
             .unwrap();
-        write!(f, "line four\n").unwrap();
+        writeln!(f, "line four").unwrap();
         drop(f);
 
         let stats = IndexReader::stats(&log_path);

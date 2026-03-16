@@ -17,7 +17,7 @@ fn history_file_path() -> Option<PathBuf> {
 pub fn load_history() -> Vec<FilterHistoryEntry> {
     #[cfg(test)]
     {
-        return Vec::new();
+        Vec::new()
     }
 
     #[cfg(not(test))]
@@ -37,7 +37,6 @@ pub fn save_history(history: &[FilterHistoryEntry]) {
     #[cfg(test)]
     {
         let _ = history;
-        return;
     }
 
     #[cfg(not(test))]

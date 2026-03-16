@@ -41,7 +41,7 @@ pub fn load_last_source(project_root: Option<&Path>) -> Option<String> {
     #[cfg(test)]
     {
         let _ = project_root;
-        return None;
+        None
     }
 
     #[cfg(not(test))]
@@ -59,7 +59,6 @@ pub fn save_last_source(project_root: Option<&Path>, name: &str) {
     #[cfg(test)]
     {
         let _ = (project_root, name);
-        return;
     }
 
     #[cfg(not(test))]

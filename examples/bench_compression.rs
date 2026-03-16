@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         frame_buffer.push('\n');
         line_count += 1;
 
-        if line_count % frame_size as u64 == 0 {
+        if line_count.is_multiple_of(frame_size as u64) {
             let original = frame_buffer.len() as u64;
             let compressed = compress_lz4(frame_buffer.as_bytes());
             let compressed_len = compressed.len() as u64;
@@ -87,7 +87,7 @@ fn main() -> Result<()> {
             frame_count += 1;
 
             // Progress every 100 frames
-            if frame_count % 100 == 0 {
+            if frame_count.is_multiple_of(100) {
                 let ratio = total_original as f64 / total_compressed as f64;
                 println!(
                     "  Processed {} frames ({} lines) - Ratio: {:.2}x",
