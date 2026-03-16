@@ -234,7 +234,7 @@ mod tests {
         let path = dir.path().join("truncated_meta");
 
         // Write only 32 bytes (less than META_SIZE)
-        std::fs::write(&path, &[0u8; 32]).unwrap();
+        std::fs::write(&path, [0u8; 32]).unwrap();
         let err = IndexMeta::read_from(&path).unwrap_err();
         assert!(err.to_string().contains("too small"));
     }

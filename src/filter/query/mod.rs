@@ -24,12 +24,14 @@ mod ast;
 mod filter;
 mod parser;
 
-// Re-export all public types for backward compatibility
-pub use ast::{
-    Aggregation, AggregationType, ExcludePattern, FieldFilter, FilterQuery, Operator, Parser,
-};
+// Re-export public types used outside this module
+pub use ast::{Aggregation, FilterQuery, Parser};
 pub use filter::QueryFilter;
-pub use parser::{parse_query, QueryParseError};
+pub use parser::parse_query;
+
+// Re-export types only used in tests
+#[cfg(test)]
+pub use ast::{AggregationType, ExcludePattern, FieldFilter, Operator};
 
 // Re-export from shared parsing module
 pub use crate::parsing::{extract_json_field, parse_logfmt};

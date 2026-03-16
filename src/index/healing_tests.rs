@@ -84,7 +84,7 @@ impl HealingFixture {
     }
 
     fn open_reader(&self) -> FileReader {
-        FileReader::new(&self.log_path()).unwrap()
+        FileReader::new(self.log_path()).unwrap()
     }
 
     fn assert_lines(&self, reader: &mut FileReader, expected: &[String]) {
@@ -378,8 +378,8 @@ fn detect_symlink_retarget() {
     let log2 = dir.path().join("real2.log");
     let link = dir.path().join("current.log");
 
-    fs::write(&log1, &make_lines(10)).unwrap();
-    fs::write(&log2, &make_lines_offset(100, 10)).unwrap();
+    fs::write(&log1, make_lines(10)).unwrap();
+    fs::write(&log2, make_lines_offset(100, 10)).unwrap();
 
     std::os::unix::fs::symlink(&log1, &link).unwrap();
     let idx_dir = index_dir_for_log(&link);
@@ -398,7 +398,7 @@ fn detect_symlink_retarget() {
 #[test]
 fn detect_index_dir_is_regular_file() {
     let fix = HealingFixture::new(&make_lines(5));
-    fs::write(&fix.idx_dir(), "not a directory").unwrap();
+    fs::write(fix.idx_dir(), "not a directory").unwrap();
 
     let reader = fix.open_reader();
     assert!(!reader.has_columnar_offsets());
@@ -1081,7 +1081,7 @@ fn manual_edit_same_length_between_checkpoints_must_be_detected() {
         content.push_str(&format!("line {:04}\n", i)); // fixed-width: "line 0005\n" = 10 bytes
     }
     let fix = HealingFixture::new(&content);
-    let meta = fix.build_index_with_interval(10);
+    let _meta = fix.build_index_with_interval(10);
 
     // Edit line 5: "line 0005" → "LINE 0005" (same length)
     let edited = content.replace("line 0005", "LINE 0005");
@@ -1107,7 +1107,7 @@ fn manual_edit_same_length_between_checkpoints_must_be_detected() {
 #[test]
 fn manual_edit_changes_line_length_must_invalidate_index() {
     let fix = HealingFixture::new(&make_lines(20));
-    let meta = fix.build_index_with_interval(10);
+    let _meta = fix.build_index_with_interval(10);
 
     // Replace line 5 with a longer version
     let original = fs::read_to_string(fix.log_path()).unwrap();
@@ -1143,7 +1143,7 @@ fn manual_edit_changes_line_length_must_invalidate_index() {
 #[test]
 fn manual_insert_lines_in_middle_must_invalidate_index() {
     let fix = HealingFixture::new(&make_lines(20));
-    let meta = fix.build_index_with_interval(10);
+    let _meta = fix.build_index_with_interval(10);
 
     // Insert 3 lines after line 5
     let original = fs::read_to_string(fix.log_path()).unwrap();
@@ -1333,8 +1333,8 @@ fn overwrite_beginning_same_size_must_be_detected() {
 
     // Overwrite first 20 bytes with zeros (corrupts first two lines)
     let mut data = fs::read(fix.log_path()).unwrap();
-    for i in 0..20 {
-        data[i] = 0;
+    for byte in data.iter_mut().take(20) {
+        *byte = 0;
     }
     fs::write(fix.log_path(), &data).unwrap();
 
@@ -1345,7 +1345,7 @@ fn overwrite_beginning_same_size_must_be_detected() {
     );
 
     // Reader must not return garbage via columnar path
-    let mut reader = fix.open_reader();
+    let reader = fix.open_reader();
     assert!(
         !reader.has_columnar_offsets(),
         "reader must fall back to sparse after detecting corruption"
