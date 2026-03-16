@@ -7,7 +7,7 @@ use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
-    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation, SourceStatus,
+    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
 };
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -396,9 +396,11 @@ impl TabState {
     /// Only affects tabs created from discovered sources (source_status is Some).
     /// Derives the sources directory from the log file path (sibling of data dir).
     pub fn refresh_source_status(&mut self) {
-        // Only re-check Active sources; Ended sources stay ended.
-        // New captures create new files detected by the directory watcher.
-        if self.source.source_status == Some(SourceStatus::Active) {
+        // Re-check both Active and Ended sources.
+        // Active sources may become Ended when their process exits.
+        // Ended sources may become Active when a new capture starts
+        // (the directory watcher may detect the log file before the marker file exists).
+        if self.source.source_status.is_some() {
             // Derive the sources dir from the log file's data dir:
             // source_path is like .lazytail/data/foo.log → sources dir is .lazytail/sources/
             let status = self
