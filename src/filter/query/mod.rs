@@ -23,6 +23,7 @@
 mod ast;
 mod filter;
 mod parser;
+pub(crate) mod time;
 
 // Re-export public types used outside this module
 pub use ast::{Aggregation, FilterQuery, Parser};
@@ -1057,6 +1058,190 @@ mod tests {
         let json = r#"{"parser": "json"}"#;
         let query: FilterQuery = serde_json::from_str(json).unwrap();
         assert!(query.aggregate.is_none());
+    }
+
+    // ========================================================================
+    // Time-Based Query Tests
+    // ========================================================================
+
+    #[test]
+    fn test_time_query_relative_gte() {
+        // Create a log line with a timestamp from 1 minute ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let one_min_ago = now - 60;
+
+        let line = format!(
+            r#"{{"timestamp": "{}", "level": "error", "msg": "test"}}"#,
+            one_min_ago
+        );
+
+        // Should match: timestamp >= now-5m (1 min ago is within last 5 min)
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+
+        // Should NOT match: timestamp >= now-30s (1 min ago is NOT within last 30s)
+        let query2 = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "now-30s".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter2 = QueryFilter::new(query2).unwrap();
+        assert!(!filter2.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_iso8601_field() {
+        // Log line with ISO 8601 timestamp
+        let line = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "error"}"#;
+
+        // Should match: timestamp >= 2024-01-15T10:00:00Z
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "2024-01-15T10:00:00Z".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        // Without resolved time, this uses string comparison which works for ISO 8601
+        assert!(filter.matches(line));
+    }
+
+    #[test]
+    fn test_time_query_combined_with_level_filter() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let recent = now - 120; // 2 min ago
+
+        let error_line = format!(
+            r#"{{"timestamp": "{}", "level": "error", "msg": "fail"}}"#,
+            recent
+        );
+        let info_line = format!(
+            r#"{{"timestamp": "{}", "level": "info", "msg": "ok"}}"#,
+            recent
+        );
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![
+                FieldFilter {
+                    field: "timestamp".to_string(),
+                    op: Operator::Gte,
+                    value: "now-5m".to_string(),
+                },
+                FieldFilter {
+                    field: "level".to_string(),
+                    op: Operator::Eq,
+                    value: "error".to_string(),
+                },
+            ],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+
+        assert!(filter.matches(&error_line));
+        assert!(!filter.matches(&info_line));
+    }
+
+    #[test]
+    fn test_time_query_logfmt() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let recent = now - 60;
+
+        let line = format!("ts={} level=error msg=\"something failed\"", recent);
+
+        let query = FilterQuery {
+            parser: Parser::Logfmt,
+            filters: vec![FieldFilter {
+                field: "ts".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_lt_operator() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let old = now - 7200; // 2 hours ago
+
+        let line = format!(r#"{{"timestamp": "{}", "msg": "old event"}}"#, old);
+
+        // Should match: timestamp < now-1h (2 hours ago is before 1 hour ago)
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Lt,
+                value: "now-1h".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_json_deserialize() {
+        let json = r#"{
+            "parser": "json",
+            "filters": [
+                {"field": "timestamp", "op": "gte", "value": "now-5m"},
+                {"field": "level", "op": "eq", "value": "error"}
+            ]
+        }"#;
+
+        let query: FilterQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.filters.len(), 2);
+        assert_eq!(query.filters[0].field, "timestamp");
+        assert_eq!(query.filters[0].value, "now-5m");
+
+        // Should construct without error
+        let filter = QueryFilter::new(query).unwrap();
+
+        // Verify it works with a recent timestamp
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let line = format!(r#"{{"timestamp": "{}", "level": "error"}}"#, now - 60);
+        assert!(filter.matches(&line));
     }
 
     // ========================================================================
