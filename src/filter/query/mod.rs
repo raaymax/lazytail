@@ -1272,6 +1272,26 @@ mod tests {
         assert!(filter.matches(&line));
     }
 
+    #[test]
+    fn test_time_query_unparseable_field_returns_no_match() {
+        // When filter has a resolved time (now-5m) but field value is not a timestamp,
+        // parse_timestamp returns None → comparison is None → no match
+        let line = r#"{"level": "error", "msg": "something"}"#;
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(!filter.matches(line));
+    }
+
     // ========================================================================
     // Array Index Field Access Tests (R16)
     // ========================================================================

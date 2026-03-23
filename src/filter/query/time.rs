@@ -110,12 +110,7 @@ pub fn parse_timestamp(value: &str) -> Option<EpochMillis> {
             // Epoch seconds
             return Some(num * 1000);
         }
-        // Other numeric lengths — could be seconds or millis, try heuristic
-        if num > 1_000_000_000_000 {
-            return Some(num); // millis
-        } else if num > 1_000_000_000 {
-            return Some(num * 1000); // seconds
-        }
+        // Other digit lengths are ambiguous — don't guess
     }
 
     // Try datetime formats
@@ -170,13 +165,14 @@ fn parse_datetime(s: &str) -> Option<EpochMillis> {
         }
         let frac_str = &s[frac_start..pos];
         if !frac_str.is_empty() {
-            // Normalize to milliseconds (3 digits)
-            let padded = if frac_str.len() >= 3 {
-                frac_str[..3].to_string()
-            } else {
-                format!("{:0<3}", frac_str)
+            // Normalize to milliseconds using arithmetic (no allocation)
+            let num: i64 = frac_str.parse().unwrap_or(0);
+            frac_millis = match frac_str.len() {
+                1 => num * 100,
+                2 => num * 10,
+                3 => num,
+                n => num / 10_i64.pow((n - 3) as u32),
             };
-            frac_millis = padded.parse().unwrap_or(0);
         }
     }
 

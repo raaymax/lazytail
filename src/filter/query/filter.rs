@@ -49,7 +49,7 @@ impl QueryFilter {
                     not_regex_patterns.push(Some(regex));
                     resolved_times.push(None);
                 }
-                _ => {
+                Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte => {
                     filter_regexes.push(None);
                     not_regex_patterns.push(None);
                     // Resolve time expressions: relative (e.g., "now-5m") or absolute timestamps
@@ -57,6 +57,11 @@ impl QueryFilter {
                         time::resolve_relative_time(&filter.value)
                             .or_else(|| time::parse_timestamp(&filter.value)),
                     );
+                }
+                _ => {
+                    filter_regexes.push(None);
+                    not_regex_patterns.push(None);
+                    resolved_times.push(None);
                 }
             }
         }
