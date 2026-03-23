@@ -52,8 +52,11 @@ impl QueryFilter {
                 _ => {
                     filter_regexes.push(None);
                     not_regex_patterns.push(None);
-                    // Resolve relative time expressions (e.g., "now-5m")
-                    resolved_times.push(time::resolve_relative_time(&filter.value));
+                    // Resolve time expressions: relative (e.g., "now-5m") or absolute timestamps
+                    resolved_times.push(
+                        time::resolve_relative_time(&filter.value)
+                            .or_else(|| time::parse_timestamp(&filter.value)),
+                    );
                 }
             }
         }

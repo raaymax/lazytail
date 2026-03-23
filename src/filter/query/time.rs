@@ -225,8 +225,7 @@ fn parse_datetime(s: &str) -> Option<EpochMillis> {
 
     // Convert to epoch millis using a simplified calculation
     let epoch_days = days_from_civil(year, month, day);
-    let epoch_secs =
-        epoch_days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+    let epoch_secs = epoch_days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
     let epoch_millis = epoch_secs * 1000 + frac_millis + tz_offset_secs * 1000;
 
     Some(epoch_millis)

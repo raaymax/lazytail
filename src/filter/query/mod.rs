@@ -1124,8 +1124,36 @@ mod tests {
             aggregate: None,
         };
         let filter = QueryFilter::new(query).unwrap();
-        // Without resolved time, this uses string comparison which works for ISO 8601
         assert!(filter.matches(line));
+    }
+
+    #[test]
+    fn test_time_query_absolute_timestamp_value() {
+        // Filter VALUE is an absolute timestamp (not "now-..." relative)
+        // Field value: 2024-01-15T10:30:00Z (epoch 1705314600000)
+        // Filter value: 2024-01-15T10:00:00Z (epoch 1705312800000)
+        let line = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "error"}"#;
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "2024-01-15T10:00:00Z".to_string(),
+            }],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(line));
+
+        // Should NOT match when field timestamp is before the filter value
+        let old_line = r#"{"timestamp": "2024-01-15T09:00:00Z", "level": "error"}"#;
+        assert!(!filter.matches(old_line));
+
+        // Cross-format: field has epoch seconds, filter has ISO 8601
+        let epoch_line = r#"{"timestamp": "1705314600", "level": "info"}"#;
+        assert!(filter.matches(epoch_line));
     }
 
     #[test]
