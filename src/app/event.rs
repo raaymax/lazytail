@@ -132,6 +132,9 @@ pub enum AppEvent {
         row: u16,
     },
 
+    // Warning popup
+    DismissWarning,
+
     // System events
     Quit,
 }

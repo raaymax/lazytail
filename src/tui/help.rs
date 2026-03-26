@@ -247,3 +247,45 @@ pub(super) fn render_confirm_close_dialog(f: &mut Frame, area: Rect, app: &App) 
     f.render_widget(Clear, popup_area);
     f.render_widget(paragraph, popup_area);
 }
+
+pub(super) fn render_warning_popup(f: &mut Frame, area: Rect, message: &str, ui: &UiColors) {
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            format!("  {}", message),
+            Style::default()
+                .fg(ui.severity_error)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Press "),
+            Span::styled("any key", Style::default().fg(ui.muted)),
+            Span::raw(" to dismiss"),
+        ]),
+    ];
+
+    let popup_width = 52.min(area.width.saturating_sub(4));
+    let popup_height = 6;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: area.x + popup_x,
+        y: area.y + popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Warning ")
+                .style(Style::default().bg(ui.popup_bg)),
+        )
+        .style(Style::default().bg(ui.popup_bg).fg(ui.fg));
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+}
