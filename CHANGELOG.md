@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/raaymax/lazytail/compare/v0.9.0...v0.10.0) (2026-03-26)
+
+
+### Features
+
+* **query:** time-based queries with [@ts](https://github.com/ts) virtual field and index integrity fixes ([#88](https://github.com/raaymax/lazytail/issues/88)) ([8a108e8](https://github.com/raaymax/lazytail/commit/8a108e857bcc5dc324a7ae792f043b47307a5188))
+
+
+### Bug Fixes
+
+* **combined:** merge $all streams by [@ts](https://github.com/ts) with carry-forward for lagging indexes ([#90](https://github.com/raaymax/lazytail/issues/90)) ([a8ff53f](https://github.com/raaymax/lazytail/commit/a8ff53f69827df8802446235486e2889e111880c))
+
 ## [0.9.0](https://github.com/raaymax/lazytail/compare/v0.8.2...v0.9.0) (2026-03-16)
 
 
