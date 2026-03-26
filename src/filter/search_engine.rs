@@ -52,6 +52,9 @@ impl SearchEngine {
 
         // Apply @ts (index timestamp) filters as a bitmap
         let has_ts_filters = query.is_some_and(|q| q.has_ts_filters());
+        if has_ts_filters && index.is_none() {
+            anyhow::bail!("@ts filters require an index, but this source has none");
+        }
         if has_ts_filters {
             if let (Some(q), Some(reader)) = (query, index) {
                 // TsBounds::from_filters validated in orchestrator/MCP, unwrap is safe here
