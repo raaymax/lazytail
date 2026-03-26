@@ -160,7 +160,7 @@ impl TabState {
                 .as_ref()
                 .and_then(|_| calculate_index_size(&path));
             let index_warning = if index_reader.is_none() && index_dir_for_log(&path).exists() {
-                Some("Index is corrupt — delete .idx/ dir to rebuild".to_string())
+                Some("Index is corrupt — restart capture to fix".to_string())
             } else {
                 None
             };
@@ -257,7 +257,7 @@ impl TabState {
             .and_then(|_| calculate_index_size(&source.log_path));
         let index_warning =
             if index_reader.is_none() && index_dir_for_log(&source.log_path).exists() {
-                Some("Index is corrupt — delete .idx/ dir to rebuild".to_string())
+                Some("Index is corrupt — restart capture to fix".to_string())
             } else {
                 None
             };
