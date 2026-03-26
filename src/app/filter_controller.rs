@@ -66,10 +66,21 @@ impl FilterController {
         }
 
         match query::parse_query(buffer) {
-            Ok(filter_query) => match query::QueryFilter::new(filter_query) {
-                Ok(_) => self.query_error = None,
-                Err(e) => self.query_error = Some(e),
-            },
+            Ok(filter_query) => {
+                // Validate content filters
+                if let Err(e) = query::QueryFilter::new(filter_query.clone()) {
+                    self.query_error = Some(e);
+                    return;
+                }
+                // Validate @ts filters (operator + value resolution)
+                if filter_query.has_ts_filters() {
+                    if let Err(e) = query::TsBounds::from_filters(&filter_query.ts_filters) {
+                        self.query_error = Some(e);
+                        return;
+                    }
+                }
+                self.query_error = None;
+            }
             Err(e) => self.query_error = Some(e.message),
         }
     }
