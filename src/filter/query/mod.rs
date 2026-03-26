@@ -1385,6 +1385,42 @@ mod tests {
         assert_eq!(query.ts_filters[0].field, "@ts");
     }
 
+    #[test]
+    fn test_parse_ts_standalone_no_parser() {
+        let query = parser::parse_query(r#"@ts >= "now-5m""#).unwrap();
+        assert_eq!(query.parser, Parser::Raw);
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].value, "now-5m");
+    }
+
+    #[test]
+    fn test_parse_ts_then_parser_then_filter() {
+        let query = parser::parse_query(r#"@ts >= "now-1h" | json | level == "error""#).unwrap();
+        assert_eq!(query.parser, Parser::Json);
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+    }
+
+    #[test]
+    fn test_parse_ts_range_then_logfmt() {
+        let query =
+            parser::parse_query(r#"@ts >= "now-1h" | @ts < "now-5m" | logfmt | level == error"#)
+                .unwrap();
+        assert_eq!(query.parser, Parser::Logfmt);
+        assert_eq!(query.ts_filters.len(), 2);
+        assert_eq!(query.filters.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ts_only_no_content_filters() {
+        let query = parser::parse_query(r#"@ts >= "now-30m""#).unwrap();
+        assert_eq!(query.parser, Parser::Raw);
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
+    }
+
     // ========================================================================
     // Array Index Field Access Tests (R16)
     // ========================================================================
