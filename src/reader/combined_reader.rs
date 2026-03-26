@@ -56,18 +56,26 @@ impl CombinedReader {
         reader
     }
 
+    /// Get the timestamp for a line, carrying forward the last known timestamp
+    /// from the same source when the index hasn't caught up yet.
+    fn get_timestamp(source: &SourceEntry, line: usize, last_ts: &mut u64) -> u64 {
+        let ts = source
+            .index_reader
+            .as_ref()
+            .and_then(|ir| ir.get_timestamp(line))
+            .unwrap_or(*last_ts);
+        *last_ts = ts;
+        ts
+    }
+
     /// Rebuild the merged line list from all sources, sorted by timestamp.
     fn build_merged(&mut self) {
         self.merged.clear();
 
         for (source_id, source) in self.sources.iter().enumerate() {
+            let mut last_ts = 0u64;
             for line in 0..source.total_lines {
-                let timestamp = source
-                    .index_reader
-                    .as_ref()
-                    .and_then(|ir| ir.get_timestamp(line))
-                    .unwrap_or(0);
-
+                let timestamp = Self::get_timestamp(source, line, &mut last_ts);
                 self.merged.push(MergedLine {
                     source_id,
                     file_line: line,
@@ -102,12 +110,19 @@ impl CombinedReader {
         for (source_id, source) in self.sources.iter().enumerate() {
             let prev = self.prev_totals[source_id];
             if source.total_lines > prev {
-                for line in prev..source.total_lines {
-                    let timestamp = source
+                // Carry forward the last known timestamp from this source
+                // so new lines without index data sort near their true position.
+                let mut last_ts = if prev > 0 {
+                    source
                         .index_reader
                         .as_ref()
-                        .and_then(|ir| ir.get_timestamp(line))
-                        .unwrap_or(0);
+                        .and_then(|ir| ir.get_timestamp(prev - 1))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                for line in prev..source.total_lines {
+                    let timestamp = Self::get_timestamp(source, line, &mut last_ts);
                     new_lines.push(MergedLine {
                         source_id,
                         file_line: line,
@@ -216,6 +231,7 @@ impl LogReader for CombinedReader {
         // Reload each source reader and refresh index readers.
         // Individual source failures (e.g. deleted file) are skipped gracefully.
         let mut any_truncated = false;
+        let mut index_gained = false;
         for (i, source) in self.sources.iter_mut().enumerate() {
             let mut reader = match source.reader.lock() {
                 Ok(guard) => guard,
@@ -232,14 +248,23 @@ impl LogReader for CombinedReader {
                 any_truncated = true;
             }
 
-            if let (Some(ref mut ir), Some(ref path)) =
-                (&mut source.index_reader, &source.source_path)
-            {
-                ir.refresh(path);
+            if let Some(ref mut ir) = source.index_reader {
+                if let Some(ref path) = source.source_path {
+                    ir.refresh(path);
+                }
+            } else if let Some(ref path) = source.source_path {
+                // Index didn't exist when combined tab was created — retry.
+                if let Some(ir) = IndexReader::open(path) {
+                    source.index_reader = Some(ir);
+                    index_gained = true;
+                }
             }
         }
 
-        if any_truncated {
+        // If any source was truncated, or a new index appeared (meaning lines
+        // that previously had no timestamp can now be positioned correctly),
+        // do a full rebuild.
+        if any_truncated || index_gained {
             self.build_merged();
         } else {
             self.append_new_lines();
@@ -377,5 +402,174 @@ mod tests {
         assert_eq!(reader.merged[1].timestamp, 20);
         assert_eq!(reader.merged[2].timestamp, 30);
         assert_eq!(reader.merged[3].timestamp, 50);
+    }
+
+    #[test]
+    fn test_timestamp_carry_forward_for_unindexed_lines() {
+        // Source "a" has timestamps for lines 0-1 but not line 2 (index lagging).
+        // Source "b" has timestamps for all lines.
+        // Line a:2 should carry forward a's last known timestamp (200), not get 0.
+        let mut source_a = make_source("a", vec!["a1", "a2", "a3"]);
+        source_a.index_reader = Some(IndexReader::with_timestamps(&[100, 200])); // only 2 of 3 indexed
+
+        let mut source_b = make_source("b", vec!["b1", "b2"]);
+        source_b.index_reader = Some(IndexReader::with_timestamps(&[150, 250]));
+
+        let mut reader = CombinedReader::new(vec![source_a, source_b]);
+
+        // Expected order by timestamp: a1(100), b1(150), a2(200), a3(200 carry), b2(250)
+        assert_eq!(reader.total_lines(), 5);
+        assert_eq!(reader.get_line(0).unwrap(), Some("a1".to_string())); // ts=100
+        assert_eq!(reader.get_line(1).unwrap(), Some("b1".to_string())); // ts=150
+        assert_eq!(reader.get_line(2).unwrap(), Some("a2".to_string())); // ts=200
+        assert_eq!(reader.get_line(3).unwrap(), Some("a3".to_string())); // ts=200 (carried)
+        assert_eq!(reader.get_line(4).unwrap(), Some("b2".to_string())); // ts=250
+    }
+
+    #[test]
+    fn test_no_index_lines_sort_to_beginning() {
+        // Source without any index — all lines get timestamp 0, sort stably at start.
+        let source_a = make_source("a", vec!["a1", "a2"]);
+        let mut source_b = make_source("b", vec!["b1"]);
+        source_b.index_reader = Some(IndexReader::with_timestamps(&[100]));
+
+        let mut reader = CombinedReader::new(vec![source_a, source_b]);
+
+        // a lines (ts=0) come first, then b1 (ts=100)
+        assert_eq!(reader.get_line(0).unwrap(), Some("a1".to_string()));
+        assert_eq!(reader.get_line(1).unwrap(), Some("a2".to_string()));
+        assert_eq!(reader.get_line(2).unwrap(), Some("b1".to_string()));
+    }
+
+    #[test]
+    fn test_interleaved_timestamps_merge_correctly() {
+        // Two sources with interleaved timestamps should merge in timestamp order.
+        let mut source_a = make_source("a", vec!["a1", "a2", "a3"]);
+        source_a.index_reader = Some(IndexReader::with_timestamps(&[10, 30, 50]));
+
+        let mut source_b = make_source("b", vec!["b1", "b2", "b3"]);
+        source_b.index_reader = Some(IndexReader::with_timestamps(&[20, 40, 60]));
+
+        let mut reader = CombinedReader::new(vec![source_a, source_b]);
+
+        assert_eq!(reader.total_lines(), 6);
+        assert_eq!(reader.get_line(0).unwrap(), Some("a1".to_string())); // ts=10
+        assert_eq!(reader.get_line(1).unwrap(), Some("b1".to_string())); // ts=20
+        assert_eq!(reader.get_line(2).unwrap(), Some("a2".to_string())); // ts=30
+        assert_eq!(reader.get_line(3).unwrap(), Some("b2".to_string())); // ts=40
+        assert_eq!(reader.get_line(4).unwrap(), Some("a3".to_string())); // ts=50
+        assert_eq!(reader.get_line(5).unwrap(), Some("b3".to_string())); // ts=60
+    }
+
+    #[test]
+    fn test_reload_picks_up_new_index() {
+        use crate::index::column::ColumnWriter;
+        use crate::index::meta::{ColumnBit, IndexMeta};
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create two log files — source_a gets an index, source_b starts without one.
+        let log_a = dir.path().join("a.log");
+        let log_b = dir.path().join("b.log");
+        std::fs::write(&log_a, "a1\na2\n").unwrap();
+        std::fs::write(&log_b, "b1\nb2\n").unwrap();
+
+        // Build index for source_a with timestamps [200, 400]
+        {
+            let idx = index_dir_for_log(&log_a);
+            std::fs::create_dir_all(&idx).unwrap();
+
+            let mut offsets = ColumnWriter::<u64>::create(idx.join("offsets")).unwrap();
+            offsets.push(0u64).unwrap();
+            offsets.push(3u64).unwrap();
+            drop(offsets);
+
+            let mut flags = ColumnWriter::<u32>::create(idx.join("flags")).unwrap();
+            flags.push(0u32).unwrap();
+            flags.push(0u32).unwrap();
+            drop(flags);
+
+            let mut time = ColumnWriter::<u64>::create(idx.join("time")).unwrap();
+            time.push(200u64).unwrap();
+            time.push(400u64).unwrap();
+            drop(time);
+
+            let mut meta = IndexMeta::new();
+            meta.entry_count = 2;
+            meta.log_file_size = 6;
+            meta.set_column(ColumnBit::Offsets);
+            meta.set_column(ColumnBit::Flags);
+            meta.set_column(ColumnBit::Time);
+            meta.write_to(idx.join("meta")).unwrap();
+        }
+
+        // Create sources — source_b has no index yet.
+        let source_a = SourceEntry {
+            name: "a".into(),
+            reader: Arc::new(Mutex::new(
+                crate::reader::file_reader::FileReader::new(&log_a).unwrap(),
+            )),
+            index_reader: IndexReader::open(&log_a),
+            source_path: Some(log_a.clone()),
+            total_lines: 2,
+            renderer_names: Vec::new(),
+        };
+        let source_b = SourceEntry {
+            name: "b".into(),
+            reader: Arc::new(Mutex::new(
+                crate::reader::file_reader::FileReader::new(&log_b).unwrap(),
+            )),
+            index_reader: None, // no index yet
+            source_path: Some(log_b.clone()),
+            total_lines: 2,
+            renderer_names: Vec::new(),
+        };
+
+        let mut reader = CombinedReader::new(vec![source_a, source_b]);
+
+        // Before index: b lines have ts=0, sort before a lines (ts=200,400)
+        assert_eq!(reader.get_line(0).unwrap(), Some("b1".to_string())); // ts=0
+        assert_eq!(reader.get_line(1).unwrap(), Some("b2".to_string())); // ts=0
+        assert_eq!(reader.get_line(2).unwrap(), Some("a1".to_string())); // ts=200
+        assert_eq!(reader.get_line(3).unwrap(), Some("a2".to_string())); // ts=400
+
+        // Now create index for source_b with timestamps [100, 300]
+        {
+            let idx = index_dir_for_log(&log_b);
+            std::fs::create_dir_all(&idx).unwrap();
+
+            let mut offsets = ColumnWriter::<u64>::create(idx.join("offsets")).unwrap();
+            offsets.push(0u64).unwrap();
+            offsets.push(3u64).unwrap();
+            drop(offsets);
+
+            let mut flags = ColumnWriter::<u32>::create(idx.join("flags")).unwrap();
+            flags.push(0u32).unwrap();
+            flags.push(0u32).unwrap();
+            drop(flags);
+
+            let mut time = ColumnWriter::<u64>::create(idx.join("time")).unwrap();
+            time.push(100u64).unwrap();
+            time.push(300u64).unwrap();
+            drop(time);
+
+            let mut meta = IndexMeta::new();
+            meta.entry_count = 2;
+            meta.log_file_size = 6;
+            meta.set_column(ColumnBit::Offsets);
+            meta.set_column(ColumnBit::Flags);
+            meta.set_column(ColumnBit::Time);
+            meta.write_to(idx.join("meta")).unwrap();
+        }
+
+        // Reload — should discover the new index and rebuild with correct ordering.
+        reader.reload().unwrap();
+
+        // After index: b1(100), a1(200), b2(300), a2(400)
+        assert_eq!(reader.get_line(0).unwrap(), Some("b1".to_string())); // ts=100
+        assert_eq!(reader.get_line(1).unwrap(), Some("a1".to_string())); // ts=200
+        assert_eq!(reader.get_line(2).unwrap(), Some("b2".to_string())); // ts=300
+        assert_eq!(reader.get_line(3).unwrap(), Some("a2".to_string())); // ts=400
     }
 }

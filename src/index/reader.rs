@@ -303,6 +303,19 @@ impl IndexReader {
     }
 }
 
+#[cfg(any(test, debug_assertions))]
+impl IndexReader {
+    /// Create an IndexReader with specific timestamps for testing.
+    pub fn with_timestamps(timestamps: &[u64]) -> Self {
+        Self {
+            flags: vec![0; timestamps.len()],
+            checkpoints: Vec::new(),
+            timestamps: timestamps.to_vec(),
+            cached_severity_counts: SeverityCounts::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
