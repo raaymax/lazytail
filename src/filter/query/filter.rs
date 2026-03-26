@@ -9,6 +9,7 @@ use regex::Regex;
 use std::collections::HashMap;
 
 use super::ast::*;
+use super::time::{self, EpochMillis};
 
 /// Filter implementation for structured queries.
 #[derive(Debug)]
@@ -18,6 +19,8 @@ pub struct QueryFilter {
     filter_regexes: Vec<Option<Regex>>,
     /// Pre-compiled regexes for NotRegex operator filters.
     not_regex_patterns: Vec<Option<Regex>>,
+    /// Resolved epoch millis for filters with relative time values.
+    resolved_times: Vec<Option<EpochMillis>>,
 }
 
 impl QueryFilter {
@@ -25,9 +28,10 @@ impl QueryFilter {
     ///
     /// Returns an error if any regex pattern is invalid.
     pub fn new(query: FilterQuery) -> Result<Self, String> {
-        // Pre-compile regex patterns for filters
+        // Pre-compile regex patterns and resolve time values for filters
         let mut filter_regexes = Vec::with_capacity(query.filters.len());
         let mut not_regex_patterns = Vec::with_capacity(query.filters.len());
+        let mut resolved_times = Vec::with_capacity(query.filters.len());
 
         for filter in &query.filters {
             match filter.op {
@@ -36,16 +40,28 @@ impl QueryFilter {
                         .map_err(|e| format!("Invalid regex '{}': {}", filter.value, e))?;
                     filter_regexes.push(Some(regex));
                     not_regex_patterns.push(None);
+                    resolved_times.push(None);
                 }
                 Operator::NotRegex => {
                     let regex = Regex::new(&filter.value)
                         .map_err(|e| format!("Invalid regex '{}': {}", filter.value, e))?;
                     filter_regexes.push(None);
                     not_regex_patterns.push(Some(regex));
+                    resolved_times.push(None);
+                }
+                Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte => {
+                    filter_regexes.push(None);
+                    not_regex_patterns.push(None);
+                    // Resolve time expressions: relative (e.g., "now-5m") or absolute timestamps
+                    resolved_times.push(
+                        time::resolve_relative_time(&filter.value)
+                            .or_else(|| time::parse_timestamp(&filter.value)),
+                    );
                 }
                 _ => {
                     filter_regexes.push(None);
                     not_regex_patterns.push(None);
+                    resolved_times.push(None);
                 }
             }
         }
@@ -54,6 +70,7 @@ impl QueryFilter {
             query,
             filter_regexes,
             not_regex_patterns,
+            resolved_times,
         })
     }
 
@@ -64,6 +81,7 @@ impl QueryFilter {
         filter: &FieldFilter,
         filter_regex: Option<&Regex>,
         not_regex: Option<&Regex>,
+        resolved_time: Option<EpochMillis>,
     ) -> bool {
         match filter.op {
             Operator::Eq => field_value == filter.value,
@@ -71,17 +89,22 @@ impl QueryFilter {
             Operator::Contains => field_value.contains(&filter.value),
             Operator::Regex => filter_regex.is_some_and(|r| r.is_match(field_value)),
             Operator::NotRegex => not_regex.is_none_or(|r| !r.is_match(field_value)),
-            Operator::Gt => {
-                Self::compare_values(field_value, &filter.value)
-                    == Some(std::cmp::Ordering::Greater)
+            Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte => {
+                let ordering = if let Some(threshold) = resolved_time {
+                    // Time-aware comparison: parse field value as timestamp
+                    time::parse_timestamp(field_value)
+                        .and_then(|field_ts| field_ts.partial_cmp(&threshold))
+                } else {
+                    Self::compare_values(field_value, &filter.value)
+                };
+                match filter.op {
+                    Operator::Gt => ordering == Some(std::cmp::Ordering::Greater),
+                    Operator::Lt => ordering == Some(std::cmp::Ordering::Less),
+                    Operator::Gte => ordering.is_some_and(|ord| ord != std::cmp::Ordering::Less),
+                    Operator::Lte => ordering.is_some_and(|ord| ord != std::cmp::Ordering::Greater),
+                    _ => unreachable!(),
+                }
             }
-            Operator::Lt => {
-                Self::compare_values(field_value, &filter.value) == Some(std::cmp::Ordering::Less)
-            }
-            Operator::Gte => Self::compare_values(field_value, &filter.value)
-                .is_some_and(|ord| ord != std::cmp::Ordering::Less),
-            Operator::Lte => Self::compare_values(field_value, &filter.value)
-                .is_some_and(|ord| ord != std::cmp::Ordering::Greater),
         }
     }
 
@@ -149,8 +172,15 @@ impl Filter for QueryFilter {
 
                     let filter_regex = self.filter_regexes.get(i).and_then(|r| r.as_ref());
                     let not_regex = self.not_regex_patterns.get(i).and_then(|r| r.as_ref());
+                    let resolved_time = self.resolved_times.get(i).and_then(|t| *t);
 
-                    if !self.matches_filter(&field_value, filter, filter_regex, not_regex) {
+                    if !self.matches_filter(
+                        &field_value,
+                        filter,
+                        filter_regex,
+                        not_regex,
+                        resolved_time,
+                    ) {
                         return false;
                     }
                 }
@@ -177,8 +207,15 @@ impl Filter for QueryFilter {
 
                     let filter_regex = self.filter_regexes.get(i).and_then(|r| r.as_ref());
                     let not_regex = self.not_regex_patterns.get(i).and_then(|r| r.as_ref());
+                    let resolved_time = self.resolved_times.get(i).and_then(|t| *t);
 
-                    if !self.matches_filter(&field_value, filter, filter_regex, not_regex) {
+                    if !self.matches_filter(
+                        &field_value,
+                        filter,
+                        filter_regex,
+                        not_regex,
+                        resolved_time,
+                    ) {
                         return false;
                     }
                 }

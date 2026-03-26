@@ -171,6 +171,9 @@ pub struct App {
     /// Map from source name to renderer preset names (from config).
     /// Used to assign renderers to dynamically discovered sources.
     pub source_renderer_map: HashMap<String, Vec<String>>,
+
+    /// Warning popup — shown as overlay, dismissed on any key
+    pub warning_popup: Option<String>,
 }
 
 impl App {
@@ -211,6 +214,7 @@ impl App {
             preset_registry,
             theme: crate::theme::Theme::dark(),
             source_renderer_map: HashMap::new(),
+            warning_popup: None,
         }
     }
 
@@ -229,6 +233,18 @@ impl App {
     /// Switch to a specific tab by index
     pub fn select_tab(&mut self, index: usize) {
         self.tab_mgr.select_tab(index);
+        self.check_index_warning();
+    }
+
+    /// Show a warning popup if the active tab has a broken index.
+    fn check_index_warning(&mut self) {
+        if self.tab_mgr.tab_count() > 0 {
+            if let Some(ref warning) = self.active_tab().source.index_warning {
+                self.warning_popup = Some(warning.clone());
+                return;
+            }
+        }
+        self.warning_popup = None;
     }
 
     /// Map a sidebar shortcut number (0-based) to the real tab index.
@@ -244,6 +260,7 @@ impl App {
     /// Add a new tab
     pub fn add_tab(&mut self, tab: TabState) {
         self.tab_mgr.add_tab(tab);
+        self.check_index_warning();
     }
 
     /// Close a tab by index
@@ -762,6 +779,7 @@ impl App {
             AppEvent::MouseClick { column, row } => self.handle_mouse_click(column, row),
 
             // System
+            AppEvent::DismissWarning => self.warning_popup = None,
             AppEvent::Quit => self.should_quit = true,
 
             // Stream events are handled directly in main loop

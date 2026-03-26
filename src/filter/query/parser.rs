@@ -44,17 +44,28 @@ impl<'a> QueryTextParser<'a> {
     fn parse(&mut self) -> Result<FilterQuery, QueryParseError> {
         self.skip_whitespace();
 
-        // Parse parser type (json or logfmt)
-        let parser = self.parse_parser()?;
+        // Parser type is optional: queries can start with @ts filters.
+        // e.g., "@ts >= now-5m" or "@ts >= now-5m | json | level == error"
+        let mut parser = if self.peek_char() == Some('@') {
+            Parser::Raw
+        } else {
+            self.parse_parser()?
+        };
 
         // Parse filter expressions separated by |
         let mut filters = Vec::new();
+        let mut ts_filters = Vec::new();
         let mut aggregate = None;
+
+        // If parser was omitted (starts with @), parse the first filter directly
+        let started_with_ts = parser == Parser::Raw && self.peek_char() == Some('@');
 
         self.skip_whitespace();
         while self.pos < self.input.len() {
-            // Expect | separator
-            if !self.consume_char('|') {
+            // Skip | separator for the very first @ts filter (no parser prefix)
+            if (!started_with_ts || !filters.is_empty() || !ts_filters.is_empty())
+                && !self.consume_char('|')
+            {
                 if self.pos < self.input.len() {
                     return Err(QueryParseError {
                         message: format!(
@@ -68,6 +79,21 @@ impl<'a> QueryTextParser<'a> {
             }
 
             self.skip_whitespace();
+
+            // Check for parser declaration mid-query (e.g., "@ts >= now-5m | json | ...")
+            if parser == Parser::Raw {
+                if self.peek_word("json") {
+                    self.consume_word("json");
+                    parser = Parser::Json;
+                    self.skip_whitespace();
+                    continue;
+                } else if self.peek_word("logfmt") {
+                    self.consume_word("logfmt");
+                    parser = Parser::Logfmt;
+                    self.skip_whitespace();
+                    continue;
+                }
+            }
 
             // Check for aggregation clause before filter
             if self.peek_word("count") {
@@ -102,7 +128,11 @@ impl<'a> QueryTextParser<'a> {
             // Parse filter expression
             if self.pos < self.input.len() {
                 let filter = self.parse_filter()?;
-                filters.push(filter);
+                if filter.field == "@ts" {
+                    ts_filters.push(filter);
+                } else {
+                    filters.push(filter);
+                }
             }
 
             self.skip_whitespace();
@@ -111,6 +141,7 @@ impl<'a> QueryTextParser<'a> {
         Ok(FilterQuery {
             parser,
             filters,
+            ts_filters,
             exclude: vec![],
             aggregate,
         })
@@ -148,6 +179,11 @@ impl<'a> QueryTextParser<'a> {
 
     fn parse_field(&mut self) -> Result<String, QueryParseError> {
         let start = self.pos;
+
+        // Allow @ prefix for virtual fields (e.g., @ts)
+        if self.pos < self.input.len() && self.input[self.pos..].starts_with('@') {
+            self.pos += 1;
+        }
 
         // Field can contain alphanumeric, underscore, and dots (for nested access)
         while self.pos < self.input.len() {

@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
-use crate::filter::query::FilterQuery;
+use crate::filter::query::{FilterQuery, TsBounds};
 
 /// Progress interval for reader-based filter operations (report every N lines)
 const FILTER_PROGRESS_INTERVAL: usize = 1000;
@@ -42,13 +42,42 @@ impl SearchEngine {
         cancel: CancelToken,
     ) -> Result<Receiver<FilterProgress>> {
         // Try index-accelerated path: query + index available
-        let bitmap = query.and_then(|q| q.index_mask()).and_then(|(mask, want)| {
+        let mut bitmap = query.and_then(|q| q.index_mask()).and_then(|(mask, want)| {
             let reader = index?;
             if reader.is_empty() {
                 return None;
             }
             Some(reader.candidate_bitmap(mask, want, reader.len()))
         });
+
+        // Apply @ts (index timestamp) filters as a bitmap
+        let has_ts_filters = query.is_some_and(|q| q.has_ts_filters());
+        if has_ts_filters && index.is_none() {
+            anyhow::bail!("@ts filters require an index, but this source has none");
+        }
+        if has_ts_filters {
+            if let (Some(q), Some(reader)) = (query, index) {
+                // TsBounds::from_filters validated in orchestrator/MCP, unwrap is safe here
+                if let Ok(Some(ts_bounds)) = TsBounds::from_filters(&q.ts_filters) {
+                    let ts_bitmap: Vec<bool> = (0..reader.len())
+                        .map(|i| {
+                            reader
+                                .get_timestamp(i)
+                                .is_some_and(|ts| ts_bounds.matches(ts))
+                        })
+                        .collect();
+
+                    bitmap = Some(match bitmap {
+                        Some(existing) => existing
+                            .iter()
+                            .zip(ts_bitmap.iter())
+                            .map(|(&a, &b)| a && b)
+                            .collect(),
+                        None => ts_bitmap,
+                    });
+                }
+            }
+        }
 
         if let Some((start, end)) = range {
             // Incremental filtering (new lines only)

@@ -153,10 +153,42 @@ impl FileReader {
             _ => return,
         };
 
-        // Verify new offsets are structurally sound: first offset must be 0
-        // and the boundary between old and new must be monotonic
-        if offsets.get(0) != Some(0) {
-            return;
+        // Verify offsets match actual file content by cross-checking against
+        // the lengths column. For a valid index, the line at offset[i] must have
+        // content length == lengths[i]. Sample a few to keep it cheap.
+        {
+            use std::io::{BufRead, BufReader, Seek, SeekFrom};
+            let lengths_col = match ColumnReader::<u32>::open(idx_dir.join("lengths"), new_indexed)
+            {
+                Ok(r) if r.len() == new_indexed => r,
+                _ => return,
+            };
+            let mut f = match std::fs::File::open(&self.path) {
+                Ok(f) => BufReader::new(f),
+                Err(_) => return,
+            };
+            let samples = [0, new_indexed / 2, new_indexed.saturating_sub(1)];
+            for i in samples {
+                if i >= new_indexed {
+                    continue;
+                }
+                if let (Some(offset), Some(expected_len)) = (offsets.get(i), lengths_col.get(i)) {
+                    if offset >= file_size {
+                        return;
+                    }
+                    if f.seek(SeekFrom::Start(offset)).is_err() {
+                        return;
+                    }
+                    let mut line = String::new();
+                    if f.read_line(&mut line).is_err() {
+                        return;
+                    }
+                    let content_len = line.trim_end_matches(&['\n', '\r'][..]).len();
+                    if content_len != expected_len as usize {
+                        return;
+                    }
+                }
+            }
         }
         if self.indexed_lines > 0 {
             let last_old = self
@@ -1047,6 +1079,120 @@ mod tests {
     }
 
     #[test]
+    /// Regression test: capture appends to existing file but builds index
+    /// from offset 0. The TUI's refresh should reject these broken offsets.
+    #[test]
+    fn test_broken_index_from_appended_capture_rejected_on_refresh() -> Result<()> {
+        use crate::index::builder::LineIndexer;
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Phase 1: Write original content with VARYING line lengths
+        // (no index — previous capture left only file)
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..50 {
+                // Varying lengths so offsets don't accidentally align
+                let padding = "x".repeat(i * 3);
+                writeln!(f, "OLD {}{}", i, padding)?;
+            }
+            f.flush()?;
+        }
+
+        // Open reader — no index, sparse index only
+        let mut reader = FileReader::new(&log_path)?;
+        assert!(reader.columnar_offsets.is_none());
+        assert_eq!(reader.get_line(0)?.unwrap(), "OLD 0");
+
+        // Phase 2: Append new content with DIFFERENT lengths
+        {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&log_path)?;
+            for i in 0..20 {
+                writeln!(f, r#"{{"ts":"2024-01-01","level":"info","i":{}}}"#, i)?;
+            }
+            f.flush()?;
+        }
+
+        // Phase 3: Build index with offset 0 (THE BUG — not calling set_current_offset)
+        let idx_dir = index_dir_for_log(&log_path);
+        let mut indexer = LineIndexer::create(&idx_dir)?;
+        for i in 0..20 {
+            let raw = format!("{{\"ts\":\"2024-01-01\",\"level\":\"info\",\"i\":{}}}\n", i);
+            indexer.push_line(raw.as_bytes(), 1700000000000 + i * 1000)?;
+        }
+        indexer.finish(&idx_dir)?;
+
+        // Reload reader — the broken index should be rejected by newline check
+        reader.reload()?;
+
+        assert!(
+            reader.columnar_offsets.is_none(),
+            "broken index should be rejected on refresh"
+        );
+        // Content still accessible via sparse index
+        assert_eq!(reader.get_line(0)?.unwrap(), "OLD 0");
+
+        Ok(())
+    }
+
+    /// Verify that a correctly built index for appended content is accepted.
+    #[test]
+    fn test_correct_appended_index_accepted_on_refresh() -> Result<()> {
+        use crate::index::builder::LineIndexer;
+        use crate::source::index_dir_for_log;
+
+        let dir = tempfile::tempdir()?;
+        let log_path = dir.path().join("test.log");
+
+        // Phase 1: Write original content (no index)
+        let old_size;
+        {
+            let mut f = File::create(&log_path)?;
+            for i in 0..50 {
+                let padding = "x".repeat(i * 3);
+                writeln!(f, "OLD {}{}", i, padding)?;
+            }
+            f.flush()?;
+            old_size = std::fs::metadata(&log_path)?.len();
+        }
+
+        // Open reader — no index
+        let mut reader = FileReader::new(&log_path)?;
+        assert!(reader.columnar_offsets.is_none());
+
+        // Phase 2: Append new content
+        {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&log_path)?;
+            for i in 0..20 {
+                writeln!(f, r#"{{"ts":"2024-01-01","level":"info","i":{}}}"#, i)?;
+            }
+            f.flush()?;
+        }
+
+        // Phase 3: Build index with CORRECT base offset
+        let idx_dir = index_dir_for_log(&log_path);
+        let mut indexer = LineIndexer::create(&idx_dir)?;
+        indexer.set_current_offset(old_size);
+        for i in 0..20 {
+            let raw = format!("{{\"ts\":\"2024-01-01\",\"level\":\"info\",\"i\":{}}}\n", i);
+            indexer.push_line(raw.as_bytes(), 1700000000000 + i * 1000)?;
+        }
+        indexer.finish(&idx_dir)?;
+
+        // Reload reader — the correct index should be accepted
+        reader.reload()?;
+
+        assert!(
+            reader.columnar_offsets.is_some(),
+            "correctly offset index should be accepted"
+        );
+        assert_eq!(reader.indexed_lines, 20);
+
+        Ok(())
+    }
+
     fn test_stale_index_rejected_on_file_replacement() -> Result<()> {
         use crate::index::builder::IndexBuilder;
         use crate::source::index_dir_for_log;

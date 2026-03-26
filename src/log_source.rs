@@ -154,6 +154,8 @@ pub struct LogSource {
     pub index_reader: Option<IndexReader>,
     /// Index directory size in bytes (None if no index)
     pub index_size: Option<u64>,
+    /// Warning when index exists but is broken/stale
+    pub index_warning: Option<String>,
     /// Tracks line ingestion rate
     pub rate_tracker: LineRateTracker,
     /// Aggregation result for grouped query views
@@ -184,6 +186,7 @@ impl LogSource {
             file_size: None,
             index_reader: None,
             index_size: None,
+            index_warning: None,
             rate_tracker: LineRateTracker::new(0),
             aggregation_result: None,
             renderer_names: Vec::new(),
@@ -214,6 +217,12 @@ impl LogSource {
     pub fn with_index(mut self, reader: Option<IndexReader>, size: Option<u64>) -> Self {
         self.index_reader = reader;
         self.index_size = size;
+        self
+    }
+
+    /// Set index warning message.
+    pub fn with_index_warning(mut self, warning: Option<String>) -> Self {
+        self.index_warning = warning;
         self
     }
 

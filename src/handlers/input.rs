@@ -10,6 +10,11 @@ pub fn handle_input_event(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         return handle_help_mode(key);
     }
 
+    // Dismiss warning popup on any key
+    if app.warning_popup.is_some() {
+        return vec![AppEvent::DismissWarning];
+    }
+
     match app.input.mode {
         InputMode::EnteringFilter => handle_filter_input_mode(key),
         InputMode::EnteringLineJump => handle_line_jump_input_mode(key),

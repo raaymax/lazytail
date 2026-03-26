@@ -70,9 +70,20 @@ pub fn validate_index(idx_dir: &Path, log_path: &Path, meta: &IndexMeta) -> Opti
         }
     }
 
-    // Structural check: first line must start at byte 0
-    if offsets.get(0) != Some(0) {
-        return None;
+    // Structural check: first offset must be a valid line boundary
+    // (byte 0 or preceded by \n — non-zero start is valid for appended captures)
+    match offsets.get(0) {
+        Some(0) => {} // OK
+        Some(first) if first < file_size => {
+            let mut f = File::open(log_path).ok()?;
+            let mut buf = [0u8; 1];
+            f.seek(SeekFrom::Start(first - 1)).ok()?;
+            f.read_exact(&mut buf).ok()?;
+            if buf[0] != b'\n' {
+                return None;
+            }
+        }
+        _ => return None,
     }
 
     // Structural check: offsets must be monotonically increasing and within file bounds
@@ -405,6 +416,87 @@ mod tests {
         let v = result.unwrap();
         assert_eq!(v.trusted_entries, 0);
         assert_eq!(v.trusted_file_size, 0);
+    }
+
+    // --- Index built with wrong base offset (appended file) ---
+
+    #[test]
+    fn offset_zero_on_appended_file_rejected() {
+        // Simulates the bug: capture opens file with append:true, file has
+        // pre-existing content, but LineIndexer::create starts at offset 0.
+        // The index offsets point to old content, not the new lines.
+        let dir = tempdir().unwrap();
+        let old_content = "old line one\nold line two has some data\nold line three\n";
+        let log_path = write_log(dir.path(), "test.log", old_content);
+        let idx_dir = dir.path().join("idx");
+
+        // Build a valid index for the old content
+        let _meta = build_index(&log_path, &idx_dir);
+
+        // Append new content (simulating a new capture run)
+        let new_content = "new first line here\nnew second line\nnew third line yeah\n";
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        write!(f, "{}", new_content).unwrap();
+        drop(f);
+
+        // Rebuild index for ONLY the new content, but with offsets starting at 0
+        // (this is the bug — offsets should start at old_content.len())
+        use crate::index::builder::LineIndexer;
+        let mut indexer = LineIndexer::create(&idx_dir).unwrap();
+        // NOTE: NOT calling set_current_offset — reproducing the bug
+        for line in new_content.lines() {
+            let raw = format!("{}\n", line);
+            indexer.push_line(raw.as_bytes(), 1700000000000).unwrap();
+        }
+        let meta = indexer.finish(&idx_dir).unwrap();
+
+        // Validation should reject: offsets point to old content,
+        // byte before offset[1] is not a newline
+        let result = validate_index(&idx_dir, &log_path, &meta);
+        assert!(
+            result.is_none(),
+            "Broken index with wrong base offset should be rejected"
+        );
+    }
+
+    #[test]
+    fn correct_appended_index_accepted() {
+        // Same scenario but with the fix: offsets start at old content length
+        let dir = tempdir().unwrap();
+        let old_content = "old line one\nold line two has some data\nold line three\n";
+        let log_path = write_log(dir.path(), "test.log", old_content);
+        let idx_dir = dir.path().join("idx");
+
+        // Append new content
+        let new_content = "new first line here\nnew second line\nnew third line yeah\n";
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        write!(f, "{}", new_content).unwrap();
+        drop(f);
+
+        // Build index with correct base offset
+        use crate::index::builder::LineIndexer;
+        let mut indexer = LineIndexer::create(&idx_dir).unwrap();
+        indexer.set_current_offset(old_content.len() as u64);
+        for line in new_content.lines() {
+            let raw = format!("{}\n", line);
+            indexer.push_line(raw.as_bytes(), 1700000000000).unwrap();
+        }
+        let meta = indexer.finish(&idx_dir).unwrap();
+
+        // Validation should accept: offsets correctly point to new content
+        let result = validate_index(&idx_dir, &log_path, &meta);
+        assert!(
+            result.is_some(),
+            "Correctly offset index should be accepted"
+        );
+        let v = result.unwrap();
+        assert_eq!(v.trusted_entries, 3);
     }
 
     // --- Grown file ---

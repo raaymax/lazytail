@@ -39,6 +39,18 @@ impl FilterOrchestrator {
             let mut filter_query =
                 query::parse_query(&pattern).map_err(|e| format!("query parse error: {}", e))?;
 
+            // Validate @ts filters: require indexed file source
+            if filter_query.has_ts_filters() {
+                query::TsBounds::from_filters(&filter_query.ts_filters)
+                    .map_err(|e| format!("query filter error: {}", e))?;
+                if source.source_path.is_none() {
+                    return Err("@ts filters require an indexed file source".to_string());
+                }
+                if source.index_reader.is_none() {
+                    return Err("@ts filters require an index (source has no index)".to_string());
+                }
+            }
+
             // Extract aggregation clause before building the filter
             if let Some(agg) = filter_query.aggregate.take() {
                 source.filter.pending_aggregation = Some((agg, filter_query.parser.clone()));

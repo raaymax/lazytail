@@ -392,8 +392,13 @@ fn render_stats_panel(f: &mut Frame, area: Rect, app: &App, ui: &UiColors) {
         ]));
     }
 
-    // Show index size if available
-    if let Some(index_size) = tab.source.index_size {
+    // Show index size if available, or warning if broken
+    if let Some(ref warning) = tab.source.index_warning {
+        stats_text.push(Line::from(vec![Span::styled(
+            format!(" {}", warning),
+            Style::default().fg(ui.severity_error),
+        )]));
+    } else if let Some(index_size) = tab.source.index_size {
         stats_text.push(Line::from(vec![
             Span::raw(" Index: "),
             Span::styled(format_file_size(index_size), Style::default().fg(ui.muted)),

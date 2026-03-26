@@ -96,6 +96,11 @@ pub struct FilterQuery {
     #[serde(default)]
     pub filters: Vec<FieldFilter>,
 
+    /// Virtual `@ts` filters on the index ingestion timestamp.
+    /// Separated from content filters — evaluated as a bitmap at the scan level.
+    #[serde(default)]
+    pub ts_filters: Vec<FieldFilter>,
+
     /// Exclusion patterns (any match excludes the line).
     #[serde(default)]
     pub exclude: Vec<ExcludePattern>,
@@ -106,6 +111,23 @@ pub struct FilterQuery {
 }
 
 impl FilterQuery {
+    /// Whether this query has `@ts` (index timestamp) filters.
+    pub fn has_ts_filters(&self) -> bool {
+        !self.ts_filters.is_empty()
+    }
+
+    /// Move any `@ts` entries from `filters` into `ts_filters`.
+    ///
+    /// Called after JSON deserialization (MCP path) where all filters arrive
+    /// in the single `filters` array.
+    pub fn partition_ts_filters(&mut self) {
+        let (ts, content): (Vec<_>, Vec<_>) = std::mem::take(&mut self.filters)
+            .into_iter()
+            .partition(|f| f.field == "@ts");
+        self.filters = content;
+        self.ts_filters = ts;
+    }
+
     /// Build a (mask, want) pair for index pre-filtering.
     ///
     /// Returns `None` if the query cannot benefit from index pre-filtering

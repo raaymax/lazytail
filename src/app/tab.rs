@@ -7,7 +7,8 @@ use crate::reader::{
     file_reader::FileReader, stream_reader::StreamReader, LogReader, StreamableReader,
 };
 use crate::source::{
-    check_source_status, check_source_status_in_dir, DiscoveredSource, SourceLocation,
+    check_source_status, check_source_status_in_dir, index_dir_for_log, DiscoveredSource,
+    SourceLocation,
 };
 use crate::watcher::FileWatcher;
 use anyhow::{Context, Result};
@@ -158,6 +159,11 @@ impl TabState {
             let index_size = index_reader
                 .as_ref()
                 .and_then(|_| calculate_index_size(&path));
+            let index_warning = if index_reader.is_none() && index_dir_for_log(&path).exists() {
+                Some("Index is corrupt — restart capture to fix".to_string())
+            } else {
+                None
+            };
 
             let watcher = if watch {
                 FileWatcher::new(&path).ok()
@@ -173,7 +179,8 @@ impl TabState {
                     .with_path(path)
                     .with_lines(total_lines)
                     .with_file_size(file_size)
-                    .with_index(index_reader, index_size),
+                    .with_index(index_reader, index_size)
+                    .with_index_warning(index_warning),
                 scroll_position: 0,
                 selected_line,
                 watcher,
@@ -248,6 +255,12 @@ impl TabState {
         let index_size = index_reader
             .as_ref()
             .and_then(|_| calculate_index_size(&source.log_path));
+        let index_warning =
+            if index_reader.is_none() && index_dir_for_log(&source.log_path).exists() {
+                Some("Index is corrupt — restart capture to fix".to_string())
+            } else {
+                None
+            };
 
         let watcher = if watch {
             FileWatcher::new(&source.log_path).ok()
@@ -264,6 +277,7 @@ impl TabState {
                 .with_lines(total_lines)
                 .with_file_size(file_size)
                 .with_index(index_reader, index_size)
+                .with_index_warning(index_warning)
                 .with_source_status(source.status)
                 .with_renderer_names(renderer_names),
             scroll_position: 0,

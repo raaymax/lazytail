@@ -63,6 +63,13 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(ui.muted),
             )])
         }
+    } else if let Some(ref warning) = tab.source.index_warning {
+        Line::from(vec![Span::styled(
+            format!(" !! {} !!", warning),
+            Style::default()
+                .fg(ui.severity_error)
+                .add_modifier(Modifier::BOLD),
+        )])
     } else if show_status_msg {
         let msg = &app.status_message.as_ref().unwrap().0;
         Line::from(vec![Span::styled(

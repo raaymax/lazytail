@@ -81,6 +81,11 @@ pub fn render(f: &mut Frame, app: &mut App) -> Result<()> {
         help::render_confirm_close_dialog(f, f.area(), app);
     }
 
+    // Render warning popup
+    if let Some(ref msg) = app.warning_popup {
+        help::render_warning_popup(f, f.area(), msg, &app.theme.ui);
+    }
+
     Ok(())
 }
 

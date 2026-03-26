@@ -251,6 +251,15 @@ pub struct LineIndexer {
 }
 
 impl LineIndexer {
+    /// Set the starting byte offset for new lines.
+    ///
+    /// Used when the log file already has content (e.g., opened with append mode)
+    /// so the indexer starts counting from the correct position.
+    pub fn set_current_offset(&mut self, offset: u64) {
+        self.current_offset = offset;
+        self.last_line_offset = offset;
+    }
+
     pub fn create(index_dir: &Path) -> Result<Self> {
         let Some(lock) = IndexWriteLock::try_acquire(index_dir)? else {
             bail!("index is being written by another process, skipping");

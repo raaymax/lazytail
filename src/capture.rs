@@ -109,8 +109,15 @@ pub fn run_capture_mode(
         )
         .with_context(|| format!("Failed to resume index at {}", idx_dir.display()))?
     } else {
-        LineIndexer::create(&idx_dir)
-            .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?
+        let mut indexer = LineIndexer::create(&idx_dir)
+            .with_context(|| format!("Failed to create index at {}", idx_dir.display()))?;
+        // File is opened with append:true — if it already has content,
+        // the indexer must start counting from the current file size.
+        let existing_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        if existing_size > 0 {
+            indexer.set_current_offset(existing_size);
+        }
+        indexer
     };
 
     // 9. Tee loop: read stdin, write to file AND stdout

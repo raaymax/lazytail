@@ -23,11 +23,13 @@
 mod ast;
 mod filter;
 mod parser;
+pub(crate) mod time;
 
 // Re-export public types used outside this module
 pub use ast::{Aggregation, FilterQuery, Parser};
 pub use filter::QueryFilter;
 pub use parser::parse_query;
+pub use time::TsBounds;
 
 // Re-export types only used in tests
 #[cfg(test)]
@@ -143,6 +145,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -163,6 +166,7 @@ mod tests {
                 op: Operator::Ne,
                 value: "debug".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -183,6 +187,7 @@ mod tests {
                 op: Operator::Contains,
                 value: "fail".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -203,6 +208,7 @@ mod tests {
                 op: Operator::Regex,
                 value: "^api-.*".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -223,6 +229,7 @@ mod tests {
                 op: Operator::NotRegex,
                 value: "^test-.*".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -242,6 +249,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "400".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -262,6 +270,7 @@ mod tests {
                 op: Operator::Lt,
                 value: "10".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -283,6 +292,7 @@ mod tests {
                 op: Operator::Gt,
                 value: "1000".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -303,6 +313,7 @@ mod tests {
                 op: Operator::Lte,
                 value: "5".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -330,6 +341,7 @@ mod tests {
                     value: "api|worker".to_string(),
                 },
             ],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -351,6 +363,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![ExcludePattern {
                 field: "msg".to_string(),
                 pattern: "ignore".to_string(),
@@ -369,6 +382,7 @@ mod tests {
         let query = FilterQuery {
             parser: Parser::Raw,
             filters: vec![],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -389,6 +403,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -409,6 +424,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -429,6 +445,7 @@ mod tests {
                 op: Operator::Regex,
                 value: "[invalid".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -447,6 +464,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "true".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -466,6 +484,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "null".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -485,6 +504,7 @@ mod tests {
                 op: Operator::Gt,
                 value: "alice".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -700,6 +720,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "123".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -720,6 +741,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "Bearer token".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -757,6 +779,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -795,6 +818,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![ExcludePattern {
                 field: "msg".to_string(),
                 pattern: "ignore".to_string(),
@@ -875,6 +899,7 @@ mod tests {
         let query = FilterQuery {
             parser: Parser::Raw,
             filters: vec![],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -906,6 +931,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "err".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -920,6 +946,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "WARNING".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -934,6 +961,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "critical".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -953,6 +981,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "notice".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1057,6 +1086,339 @@ mod tests {
         let json = r#"{"parser": "json"}"#;
         let query: FilterQuery = serde_json::from_str(json).unwrap();
         assert!(query.aggregate.is_none());
+    }
+
+    // ========================================================================
+    // Time-Based Query Tests
+    // ========================================================================
+
+    #[test]
+    fn test_time_query_relative_gte() {
+        // Create a log line with a timestamp from 1 minute ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let one_min_ago = now - 60;
+
+        let line = format!(
+            r#"{{"timestamp": "{}", "level": "error", "msg": "test"}}"#,
+            one_min_ago
+        );
+
+        // Should match: timestamp >= now-5m (1 min ago is within last 5 min)
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+
+        // Should NOT match: timestamp >= now-30s (1 min ago is NOT within last 30s)
+        let query2 = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "now-30s".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter2 = QueryFilter::new(query2).unwrap();
+        assert!(!filter2.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_iso8601_field() {
+        // Log line with ISO 8601 timestamp
+        let line = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "error"}"#;
+
+        // Should match: timestamp >= 2024-01-15T10:00:00Z
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "2024-01-15T10:00:00Z".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(line));
+    }
+
+    #[test]
+    fn test_time_query_absolute_timestamp_value() {
+        // Filter VALUE is an absolute timestamp (not "now-..." relative)
+        // Field value: 2024-01-15T10:30:00Z (epoch 1705314600000)
+        // Filter value: 2024-01-15T10:00:00Z (epoch 1705312800000)
+        let line = r#"{"timestamp": "2024-01-15T10:30:00Z", "level": "error"}"#;
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Gte,
+                value: "2024-01-15T10:00:00Z".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(line));
+
+        // Should NOT match when field timestamp is before the filter value
+        let old_line = r#"{"timestamp": "2024-01-15T09:00:00Z", "level": "error"}"#;
+        assert!(!filter.matches(old_line));
+
+        // Cross-format: field has epoch seconds, filter has ISO 8601
+        let epoch_line = r#"{"timestamp": "1705314600", "level": "info"}"#;
+        assert!(filter.matches(epoch_line));
+    }
+
+    #[test]
+    fn test_time_query_combined_with_level_filter() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let recent = now - 120; // 2 min ago
+
+        let error_line = format!(
+            r#"{{"timestamp": "{}", "level": "error", "msg": "fail"}}"#,
+            recent
+        );
+        let info_line = format!(
+            r#"{{"timestamp": "{}", "level": "info", "msg": "ok"}}"#,
+            recent
+        );
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![
+                FieldFilter {
+                    field: "timestamp".to_string(),
+                    op: Operator::Gte,
+                    value: "now-5m".to_string(),
+                },
+                FieldFilter {
+                    field: "level".to_string(),
+                    op: Operator::Eq,
+                    value: "error".to_string(),
+                },
+            ],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+
+        assert!(filter.matches(&error_line));
+        assert!(!filter.matches(&info_line));
+    }
+
+    #[test]
+    fn test_time_query_logfmt() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let recent = now - 60;
+
+        let line = format!("ts={} level=error msg=\"something failed\"", recent);
+
+        let query = FilterQuery {
+            parser: Parser::Logfmt,
+            filters: vec![FieldFilter {
+                field: "ts".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_lt_operator() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let old = now - 7200; // 2 hours ago
+
+        let line = format!(r#"{{"timestamp": "{}", "msg": "old event"}}"#, old);
+
+        // Should match: timestamp < now-1h (2 hours ago is before 1 hour ago)
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "timestamp".to_string(),
+                op: Operator::Lt,
+                value: "now-1h".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(filter.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_json_deserialize() {
+        let json = r#"{
+            "parser": "json",
+            "filters": [
+                {"field": "timestamp", "op": "gte", "value": "now-5m"},
+                {"field": "level", "op": "eq", "value": "error"}
+            ]
+        }"#;
+
+        let query: FilterQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.filters.len(), 2);
+        assert_eq!(query.filters[0].field, "timestamp");
+        assert_eq!(query.filters[0].value, "now-5m");
+
+        // Should construct without error
+        let filter = QueryFilter::new(query).unwrap();
+
+        // Verify it works with a recent timestamp
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let line = format!(r#"{{"timestamp": "{}", "level": "error"}}"#, now - 60);
+        assert!(filter.matches(&line));
+    }
+
+    #[test]
+    fn test_time_query_unparseable_field_returns_no_match() {
+        // When filter has a resolved time (now-5m) but field value is not a timestamp,
+        // parse_timestamp returns None → comparison is None → no match
+        let line = r#"{"level": "error", "msg": "something"}"#;
+
+        let query = FilterQuery {
+            parser: Parser::Json,
+            filters: vec![FieldFilter {
+                field: "level".to_string(),
+                op: Operator::Gte,
+                value: "now-5m".to_string(),
+            }],
+            ts_filters: vec![],
+            exclude: vec![],
+            aggregate: None,
+        };
+        let filter = QueryFilter::new(query).unwrap();
+        assert!(!filter.matches(line));
+    }
+
+    // ========================================================================
+    // @ts Virtual Field Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_ts_field_routed_to_ts_filters() {
+        let query = parser::parse_query(r#"json | @ts >= "now-5m""#).unwrap();
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
+        assert_eq!(query.ts_filters[0].op, Operator::Gte);
+        assert_eq!(query.ts_filters[0].value, "now-5m");
+    }
+
+    #[test]
+    fn test_parse_ts_mixed_with_content_filters() {
+        let query = parser::parse_query(r#"json | @ts >= "now-1h" | level == "error""#).unwrap();
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
+    }
+
+    #[test]
+    fn test_parse_ts_range() {
+        let query =
+            parser::parse_query(r#"json | @ts >= "now-1h" | @ts < "now-5m" | level == "error""#)
+                .unwrap();
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.ts_filters.len(), 2);
+        assert_eq!(query.ts_filters[0].op, Operator::Gte);
+        assert_eq!(query.ts_filters[1].op, Operator::Lt);
+    }
+
+    #[test]
+    fn test_partition_ts_filters_from_json_deserialization() {
+        let json = r#"{
+            "parser": "json",
+            "filters": [
+                {"field": "@ts", "op": "gte", "value": "now-5m"},
+                {"field": "level", "op": "eq", "value": "error"}
+            ]
+        }"#;
+        let mut query: FilterQuery = serde_json::from_str(json).unwrap();
+        // Before partition: both in filters
+        assert_eq!(query.filters.len(), 2);
+        assert!(query.ts_filters.is_empty());
+
+        query.partition_ts_filters();
+
+        // After partition: separated
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
+    }
+
+    #[test]
+    fn test_parse_ts_standalone_no_parser() {
+        let query = parser::parse_query(r#"@ts >= "now-5m""#).unwrap();
+        assert_eq!(query.parser, Parser::Raw);
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].value, "now-5m");
+    }
+
+    #[test]
+    fn test_parse_ts_then_parser_then_filter() {
+        let query = parser::parse_query(r#"@ts >= "now-1h" | json | level == "error""#).unwrap();
+        assert_eq!(query.parser, Parser::Json);
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+    }
+
+    #[test]
+    fn test_parse_ts_range_then_logfmt() {
+        let query =
+            parser::parse_query(r#"@ts >= "now-1h" | @ts < "now-5m" | logfmt | level == error"#)
+                .unwrap();
+        assert_eq!(query.parser, Parser::Logfmt);
+        assert_eq!(query.ts_filters.len(), 2);
+        assert_eq!(query.filters.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ts_only_no_content_filters() {
+        let query = parser::parse_query(r#"@ts >= "now-30m""#).unwrap();
+        assert_eq!(query.parser, Parser::Raw);
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
     }
 
     // ========================================================================

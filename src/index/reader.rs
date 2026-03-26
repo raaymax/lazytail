@@ -30,12 +30,16 @@ pub struct IndexReader {
 }
 
 impl IndexReader {
-    /// Open an index for the given log file path. Returns None if no index exists.
+    /// Open an index for the given log file path. Returns None if no index exists
+    /// or if validation fails (broken/stale index).
     ///
     /// Copies flags and checkpoint data into owned memory, then drops the mmaps.
     pub fn open(log_path: &Path) -> Option<Self> {
         let idx_dir = index_dir_for_log(log_path);
         let meta = IndexMeta::read_from(idx_dir.join("meta")).ok()?;
+
+        // Validate index integrity before loading
+        crate::index::validate::validate_index(&idx_dir, log_path, &meta)?;
 
         let col_reader =
             ColumnReader::<u32>::open(idx_dir.join("flags"), meta.entry_count as usize).ok()?;
