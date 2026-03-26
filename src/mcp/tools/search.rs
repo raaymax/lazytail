@@ -165,7 +165,15 @@ impl LazyTailMcp {
         let aggregate = query.aggregate.clone();
         let parser = query.parser.clone();
         let mut filter_query = query;
+        filter_query.partition_ts_filters();
         filter_query.aggregate = None;
+
+        // Validate @ts filters
+        if filter_query.has_ts_filters() {
+            if let Err(e) = crate::filter::query::TsBounds::from_filters(&filter_query.ts_filters) {
+                return error_response(format!("Invalid @ts filter: {}", e));
+            }
+        }
 
         let index = IndexReader::open(path);
 

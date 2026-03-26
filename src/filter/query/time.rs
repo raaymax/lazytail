@@ -241,6 +241,70 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146097 + doe as i64 - 719468
 }
 
+/// Resolved `@ts` filter bounds for index timestamp pre-filtering.
+///
+/// Built from `@ts` FieldFilters at query construction time. Each condition
+/// is an (operator, epoch_millis) pair — all must match (AND logic).
+#[derive(Debug)]
+pub struct TsBounds {
+    conditions: Vec<(super::ast::Operator, EpochMillis)>,
+}
+
+impl TsBounds {
+    /// Build from `@ts` FieldFilters. Returns `None` if the slice is empty.
+    /// Returns `Err` if a filter value can't be resolved to a timestamp or
+    /// uses a non-comparison operator.
+    pub fn from_filters(ts_filters: &[super::ast::FieldFilter]) -> Result<Option<Self>, String> {
+        if ts_filters.is_empty() {
+            return Ok(None);
+        }
+
+        let mut conditions = Vec::with_capacity(ts_filters.len());
+        for f in ts_filters {
+            match f.op {
+                super::ast::Operator::Gt
+                | super::ast::Operator::Lt
+                | super::ast::Operator::Gte
+                | super::ast::Operator::Lte => {}
+                _ => {
+                    return Err(format!(
+                        "@ts only supports comparison operators (>, <, >=, <=), got {:?}",
+                        f.op
+                    ));
+                }
+            }
+
+            let epoch = resolve_relative_time(&f.value)
+                .or_else(|| parse_timestamp(&f.value))
+                .ok_or_else(|| {
+                    format!(
+                        "@ts filter value '{}' is not a valid time expression",
+                        f.value
+                    )
+                })?;
+
+            conditions.push((f.op.clone(), epoch));
+        }
+
+        Ok(Some(Self { conditions }))
+    }
+
+    /// Check if a timestamp satisfies all conditions.
+    pub fn matches(&self, ts: u64) -> bool {
+        let ts = ts as i64;
+        self.conditions.iter().all(|(op, threshold)| {
+            let ordering = ts.cmp(threshold);
+            match op {
+                super::ast::Operator::Gt => ordering == std::cmp::Ordering::Greater,
+                super::ast::Operator::Lt => ordering == std::cmp::Ordering::Less,
+                super::ast::Operator::Gte => ordering != std::cmp::Ordering::Less,
+                super::ast::Operator::Lte => ordering != std::cmp::Ordering::Greater,
+                _ => false,
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +447,69 @@ mod tests {
     fn test_days_from_civil_known_date() {
         // 2024-01-15 is 19737 days after epoch
         assert_eq!(days_from_civil(2024, 1, 15), 19737);
+    }
+
+    #[test]
+    fn test_ts_bounds_gte() {
+        use crate::filter::query::ast::{FieldFilter, Operator};
+        let filters = vec![FieldFilter {
+            field: "@ts".to_string(),
+            op: Operator::Gte,
+            value: "1705314600000".to_string(), // epoch millis
+        }];
+        let bounds = TsBounds::from_filters(&filters).unwrap().unwrap();
+        assert!(bounds.matches(1705314600000)); // equal
+        assert!(bounds.matches(1705314700000)); // after
+        assert!(!bounds.matches(1705314500000)); // before
+    }
+
+    #[test]
+    fn test_ts_bounds_range() {
+        use crate::filter::query::ast::{FieldFilter, Operator};
+        let filters = vec![
+            FieldFilter {
+                field: "@ts".to_string(),
+                op: Operator::Gte,
+                value: "1705314600000".to_string(),
+            },
+            FieldFilter {
+                field: "@ts".to_string(),
+                op: Operator::Lt,
+                value: "1705314700000".to_string(),
+            },
+        ];
+        let bounds = TsBounds::from_filters(&filters).unwrap().unwrap();
+        assert!(bounds.matches(1705314600000)); // at start
+        assert!(bounds.matches(1705314650000)); // in range
+        assert!(!bounds.matches(1705314700000)); // at end (lt, not lte)
+        assert!(!bounds.matches(1705314500000)); // before range
+    }
+
+    #[test]
+    fn test_ts_bounds_invalid_operator() {
+        use crate::filter::query::ast::{FieldFilter, Operator};
+        let filters = vec![FieldFilter {
+            field: "@ts".to_string(),
+            op: Operator::Eq,
+            value: "now-5m".to_string(),
+        }];
+        assert!(TsBounds::from_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_ts_bounds_invalid_value() {
+        use crate::filter::query::ast::{FieldFilter, Operator};
+        let filters = vec![FieldFilter {
+            field: "@ts".to_string(),
+            op: Operator::Gte,
+            value: "not-a-time".to_string(),
+        }];
+        assert!(TsBounds::from_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_ts_bounds_empty() {
+        let bounds = TsBounds::from_filters(&[]).unwrap();
+        assert!(bounds.is_none());
     }
 }

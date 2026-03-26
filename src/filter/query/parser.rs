@@ -49,6 +49,7 @@ impl<'a> QueryTextParser<'a> {
 
         // Parse filter expressions separated by |
         let mut filters = Vec::new();
+        let mut ts_filters = Vec::new();
         let mut aggregate = None;
 
         self.skip_whitespace();
@@ -102,7 +103,11 @@ impl<'a> QueryTextParser<'a> {
             // Parse filter expression
             if self.pos < self.input.len() {
                 let filter = self.parse_filter()?;
-                filters.push(filter);
+                if filter.field == "@ts" {
+                    ts_filters.push(filter);
+                } else {
+                    filters.push(filter);
+                }
             }
 
             self.skip_whitespace();
@@ -111,6 +116,7 @@ impl<'a> QueryTextParser<'a> {
         Ok(FilterQuery {
             parser,
             filters,
+            ts_filters,
             exclude: vec![],
             aggregate,
         })
@@ -148,6 +154,11 @@ impl<'a> QueryTextParser<'a> {
 
     fn parse_field(&mut self) -> Result<String, QueryParseError> {
         let start = self.pos;
+
+        // Allow @ prefix for virtual fields (e.g., @ts)
+        if self.pos < self.input.len() && self.input[self.pos..].starts_with('@') {
+            self.pos += 1;
+        }
 
         // Field can contain alphanumeric, underscore, and dots (for nested access)
         while self.pos < self.input.len() {

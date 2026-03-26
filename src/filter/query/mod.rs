@@ -29,6 +29,7 @@ pub(crate) mod time;
 pub use ast::{Aggregation, FilterQuery, Parser};
 pub use filter::QueryFilter;
 pub use parser::parse_query;
+pub use time::TsBounds;
 
 // Re-export types only used in tests
 #[cfg(test)]
@@ -144,6 +145,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -164,6 +166,7 @@ mod tests {
                 op: Operator::Ne,
                 value: "debug".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -184,6 +187,7 @@ mod tests {
                 op: Operator::Contains,
                 value: "fail".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -204,6 +208,7 @@ mod tests {
                 op: Operator::Regex,
                 value: "^api-.*".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -224,6 +229,7 @@ mod tests {
                 op: Operator::NotRegex,
                 value: "^test-.*".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -243,6 +249,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "400".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -263,6 +270,7 @@ mod tests {
                 op: Operator::Lt,
                 value: "10".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -284,6 +292,7 @@ mod tests {
                 op: Operator::Gt,
                 value: "1000".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -304,6 +313,7 @@ mod tests {
                 op: Operator::Lte,
                 value: "5".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -331,6 +341,7 @@ mod tests {
                     value: "api|worker".to_string(),
                 },
             ],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -352,6 +363,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![ExcludePattern {
                 field: "msg".to_string(),
                 pattern: "ignore".to_string(),
@@ -370,6 +382,7 @@ mod tests {
         let query = FilterQuery {
             parser: Parser::Raw,
             filters: vec![],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -390,6 +403,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -410,6 +424,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -430,6 +445,7 @@ mod tests {
                 op: Operator::Regex,
                 value: "[invalid".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -448,6 +464,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "true".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -467,6 +484,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "null".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -486,6 +504,7 @@ mod tests {
                 op: Operator::Gt,
                 value: "alice".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -701,6 +720,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "123".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -721,6 +741,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "Bearer token".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -758,6 +779,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -796,6 +818,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "error".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![ExcludePattern {
                 field: "msg".to_string(),
                 pattern: "ignore".to_string(),
@@ -876,6 +899,7 @@ mod tests {
         let query = FilterQuery {
             parser: Parser::Raw,
             filters: vec![],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -907,6 +931,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "err".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -921,6 +946,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "WARNING".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -935,6 +961,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "critical".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -954,6 +981,7 @@ mod tests {
                 op: Operator::Eq,
                 value: "notice".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1086,6 +1114,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "now-5m".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1100,6 +1129,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "now-30s".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1120,6 +1150,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "2024-01-15T10:00:00Z".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1141,6 +1172,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "2024-01-15T10:00:00Z".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1187,6 +1219,7 @@ mod tests {
                     value: "error".to_string(),
                 },
             ],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1213,6 +1246,7 @@ mod tests {
                 op: Operator::Gte,
                 value: "now-5m".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1238,6 +1272,7 @@ mod tests {
                 op: Operator::Lt,
                 value: "now-1h".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
@@ -1285,11 +1320,69 @@ mod tests {
                 op: Operator::Gte,
                 value: "now-5m".to_string(),
             }],
+            ts_filters: vec![],
             exclude: vec![],
             aggregate: None,
         };
         let filter = QueryFilter::new(query).unwrap();
         assert!(!filter.matches(line));
+    }
+
+    // ========================================================================
+    // @ts Virtual Field Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_ts_field_routed_to_ts_filters() {
+        let query = parser::parse_query(r#"json | @ts >= "now-5m""#).unwrap();
+        assert!(query.filters.is_empty());
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
+        assert_eq!(query.ts_filters[0].op, Operator::Gte);
+        assert_eq!(query.ts_filters[0].value, "now-5m");
+    }
+
+    #[test]
+    fn test_parse_ts_mixed_with_content_filters() {
+        let query = parser::parse_query(r#"json | @ts >= "now-1h" | level == "error""#).unwrap();
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
+    }
+
+    #[test]
+    fn test_parse_ts_range() {
+        let query =
+            parser::parse_query(r#"json | @ts >= "now-1h" | @ts < "now-5m" | level == "error""#)
+                .unwrap();
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.ts_filters.len(), 2);
+        assert_eq!(query.ts_filters[0].op, Operator::Gte);
+        assert_eq!(query.ts_filters[1].op, Operator::Lt);
+    }
+
+    #[test]
+    fn test_partition_ts_filters_from_json_deserialization() {
+        let json = r#"{
+            "parser": "json",
+            "filters": [
+                {"field": "@ts", "op": "gte", "value": "now-5m"},
+                {"field": "level", "op": "eq", "value": "error"}
+            ]
+        }"#;
+        let mut query: FilterQuery = serde_json::from_str(json).unwrap();
+        // Before partition: both in filters
+        assert_eq!(query.filters.len(), 2);
+        assert!(query.ts_filters.is_empty());
+
+        query.partition_ts_filters();
+
+        // After partition: separated
+        assert_eq!(query.filters.len(), 1);
+        assert_eq!(query.filters[0].field, "level");
+        assert_eq!(query.ts_filters.len(), 1);
+        assert_eq!(query.ts_filters[0].field, "@ts");
     }
 
     // ========================================================================
