@@ -13,6 +13,8 @@ pub struct IndexStats {
     pub severity_counts: Option<SeverityCounts>,
     /// Approximate ingestion rate in lines per second (from checkpoint timestamps).
     pub lines_per_second: Option<f64>,
+    /// Time range of indexed lines as (earliest_ms, latest_ms) since Unix epoch.
+    pub time_range: Option<(u64, u64)>,
 }
 
 /// Read-only access to an index's flags and checkpoint columns.
@@ -274,12 +276,30 @@ impl IndexReader {
             None
         };
 
+        // Compute time range from time column (first and last non-zero timestamps)
+        let time_range = if meta.has_column(ColumnBit::Time) {
+            ColumnReader::<u64>::open(idx_dir.join("time"), trusted_entries)
+                .ok()
+                .and_then(|col| {
+                    let first = col.get(0)?;
+                    let last = col.get(trusted_entries.saturating_sub(1))?;
+                    if first > 0 && last > 0 {
+                        Some((first, last))
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+
         Some(IndexStats {
             indexed_lines: trusted_entries as u64,
             log_file_size: meta.log_file_size,
             columns,
             severity_counts,
             lines_per_second,
+            time_range,
         })
     }
 

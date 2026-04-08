@@ -48,6 +48,9 @@ pub struct GetLinesRequest {
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
     #[serde(default)]
     pub full_content: bool,
+    /// Include arrival timestamp (when the line was captured) before each line (default: false)
+    #[serde(default)]
+    pub include_ts: bool,
 }
 
 /// Response containing lines from a log file.
@@ -76,6 +79,9 @@ pub struct LineInfo {
     /// Rendered line content using preset formatting (if a preset matched)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rendered: Option<String>,
+    /// Arrival timestamp (ISO 8601) when the line was captured. Only present when include_ts is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 /// Search mode for pattern matching.
@@ -123,6 +129,9 @@ pub struct SearchRequest {
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
     #[serde(default)]
     pub full_content: bool,
+    /// Include arrival timestamp (when the line was captured) before each line (default: false)
+    #[serde(default)]
+    pub include_ts: bool,
 }
 
 /// Response containing search results.
@@ -153,6 +162,9 @@ pub struct SearchMatch {
     /// Context lines after the match (if requested)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    /// Arrival timestamp (ISO 8601) when the line was captured. Only present when include_ts is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 /// Request to fetch the last N lines from a lazytail source.
@@ -178,6 +190,9 @@ pub struct GetTailRequest {
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
     #[serde(default)]
     pub full_content: bool,
+    /// Include arrival timestamp (when the line was captured) before each line (default: false)
+    #[serde(default)]
+    pub include_ts: bool,
 }
 
 /// Request to get context around a specific line in a lazytail source.
@@ -202,6 +217,9 @@ pub struct GetContextRequest {
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
     #[serde(default)]
     pub full_content: bool,
+    /// Include arrival timestamp (when the line was captured) before each line (default: false)
+    #[serde(default)]
+    pub include_ts: bool,
 }
 
 /// Response containing context around a line.
@@ -321,6 +339,12 @@ pub struct GetStatsResponse {
     pub lines_per_second: Option<f64>,
     /// Which index columns are present
     pub columns: Vec<String>,
+    /// Earliest arrival timestamp (ISO 8601) in the index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_range_start: Option<String>,
+    /// Latest arrival timestamp (ISO 8601) in the index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_range_end: Option<String>,
 }
 
 /// Severity count breakdown from checkpoint data.

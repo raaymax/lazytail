@@ -26,6 +26,7 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
         full_content: bool,
+        include_ts: bool,
     ) -> String {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
@@ -67,6 +68,7 @@ impl LazyTailMcp {
             raw,
             output,
             full_content,
+            include_ts,
         )
     }
 
@@ -81,6 +83,7 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
         full_content: bool,
+        include_ts: bool,
     ) -> String {
         let total_matches = matching_indices.len();
         let truncated = total_matches > max_results;
@@ -94,6 +97,16 @@ impl LazyTailMcp {
                 Err(e) => return error_response(format!("Failed to read line content: {}", e)),
             }
         };
+
+        // Populate arrival timestamps if requested
+        let mut matches = matches;
+        if include_ts {
+            if let Some(index) = IndexReader::open(path) {
+                for m in &mut matches {
+                    m.timestamp = index.get_timestamp(m.line_number).map(millis_to_iso8601);
+                }
+            }
+        }
 
         let mut response = SearchResponse {
             matches,
@@ -157,6 +170,7 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
         full_content: bool,
+        include_ts: bool,
     ) -> String {
         let max_results = max_results.min(1000);
         let context_lines = context_lines.min(50);
@@ -224,6 +238,7 @@ impl LazyTailMcp {
             raw,
             output,
             full_content,
+            include_ts,
         )
     }
 
@@ -324,6 +339,7 @@ impl LazyTailMcp {
                 content,
                 before,
                 after,
+                timestamp: None,
             });
         }
 

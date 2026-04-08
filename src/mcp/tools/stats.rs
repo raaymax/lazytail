@@ -10,28 +10,36 @@ impl LazyTailMcp {
     pub(crate) fn get_stats_impl(path: &Path, source_name: &str, output: OutputFormat) -> String {
         let stats = IndexReader::stats(path);
 
-        let (indexed_lines, log_file_size, has_index, severity_counts, lines_per_second, columns) =
-            if let Some(stats) = stats {
-                let sc = stats.severity_counts.map(|sc| SeverityCountsInfo {
-                    unknown: sc.unknown,
-                    trace: sc.trace,
-                    debug: sc.debug,
-                    info: sc.info,
-                    warn: sc.warn,
-                    error: sc.error,
-                    fatal: sc.fatal,
-                });
-                (
-                    stats.indexed_lines,
-                    stats.log_file_size,
-                    true,
-                    sc,
-                    stats.lines_per_second,
-                    stats.columns,
-                )
-            } else {
-                (0, 0, false, None, None, Vec::new())
-            };
+        let (
+            indexed_lines,
+            log_file_size,
+            has_index,
+            severity_counts,
+            lines_per_second,
+            columns,
+            time_range,
+        ) = if let Some(stats) = stats {
+            let sc = stats.severity_counts.map(|sc| SeverityCountsInfo {
+                unknown: sc.unknown,
+                trace: sc.trace,
+                debug: sc.debug,
+                info: sc.info,
+                warn: sc.warn,
+                error: sc.error,
+                fatal: sc.fatal,
+            });
+            (
+                stats.indexed_lines,
+                stats.log_file_size,
+                true,
+                sc,
+                stats.lines_per_second,
+                stats.columns,
+                stats.time_range,
+            )
+        } else {
+            (0, 0, false, None, None, Vec::new(), None)
+        };
 
         let response = GetStatsResponse {
             source: source_name.to_string(),
@@ -41,6 +49,8 @@ impl LazyTailMcp {
             severity_counts,
             lines_per_second,
             columns,
+            time_range_start: time_range.map(|(start, _)| millis_to_iso8601(start)),
+            time_range_end: time_range.map(|(_, end)| millis_to_iso8601(end)),
         };
 
         format_stats(&response, output)
