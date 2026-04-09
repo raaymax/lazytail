@@ -198,6 +198,16 @@ impl CombinedReader {
         &self.sources[m.source_id].renderer_names
     }
 
+    /// Get the arrival timestamp (epoch ms) for a virtual line.
+    pub fn timestamp(&self, virtual_idx: usize) -> Option<u64> {
+        let m = self.merged.get(virtual_idx)?;
+        if m.timestamp > 0 {
+            Some(m.timestamp)
+        } else {
+            None
+        }
+    }
+
     /// Get severity for a virtual line from the originating source's IndexReader.
     pub fn severity(&self, virtual_idx: usize) -> Severity {
         let Some(m) = self.merged.get(virtual_idx) else {

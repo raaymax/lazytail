@@ -23,10 +23,20 @@ pub fn format_lines_text(resp: &GetLinesResponse) -> String {
 
     for line in &resp.lines {
         let display = line.rendered.as_deref().unwrap_or(&line.content);
+        let ts_prefix = line
+            .timestamp
+            .as_ref()
+            .map(|ts| format!("[{}] ", ts))
+            .unwrap_or_default();
         if let Some(ref sev) = line.severity {
-            writeln!(out, "[L{}] [{}] {}", line.line_number, sev, display).unwrap();
+            writeln!(
+                out,
+                "{}[L{}] [{}] {}",
+                ts_prefix, line.line_number, sev, display
+            )
+            .unwrap();
         } else {
-            writeln!(out, "[L{}] {}", line.line_number, display).unwrap();
+            writeln!(out, "{}[L{}] {}", ts_prefix, line.line_number, display).unwrap();
         }
     }
 
@@ -62,7 +72,11 @@ pub fn format_search_text(resp: &SearchResponse) -> String {
             writeln!(out, "  {}|{}", context_start + j, line).unwrap();
         }
 
-        writeln!(out, "> {}|{}", m.line_number, m.content).unwrap();
+        if let Some(ref ts) = m.timestamp {
+            writeln!(out, "> {}|[{}] {}", m.line_number, ts, m.content).unwrap();
+        } else {
+            writeln!(out, "> {}|{}", m.line_number, m.content).unwrap();
+        }
 
         for (j, line) in m.after.iter().enumerate() {
             writeln!(out, "  {}|{}", m.line_number + 1 + j, line).unwrap();
@@ -81,10 +95,20 @@ pub fn format_context_text(resp: &GetContextResponse) -> String {
 
     for line in &resp.before_lines {
         let display = line.rendered.as_deref().unwrap_or(&line.content);
+        let ts_prefix = line
+            .timestamp
+            .as_ref()
+            .map(|ts| format!("[{}] ", ts))
+            .unwrap_or_default();
         if let Some(ref sev) = line.severity {
-            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, display).unwrap();
+            writeln!(
+                out,
+                "  {}[L{}] [{}] {}",
+                ts_prefix, line.line_number, sev, display
+            )
+            .unwrap();
         } else {
-            writeln!(out, "  [L{}] {}", line.line_number, display).unwrap();
+            writeln!(out, "  {}[L{}] {}", ts_prefix, line.line_number, display).unwrap();
         }
     }
 
@@ -93,28 +117,44 @@ pub fn format_context_text(resp: &GetContextResponse) -> String {
         .rendered
         .as_deref()
         .unwrap_or(&resp.target_line.content);
+    let target_ts = resp
+        .target_line
+        .timestamp
+        .as_ref()
+        .map(|ts| format!("[{}] ", ts))
+        .unwrap_or_default();
     if let Some(ref sev) = resp.target_line.severity {
         writeln!(
             out,
-            "> [L{}] [{}] {}",
-            resp.target_line.line_number, sev, target_display
+            "> {}[L{}] [{}] {}",
+            target_ts, resp.target_line.line_number, sev, target_display
         )
         .unwrap();
     } else {
         writeln!(
             out,
-            "> [L{}] {}",
-            resp.target_line.line_number, target_display
+            "> {}[L{}] {}",
+            target_ts, resp.target_line.line_number, target_display
         )
         .unwrap();
     }
 
     for line in &resp.after_lines {
         let display = line.rendered.as_deref().unwrap_or(&line.content);
+        let ts_prefix = line
+            .timestamp
+            .as_ref()
+            .map(|ts| format!("[{}] ", ts))
+            .unwrap_or_default();
         if let Some(ref sev) = line.severity {
-            writeln!(out, "  [L{}] [{}] {}", line.line_number, sev, display).unwrap();
+            writeln!(
+                out,
+                "  {}[L{}] [{}] {}",
+                ts_prefix, line.line_number, sev, display
+            )
+            .unwrap();
         } else {
-            writeln!(out, "  [L{}] {}", line.line_number, display).unwrap();
+            writeln!(out, "  {}[L{}] {}", ts_prefix, line.line_number, display).unwrap();
         }
     }
 
@@ -140,6 +180,13 @@ pub fn format_stats_text(resp: &GetStatsResponse) -> String {
         writeln!(out, "  debug: {}", counts.debug).unwrap();
         writeln!(out, "  trace: {}", counts.trace).unwrap();
         writeln!(out, "  unknown: {}", counts.unknown).unwrap();
+    }
+
+    if let (Some(ref start), Some(ref end)) = (&resp.time_range_start, &resp.time_range_end) {
+        out.push('\n');
+        writeln!(out, "time_range:").unwrap();
+        writeln!(out, "  start: {}", start).unwrap();
+        writeln!(out, "  end: {}", end).unwrap();
     }
 
     if let Some(rate) = resp.lines_per_second {
@@ -196,12 +243,14 @@ mod tests {
                     content: "first line".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
                 LineInfo {
                     line_number: 1,
                     content: "second line".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
             ],
             total_lines: 100,
@@ -238,6 +287,7 @@ mod tests {
                 content: json_line.into(),
                 severity: None,
                 rendered: None,
+                timestamp: None,
             }],
             total_lines: 100,
             has_more: false,
@@ -256,6 +306,7 @@ mod tests {
                 content: "data | more | pipes".into(),
                 severity: None,
                 rendered: None,
+                timestamp: None,
             }],
             total_lines: 10,
             has_more: false,
@@ -272,6 +323,7 @@ mod tests {
                 content: "error: something failed".into(),
                 before: vec![],
                 after: vec![],
+                timestamp: None,
             }],
             total_matches: 1,
             truncated: false,
@@ -293,6 +345,7 @@ mod tests {
                 content: "match line".into(),
                 before: vec!["before 1".into(), "before 2".into()],
                 after: vec!["after 1".into()],
+                timestamp: None,
             }],
             total_matches: 1,
             truncated: false,
@@ -340,6 +393,7 @@ mod tests {
                 content: json_content.into(),
                 before: vec![],
                 after: vec![],
+                timestamp: None,
             }],
             total_matches: 1,
             truncated: false,
@@ -359,12 +413,14 @@ mod tests {
                     content: "before line 1".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
                 LineInfo {
                     line_number: 41,
                     content: "before line 2".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
             ],
             target_line: LineInfo {
@@ -372,6 +428,7 @@ mod tests {
                 content: "target line content".into(),
                 severity: None,
                 rendered: None,
+                timestamp: None,
             },
             after_lines: vec![
                 LineInfo {
@@ -379,12 +436,14 @@ mod tests {
                     content: "after line 1".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
                 LineInfo {
                     line_number: 44,
                     content: "after line 2".into(),
                     severity: None,
                     rendered: None,
+                    timestamp: None,
                 },
             ],
             total_lines: 1000,
@@ -407,6 +466,7 @@ mod tests {
                 content: "only line".into(),
                 severity: None,
                 rendered: None,
+                timestamp: None,
             },
             after_lines: vec![],
             total_lines: 1,
@@ -426,6 +486,7 @@ mod tests {
                 content: "x".repeat(490),
                 before: vec![],
                 after: vec![],
+                timestamp: None,
             })
             .collect();
         let resp = SearchResponse {
@@ -462,6 +523,7 @@ mod tests {
                 content: "short".into(),
                 before: vec![],
                 after: vec![],
+                timestamp: None,
             }],
             total_matches: 1,
             truncated: false,
@@ -480,6 +542,7 @@ mod tests {
                 content: r#"{"level":"error","msg":"fail"}"#.into(),
                 severity: None,
                 rendered: Some("ERROR fail".into()),
+                timestamp: None,
             }],
             total_lines: 1,
             has_more: false,
@@ -497,6 +560,7 @@ mod tests {
                 content: "plain text".into(),
                 severity: None,
                 rendered: None,
+                timestamp: None,
             }],
             total_lines: 1,
             has_more: false,
@@ -513,18 +577,21 @@ mod tests {
                 content: r#"{"level":"error"}"#.into(),
                 severity: None,
                 rendered: Some("ERROR target".into()),
+                timestamp: None,
             },
             before_lines: vec![LineInfo {
                 line_number: 4,
                 content: r#"{"level":"info"}"#.into(),
                 severity: None,
                 rendered: Some("INFO before".into()),
+                timestamp: None,
             }],
             after_lines: vec![LineInfo {
                 line_number: 6,
                 content: r#"{"level":"debug"}"#.into(),
                 severity: None,
                 rendered: Some("DEBUG after".into()),
+                timestamp: None,
             }],
             total_lines: 100,
         };

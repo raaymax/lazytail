@@ -186,6 +186,29 @@ pub(super) fn format_stats(resp: &GetStatsResponse, output: OutputFormat) -> Str
     }
 }
 
+/// Convert epoch milliseconds to ISO 8601 UTC string (e.g. "2026-04-08T12:34:56Z").
+pub(super) fn millis_to_iso8601(ms: u64) -> String {
+    let epoch = (ms / 1000) as i64;
+    let secs_in_day = epoch.rem_euclid(86400);
+    let days = epoch.div_euclid(86400) + 719468;
+    let era = days.div_euclid(146097);
+    let doe = days.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    let hour = secs_in_day / 3600;
+    let minute = (secs_in_day % 3600) / 60;
+    let second = secs_in_day % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
 /// Rendering context passed to tool implementations for preset rendering.
 pub(super) struct RenderContext<'a> {
     pub registry: &'a PresetRegistry,
@@ -208,5 +231,42 @@ pub(super) fn render_line_info(
         .render_line(raw_content, ctx.renderer_names, flags)
     {
         line_info.rendered = Some(segments_to_plain_text(&segments));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn millis_to_iso8601_epoch_zero() {
+        assert_eq!(millis_to_iso8601(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_known_date() {
+        // 2026-04-08T12:34:56Z = 1775651696 seconds = 1775651696000 ms
+        assert_eq!(millis_to_iso8601(1775651696000), "2026-04-08T12:34:56Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_subsecond_truncation() {
+        // 999ms after epoch should still show :00
+        assert_eq!(millis_to_iso8601(999), "1970-01-01T00:00:00Z");
+        assert_eq!(millis_to_iso8601(1000), "1970-01-01T00:00:01Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_leap_year() {
+        // 2024-02-29T00:00:00Z (leap day) = 1709164800 seconds
+        assert_eq!(millis_to_iso8601(1709164800000), "2024-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_year_boundary() {
+        // 2024-12-31T23:59:59Z = 1735689599 seconds
+        assert_eq!(millis_to_iso8601(1735689599000), "2024-12-31T23:59:59Z");
+        // 2025-01-01T00:00:00Z = 1735689600 seconds
+        assert_eq!(millis_to_iso8601(1735689600000), "2025-01-01T00:00:00Z");
     }
 }

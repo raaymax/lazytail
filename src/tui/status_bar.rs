@@ -12,7 +12,7 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.active_tab();
 
     let status_text = format!(
-        " Line {}/{} | Total: {} | Mode: {} {}{}{}{}",
+        " Line {}/{} | Total: {} | Mode: {} {}{}{}{}{}",
         tab.selected_line + 1,
         tab.visible_line_count(),
         tab.source.total_lines,
@@ -39,7 +39,12 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             ""
         },
         if tab.source.raw_mode { " | RAW" } else { "" },
-        if tab.source.line_wrap { " | WRAP" } else { "" }
+        if tab.source.line_wrap { " | WRAP" } else { "" },
+        if tab.source.show_timestamps {
+            " | TS"
+        } else {
+            ""
+        }
     );
 
     let show_status_msg = app

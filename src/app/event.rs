@@ -86,6 +86,7 @@ pub enum AppEvent {
     DisableFollowMode,
     ToggleRawMode,
     ToggleLineWrap,
+    ToggleTimestamps,
 
     // Help mode
     ShowHelp,

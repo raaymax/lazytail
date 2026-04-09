@@ -18,6 +18,7 @@ impl LazyTailMcp {
         raw: bool,
         output: OutputFormat,
         full_content: bool,
+        include_ts: bool,
     ) -> String {
         let before_count = before.min(50);
         let after_count = after.min(50);
@@ -51,6 +52,14 @@ impl LazyTailMcp {
         for i in start_before..line_number {
             if let Ok(Some(content)) = reader.get_line(i) {
                 let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let timestamp = if include_ts {
+                    index_reader
+                        .as_ref()
+                        .and_then(|ir| ir.get_timestamp(i))
+                        .map(millis_to_iso8601)
+                } else {
+                    None
+                };
                 let mut info = LineInfo {
                     line_number: i,
                     content,
@@ -59,6 +68,7 @@ impl LazyTailMcp {
                         .map(|ir| ir.severity(i))
                         .and_then(|s| s.label().map(String::from)),
                     rendered: None,
+                    timestamp,
                 };
                 let raw_content = info.content.clone();
                 render_line_info(&mut info, &raw_content, flags, &ctx);
@@ -72,6 +82,14 @@ impl LazyTailMcp {
             _ => return error_response("Failed to read target line"),
         };
         let target_flags = index_reader.as_ref().and_then(|ir| ir.flags(line_number));
+        let target_ts = if include_ts {
+            index_reader
+                .as_ref()
+                .and_then(|ir| ir.get_timestamp(line_number))
+                .map(millis_to_iso8601)
+        } else {
+            None
+        };
         let mut target_line = LineInfo {
             line_number,
             content: target_content,
@@ -80,6 +98,7 @@ impl LazyTailMcp {
                 .map(|ir| ir.severity(line_number))
                 .and_then(|s| s.label().map(String::from)),
             rendered: None,
+            timestamp: target_ts,
         };
         let raw_target = target_line.content.clone();
         render_line_info(&mut target_line, &raw_target, target_flags, &ctx);
@@ -90,6 +109,14 @@ impl LazyTailMcp {
         for i in (line_number + 1)..end_after {
             if let Ok(Some(content)) = reader.get_line(i) {
                 let flags = index_reader.as_ref().and_then(|ir| ir.flags(i));
+                let timestamp = if include_ts {
+                    index_reader
+                        .as_ref()
+                        .and_then(|ir| ir.get_timestamp(i))
+                        .map(millis_to_iso8601)
+                } else {
+                    None
+                };
                 let mut info = LineInfo {
                     line_number: i,
                     content,
@@ -98,6 +125,7 @@ impl LazyTailMcp {
                         .map(|ir| ir.severity(i))
                         .and_then(|s| s.label().map(String::from)),
                     rendered: None,
+                    timestamp,
                 };
                 let raw_content = info.content.clone();
                 render_line_info(&mut info, &raw_content, flags, &ctx);
