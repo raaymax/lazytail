@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/raaymax/lazytail/compare/v0.9.0...v0.10.0) (2026-04-09)
+
+
+### Features
+
+* add arrival timestamps to MCP tools and TUI ([#92](https://github.com/raaymax/lazytail/issues/92)) ([76c1171](https://github.com/raaymax/lazytail/commit/76c1171452393580af6eb7e6b32104a82be93975))
+* **query:** time-based queries with [@ts](https://github.com/ts) virtual field and index integrity fixes ([#88](https://github.com/raaymax/lazytail/issues/88)) ([8a108e8](https://github.com/raaymax/lazytail/commit/8a108e857bcc5dc324a7ae792f043b47307a5188))
+* **update:** add nightly builds workflow and --nightly update flag ([#93](https://github.com/raaymax/lazytail/issues/93)) ([d76f675](https://github.com/raaymax/lazytail/commit/d76f6759baacfa6194dca9d870c321d08975e244))
+
+
+### Bug Fixes
+
+* **combined:** merge $all streams by [@ts](https://github.com/ts) with carry-forward for lagging indexes ([#90](https://github.com/raaymax/lazytail/issues/90)) ([a8ff53f](https://github.com/raaymax/lazytail/commit/a8ff53f69827df8802446235486e2889e111880c))
+* handle binary files without breaking TUI ([#74](https://github.com/raaymax/lazytail/issues/74)) ([0f5482f](https://github.com/raaymax/lazytail/commit/0f5482fc879428c6de5a4b0e2a6bb434c4e636b3))
+* **mcp:** accept string-encoded numbers in tool parameters ([#91](https://github.com/raaymax/lazytail/issues/91)) ([7d5a67f](https://github.com/raaymax/lazytail/commit/7d5a67f056b1e30ab4971133eff97c27244724d3))
+* release test issues — MCP [@ts](https://github.com/ts) filtering, get_stats fallback, flexible bools, TUI improvements ([bec2d35](https://github.com/raaymax/lazytail/commit/bec2d35d270ceac4341e3279d674f7011880973a))
+
 ## [0.9.0](https://github.com/raaymax/lazytail/compare/v0.8.2...v0.9.0) (2026-03-16)
 
 
