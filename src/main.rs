@@ -293,9 +293,11 @@ fn main() -> Result<()> {
     // Build tabs from config sources first
     phase = Instant::now();
     let mut tabs = build_config_tabs(&cfg, watch, &mut config_errors);
+    let first_cli_tab_idx = tabs.len(); // index where CLI tabs start
 
     // Build tabs from CLI args, treating "-" as stdin
     let mut stdin_used = false;
+    let has_cli_files = has_piped_input || !cli.files.is_empty();
 
     // If stdin has piped data, always include it as the first tab
     if has_piped_input {
@@ -341,6 +343,11 @@ fn main() -> Result<()> {
     // Restore last active source from session
     let project_root = discovery.project_root.as_deref();
     restore_last_source(&mut app, project_root);
+
+    // When CLI files are passed, default to the first CLI tab instead of config tabs
+    if has_cli_files && first_cli_tab_idx < app.tab_mgr.tabs.len() {
+        app.select_tab(first_cli_tab_idx);
+    }
 
     // Setup terminal
     let mut terminal = setup_terminal()?;
@@ -526,6 +533,9 @@ fn restore_last_source(app: &mut App, project_root: Option<&std::path::Path>) {
 /// Save the active source name to session.
 fn save_active_source(app: &App, project_root: Option<&std::path::Path>) {
     if let Some(tab) = app.tab_mgr.tabs.get(app.tab_mgr.active) {
+        if tab.source.name == "<stdin>" {
+            return;
+        }
         session::save_last_source(project_root, &tab.source.name);
     }
 }

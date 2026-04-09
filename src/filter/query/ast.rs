@@ -125,7 +125,7 @@ impl FilterQuery {
             .into_iter()
             .partition(|f| f.field == "@ts");
         self.filters = content;
-        self.ts_filters = ts;
+        self.ts_filters.extend(ts);
     }
 
     /// Build a (mask, want) pair for index pre-filtering.

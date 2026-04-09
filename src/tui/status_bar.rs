@@ -126,15 +126,18 @@ pub(super) fn render_filter_input_prompt(f: &mut Frame, area: Rect, app: &App) {
         ui.filter_plain
     };
 
-    // Build help text with mode hint showing next mode Tab will switch to
-    let mode_hint = if app.filter.current_mode.is_query() {
-        "Tab: Plain"
+    // Build title showing current mode prominently and Tab hint for next mode
+    let (mode_label, next_mode) = if app.filter.current_mode.is_query() {
+        ("Query", "Plain")
     } else if app.filter.current_mode.is_regex() {
-        "Tab: Query"
+        ("Regex", "Query")
     } else {
-        "Tab: Regex"
+        ("Plain", "Regex")
     };
-    let title = format!("Live Filter ({}, Enter to close, Esc to clear)", mode_hint);
+    let title = format!(
+        "[{}] Tab\u{2192}{} | Enter: submit | Esc: clear",
+        mode_label, next_mode
+    );
 
     let input = Paragraph::new(input_text)
         .style(ui.bg_style().fg(ui.primary))

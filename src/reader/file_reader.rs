@@ -179,11 +179,18 @@ impl FileReader {
                     if f.seek(SeekFrom::Start(offset)).is_err() {
                         return;
                     }
-                    let mut line = String::new();
-                    if f.read_line(&mut line).is_err() {
+                    let mut buf = Vec::new();
+                    if f.read_until(b'\n', &mut buf).is_err() {
                         return;
                     }
-                    let content_len = line.trim_end_matches(&['\n', '\r'][..]).len();
+                    // Strip trailing \n and \r for content length comparison
+                    if buf.last() == Some(&b'\n') {
+                        buf.pop();
+                    }
+                    if buf.last() == Some(&b'\r') {
+                        buf.pop();
+                    }
+                    let content_len = buf.len();
                     if content_len != expected_len as usize {
                         return;
                     }
@@ -321,14 +328,16 @@ impl FileReader {
             };
 
             if position_ok {
-                let mut line_buffer = String::new();
-                if self.reader.read_line(&mut line_buffer)? == 0 {
-                    self.last_read_line = None;
-                    return Ok(None);
+                match read_line_lossy(&mut self.reader)? {
+                    Some(line) => {
+                        self.last_read_line = Some(line_num);
+                        return Ok(Some(line));
+                    }
+                    None => {
+                        self.last_read_line = None;
+                        return Ok(None);
+                    }
                 }
-                self.last_read_line = Some(line_num);
-                trim_newline(&mut line_buffer);
-                return Ok(Some(line_buffer));
             }
         }
 
@@ -336,14 +345,16 @@ impl FileReader {
         if line_num < self.indexed_lines {
             if let Some(offset) = self.columnar_offsets.as_ref().and_then(|c| c.get(line_num)) {
                 self.reader.seek(SeekFrom::Start(offset))?;
-                let mut line_buffer = String::new();
-                if self.reader.read_line(&mut line_buffer)? == 0 {
-                    self.last_read_line = None;
-                    return Ok(None);
+                match read_line_lossy(&mut self.reader)? {
+                    Some(line) => {
+                        self.last_read_line = Some(line_num);
+                        return Ok(Some(line));
+                    }
+                    None => {
+                        self.last_read_line = None;
+                        return Ok(None);
+                    }
                 }
-                self.last_read_line = Some(line_num);
-                trim_newline(&mut line_buffer);
-                return Ok(Some(line_buffer));
             }
         }
 
@@ -356,22 +367,22 @@ impl FileReader {
                     // Seek to the last indexed line and skip forward
                     self.reader.seek(SeekFrom::Start(last_offset))?;
                     let skip = line_num - (self.indexed_lines - 1);
-                    let mut line_buffer = String::new();
                     for _ in 0..skip {
-                        line_buffer.clear();
-                        if self.reader.read_line(&mut line_buffer)? == 0 {
+                        if read_line_lossy(&mut self.reader)?.is_none() {
                             self.last_read_line = None;
                             return Ok(None);
                         }
                     }
-                    line_buffer.clear();
-                    if self.reader.read_line(&mut line_buffer)? == 0 {
-                        self.last_read_line = None;
-                        return Ok(None);
+                    match read_line_lossy(&mut self.reader)? {
+                        Some(line) => {
+                            self.last_read_line = Some(line_num);
+                            return Ok(Some(line));
+                        }
+                        None => {
+                            self.last_read_line = None;
+                            return Ok(None);
+                        }
                     }
-                    self.last_read_line = Some(line_num);
-                    trim_newline(&mut line_buffer);
-                    return Ok(Some(line_buffer));
                 }
             }
         }
@@ -380,24 +391,23 @@ impl FileReader {
         let (offset, skip) = self.sparse_index.locate(line_num);
         self.reader.seek(SeekFrom::Start(offset))?;
 
-        let mut line_buffer = String::new();
         for _ in 0..skip {
-            line_buffer.clear();
-            if self.reader.read_line(&mut line_buffer)? == 0 {
+            if read_line_lossy(&mut self.reader)?.is_none() {
                 self.last_read_line = None;
                 return Ok(None);
             }
         }
 
-        line_buffer.clear();
-        if self.reader.read_line(&mut line_buffer)? == 0 {
-            self.last_read_line = None;
-            return Ok(None);
+        match read_line_lossy(&mut self.reader)? {
+            Some(line) => {
+                self.last_read_line = Some(line_num);
+                Ok(Some(line))
+            }
+            None => {
+                self.last_read_line = None;
+                Ok(None)
+            }
         }
-
-        self.last_read_line = Some(line_num);
-        trim_newline(&mut line_buffer);
-        Ok(Some(line_buffer))
     }
 
     /// Get memory usage of the index in bytes
@@ -429,6 +439,32 @@ fn trim_newline(buf: &mut String) {
             buf.pop();
         }
     }
+}
+
+/// Read a line from a buffered reader, tolerating invalid UTF-8 and binary content.
+///
+/// Uses `read_until(b'\n')` into a byte buffer and converts via
+/// `String::from_utf8_lossy`, replacing invalid bytes with U+FFFD.
+/// Control characters (0x00-0x1F) other than tab are stripped to prevent
+/// them from corrupting TUI layout calculations.
+/// Returns `Ok(None)` on EOF (0 bytes read).
+fn read_line_lossy(reader: &mut BufReader<File>) -> Result<Option<String>> {
+    let mut buf = Vec::new();
+    let n = reader.read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let mut line = String::from_utf8_lossy(&buf).into_owned();
+    trim_newline(&mut line);
+    // Strip control characters that break TUI rendering.
+    // Keep: \t (expand_tabs), \x1b (ANSI ESC), \x07 (BEL, used as OSC terminator)
+    if line.bytes().any(|b| b < 0x20 && b != b'\t' && b != b'\x1b' && b != b'\x07') {
+        line = line
+            .chars()
+            .filter(|&c| c >= ' ' || c == '\t' || c == '\x1b' || c == '\x07')
+            .collect();
+    }
+    Ok(Some(line))
 }
 
 impl LogReader for FileReader {
@@ -661,7 +697,8 @@ mod tests {
 
         assert_eq!(reader.total_lines(), 5);
         assert_eq!(reader.get_line(0)?.unwrap(), "Tab:\there");
-        assert!(reader.get_line(1)?.unwrap().contains('\0'));
+        // Control characters (including null) are stripped for TUI safety
+        assert_eq!(reader.get_line(1)?.unwrap(), "Null: containsnull");
         assert_eq!(reader.get_line(2)?.unwrap(), "Backslash: \\");
         assert_eq!(reader.get_line(3)?.unwrap(), "Quote: \"test\"");
         assert_eq!(reader.get_line(4)?.unwrap(), "Apostrophe: 'test'");
@@ -1235,6 +1272,39 @@ mod tests {
         assert_eq!(
             reader.get_line(99)?.unwrap(),
             "Completely different content line 99"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_binary_file_does_not_error() -> Result<()> {
+        let mut temp_file = NamedTempFile::new()?;
+        // Write binary content with invalid UTF-8 bytes interspersed with newlines
+        temp_file.write_all(b"hello\n")?;
+        temp_file.write_all(b"\x00\x80\xff\xfe\n")?;
+        temp_file.write_all(b"valid line\n")?;
+        temp_file.write_all(b"\xc0\xc1\xf5\xf6\xf7\n")?;
+        temp_file.flush()?;
+
+        let mut reader = FileReader::new(temp_file.path())?;
+        assert_eq!(reader.total_lines(), 4);
+
+        // All lines should be readable without errors
+        assert_eq!(reader.get_line(0)?.unwrap(), "hello");
+        // Invalid UTF-8 bytes are replaced with U+FFFD
+        let line1 = reader.get_line(1)?.unwrap();
+        assert!(
+            line1.contains('\u{FFFD}'),
+            "Expected replacement chars in binary line, got: {:?}",
+            line1
+        );
+        assert_eq!(reader.get_line(2)?.unwrap(), "valid line");
+        let line3 = reader.get_line(3)?.unwrap();
+        assert!(
+            line3.contains('\u{FFFD}'),
+            "Expected replacement chars in binary line, got: {:?}",
+            line3
         );
 
         Ok(())

@@ -1192,6 +1192,11 @@ plain line with no escapes\n\
         assert_eq!(resp.source, "test");
         assert!(!resp.has_index);
         assert_eq!(resp.indexed_lines, 0);
+        // log_file_size should fall back to actual file size from disk
+        assert!(
+            resp.log_file_size > 0,
+            "log_file_size should report actual file size even without index"
+        );
         assert!(resp.severity_counts.is_none());
         assert!(resp.columns.is_empty());
     }
@@ -1550,5 +1555,83 @@ plain line with no escapes\n\
         // The renderer_names_for_path function should resolve names
         let names = mcp.renderer_names_for_path(std::path::Path::new("/some/test-source.log"));
         assert!(names.contains(&"my-preset".to_string()));
+    }
+
+    #[test]
+    fn query_ts_filter_without_index_returns_error() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, r#"{{"level":"info","msg":"hello"}}"#).unwrap();
+        writeln!(f, r#"{{"level":"error","msg":"fail"}}"#).unwrap();
+        f.flush().unwrap();
+
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "raw",
+            "ts_filters": [{"field": "@ts", "op": "gte", "value": "2099-01-01T00:00:00Z"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(
+            f.path(),
+            query,
+            100,
+            0,
+            false,
+            OutputFormat::Json,
+            false,
+            false,
+        );
+        // Without an index, @ts queries should return an error, not all results
+        assert!(
+            result.contains("error"),
+            "Expected error for @ts without index, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn query_ts_filter_with_index_filters_correctly() {
+        use crate::index::builder::IndexBuilder;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.log");
+        {
+            let mut f = std::fs::File::create(&log_path).unwrap();
+            writeln!(f, r#"{{"level":"info","msg":"hello"}}"#).unwrap();
+            writeln!(f, r#"{{"level":"error","msg":"fail"}}"#).unwrap();
+            writeln!(f, r#"{{"level":"warn","msg":"caution"}}"#).unwrap();
+            f.flush().unwrap();
+        }
+
+        let idx_dir = dir.path().join("test.idx");
+        std::fs::create_dir_all(&idx_dir).unwrap();
+        IndexBuilder::new().build(&log_path, &idx_dir).unwrap();
+
+        // Query with a future timestamp — should return 0 matches
+        let query: FilterQuery = serde_json::from_str(
+            r#"{
+            "parser": "raw",
+            "ts_filters": [{"field": "@ts", "op": "gte", "value": "2099-01-01T00:00:00Z"}]
+        }"#,
+        )
+        .unwrap();
+
+        let result = LazyTailMcp::query_impl(
+            &log_path,
+            query,
+            100,
+            0,
+            false,
+            OutputFormat::Json,
+            false,
+            false,
+        );
+        let resp: SearchResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            resp.total_matches, 0,
+            "Future @ts filter should return 0 matches, got: {}",
+            resp.total_matches
+        );
     }
 }
