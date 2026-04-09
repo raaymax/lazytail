@@ -3,6 +3,7 @@
 A fast, universal terminal-based log viewer with live filtering, follow mode, and **AI assistant integration via MCP**.
 
 ![LazyTail Screenshot](screenshot.png)
+![Aggregation View](screenshot_aggregation.png)
 
 ## Installation
 
@@ -31,12 +32,18 @@ yay -S lazytail
 
 ### Build from source
 
-Requires Rust 1.70+:
-
 ```bash
 git clone https://github.com/raaymax/lazytail.git
 cd lazytail
 cargo install --path .
+```
+
+### Nightly builds
+
+Get the latest development build (updated on every push to master):
+
+```bash
+lazytail update --nightly
 ```
 
 </details>
@@ -103,14 +110,16 @@ Verify with `/mcp` command inside Gemini CLI.
 
 | Tool | Description |
 |------|-------------|
-| `list_sources` | Discover available logs from `~/.config/lazytail/data/` |
-| `search` | Find patterns (plain text, regex, or structured query) with optional context lines |
-| `get_tail` | Get the last N lines from a log file |
+| `list_sources` | Discover available logs from project-local (`.lazytail/data/`) and global (`~/.config/lazytail/data/`) directories |
+| `search` | Find patterns (plain text, regex, or structured query) with context lines, aggregation, and time-based filtering |
+| `get_tail` | Get the last N lines; supports incremental polling via `since_line` |
 | `get_lines` | Read lines from a specific position |
 | `get_context` | Get lines surrounding a specific line number |
-| `get_stats` | Index metadata, severity breakdown, and ingestion rate |
+| `get_stats` | Index metadata, severity breakdown, ingestion rate, and time range |
 
-The `search` tool supports structured queries for field-based filtering on JSON and logfmt logs via the `query` parameter. Operators: `eq`, `ne`, `regex`, `not_regex`, `contains`, `gt`, `lt`, `gte`, `lte`. Supports nested fields (`user.id`) and exclusion patterns.
+All tools support `include_ts` (show arrival timestamps), `full_content` (skip truncation), `raw` (preserve ANSI), and `output` (`text`/`json`) parameters.
+
+The `search` tool supports structured queries for field-based filtering on JSON and logfmt logs via the `query` parameter. Operators: `eq`, `ne`, `regex`, `not_regex`, `contains`, `gt`, `lt`, `gte`, `lte`. Supports nested fields (`user.id`), exclusion patterns, aggregation (`count by (field)`), and time-based filtering with the `@ts` virtual field (e.g., `@ts >= "now-5m"`).
 
 ### What You Can Ask Your AI
 
@@ -151,10 +160,14 @@ kubectl logs -f my-pod | lazytail -n "MyApp"
 - **Columnar index** — Per-line metadata index built during capture for instant severity stats and accelerated filtering
 - **Config system** — Project-scoped `lazytail.yaml` config with source definitions
 - **Query language** — Structured field filtering (`json | level == "error"`) with aggregation (`count by (field)`)
+- **Time-based queries** — Filter by ingestion timestamp with `@ts` virtual field (`json | @ts >= "now-5m"`)
+- **Arrival timestamps** — Toggle per-line capture timestamps in TUI (`t` key) and MCP (`include_ts`)
+- **Line wrap** — Toggle soft-wrap for long lines (`w` key) with preset rendering preserved
 - **Rendering presets** — Configurable structured log formatting via YAML for custom log layouts
 - **Theme support** — Color schemes with import from Windows Terminal, Alacritty, Ghostty, iTerm2
 - **Session persistence** — Remembers last-opened source per project
-- **Combined view** — Merge multiple sources chronologically using index timestamps
+- **Combined view** — Merge multiple sources chronologically using `$all` with `@ts` timestamps
+- **Self-update** — `lazytail update` checks GitHub for new releases; `--nightly` for latest builds
 - **Benchmark tool** — Filter performance benchmarking (`lazytail bench`)
 - **Web UI mode** — Browser interface with virtualized source/log lists (`lazytail web`)
 
@@ -206,6 +219,7 @@ Commands:
   bench             Benchmark filter performance
   config            Config file commands (validate, show)
   theme             Theme management commands (import, list)
+  update            Check for and install updates (--nightly for dev builds)
   help              Print help for a command
 
 Options:
@@ -220,14 +234,28 @@ Options:
 
 ### Configuration
 
-Create a `lazytail.yaml` in your project root to define log sources:
+Create a `lazytail.yaml` in your project root to define log sources, theme, and rendering presets:
 
 ```yaml
+name: MyProject
+theme: dark
+
+renderers:
+  - name: my-api-format
+    parser: json
+    layout:
+      - field: level
+        style: bold
+        width: 5
+      - literal: " "
+      - field: message
+        max_width: 120
+
 sources:
   - name: API
-    path: /var/log/myapp/api.log
+    renderers:
+      - my-api-format
   - name: Worker
-    path: ./logs/worker.log  # Relative to project root
 ```
 
 Initialize a config file interactively:

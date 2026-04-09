@@ -14,7 +14,8 @@
 | **v0.7.0** | Self-update (`lazytail update`) |
 | **v0.8.0** | Rendering presets (builtin + external YAML), MCP rendering, theme import (Windows Terminal/Alacritty/Ghostty/iTerm2), session persistence, raw mode toggle, SIMD benchmark CLI, app decomposition refactor |
 | **v0.8.1–v0.8.2** | Event loop & combined reader perf fixes, render bottleneck elimination, logfmt safety fixes |
-| **post-v0.8.2** | Scrollable help overlay (j/k navigation), MCP `get_tail` `since_line`, copy line to clipboard (`y` + OSC 52), mouse click (side panel tab switch, log line select, category expand/collapse), capture-mode rendering with presets, stale index detection with partial trust, MCP `full_content` option, line wrap toggle (`w`) with preset rendering |
+| **v0.9.0** | Stale index detection with partial trust, MCP `full_content` option, line wrap toggle (`w`), index corruption hardening, O(N) viewport freeze fix |
+| **v0.10.0** | Time-based queries (`@ts` virtual field), arrival timestamps in TUI (`t` key) and MCP (`include_ts`), `$all` merge by `@ts`, MCP string-encoded params, binary file handling, nightly builds + `--nightly` update flag, AUR automated publishing |
 
 ---
 
@@ -100,11 +101,11 @@
 
 ### Query Language
 
-#### Explicit Filter Mode 🟡
-- [ ] Add `Query` variant to `FilterMode` enum
-- [ ] `Tab` cycles: Plain → Regex → Query → Plain
-- [ ] Remove heuristic auto-detection from filter dispatch
-- [ ] Update prompt label, frame color, help text
+#### Explicit Filter Mode ✅
+- [x] Add `Query` variant to `FilterMode` enum ✅
+- [x] `Tab` cycles: Plain → Regex → Query → Plain ✅
+- [x] Remove heuristic auto-detection from filter dispatch ✅
+- [x] Update prompt label, frame color, help text ✅
 - [ ] Update filter history serialization
 - [ ] Tests for mode cycling and dispatch
 
@@ -124,9 +125,11 @@
 - [ ] `count_distinct(field) by (fields)` — unique value count (e.g. `json | count_distinct(user.id) by (service)`)
 - [ ] `histogram(field, bucket_size)` — bucket numeric field into ranges (e.g. `json | histogram(latency, 100)`)
 
-#### Time Filtering 🔴
-- [ ] Timestamp field detection (common field names)
-- [ ] Time range filtering (after/before)
+#### Time Filtering ✅
+- [x] Timestamp field detection (common field names) ✅
+- [x] Time range filtering (after/before) — supports relative (`now-5m`, `now-1h30m`) and absolute (ISO 8601, RFC 3339, epoch) timestamps ✅
+- [x] `@ts` virtual field for filtering by arrival/ingestion timestamp (index-based, no log parsing) ✅
+- [x] Arrival timestamps in TUI (`t` key) and MCP (`include_ts` param) ✅
 
 #### Polish 🟡
 - [ ] Syntax highlighting in filter input
@@ -145,15 +148,18 @@
 - [x] **`aggregate`** — count by field, top N via `search` query `aggregate` param ✅
 - [ ] **`search_sources`** — search all sources at once, grouped by source name. Cross-service correlation
 - [ ] **`fields`** — sample N lines, return field names/types/examples. Critical for LLM consumers
+- [ ] **`sessions`** — list all capture session start timestamps for a source, so consumers can identify and filter by specific streaming runs (e.g., "show logs from the last session")
 
 #### Enhancements 🟡
 - [x] `full_content` option for `search`/`get_lines`/`get_tail`/`get_context` to skip line truncation ✅
-- [ ] `time_range` param for `search`
+- [x] `time_range` param for `search` — via structured query time-based filters ✅
 - [ ] Search pagination / cursor (offset for results > 1000)
 - [ ] **`summarize`** tool — time range, top patterns, error rate
 - [ ] **`add_source`** tool — register file as source from AI agents
-- [ ] MCP project scoping (detect `lazytail.yaml`, scope `list_sources`)
-- [ ] Filter presets from config available in MCP
+- [x] MCP project scoping (detect `lazytail.yaml`, scope `list_sources`) ✅
+- [x] Filter presets from config available in MCP ✅
+- [x] MCP numeric parameters accept both number and string types ✅
+- [x] MCP boolean parameters accept both bool and string types ✅
 
 #### Low Priority
 - [ ] `get_lines` negative indexing / "from end" shorthand
@@ -241,13 +247,13 @@
 
 ### Side Panel
 
-- [ ] Fix: launching with no args lands on `global-source` which shows an empty pane (0 lines) — new users see a blank screen; should default to the first source with content, or show welcome/instruction text 🔴
-- [ ] Fix: selected empty/ended source is invisible — grayed-out dim text has no visible selection highlight, making it unclear which tab is active 🔴
-- [ ] Replace numeric tab indicators (`1`, `2`, `3`...) in side panel with a text-based cursor/focus indicator — `>` already marks the active tab, need a distinct indicator for the focused row during tree navigation (e.g., `▸`, `→`, reverse highlight without numbers) so selection is visible without relying solely on background color 🟡
+- [x] Fix: launching with no args lands on `global-source` which shows an empty pane (0 lines) — empty categories now hidden ✅
+- [x] Fix: selected empty/ended source is invisible — selection fixing logic added ✅
+- [x] Distinct cursor indicator for focused row during tree navigation (separate from active tab `>`) ✅
 - [ ] Preview log source content while navigating the side panel — show a live preview of the highlighted source before switching to it 🟡
 - [ ] Toggle panel visibility keybinding 🟡
 - [ ] Configurable panel width 🟡
-- [ ] Tree structure with collapsible groups 🟡
+- [x] Tree structure with collapsible groups — categories expandable/collapsible via Space ✅
 - [ ] Search/filter within source list 🟡
 
 ---
@@ -259,7 +265,7 @@
 - [x] Detect and recover from stale/corrupt columnar indexes with partial trust (checkpoint-based validation) ✅
 - [ ] Keybinding to rebuild/reindex the current source's columnar index (useful when index is stale or corrupted) 🟡
 - [ ] Truncate log file by default on `lazytail -n` (add `--append`/`-a` to keep old behavior) 🟡
-- [ ] Session ID per capture run (UUID in marker + log boundary marker + filter by session) 🟡
+- [ ] Session ID per capture run (UUID in marker + log boundary marker + filter by session) — generate unique session IDs for each `lazytail -n` invocation so users can filter to a specific run (e.g., "last session", "session before crash") 🔴
 - [ ] `--file <path>` for custom log file location 🟡
 - [ ] `--max-size <size>` for log rotation 🟡
 
@@ -285,7 +291,7 @@
 - [ ] UI preferences (colors, panel width, default modes) 🟡
 - [ ] MCP server settings (enabled tools, access control) 🟡
 - [ ] Allow manual severity format override per source 🟡
-- [ ] Theme/colors config via `lazytail.yaml` (named + hex colors, built-in themes) 🟢
+- [x] Theme/colors config via `lazytail.yaml` (named + hex colors, built-in themes) ✅
 - [ ] Theme and color overrides should support customizing the app background color (not just text/severity colors) 🟢
 - [x] Theme-aware rendering presets — preset styles resolve colors from `theme.palette` instead of fixed ANSI names, so changing themes also affects log line formatting ✅
 - [ ] Config option and `--no-mouse` CLI flag to disable mouse capture (fixes tmux responsiveness when lazytail runs in a split pane) 🟡
@@ -318,9 +324,9 @@
 
 ### Backlog / Ideas
 
-- [ ] Store per-file indexes in `.lazytail/` (project) or `~/.config/lazytail/` (global) instead of next to the log file — avoids polluting working directories with `.idx/` folders when opening files directly
+- [x] Store per-file indexes in `.lazytail/` (project) or `~/.config/lazytail/` (global) instead of next to the log file ✅
 - [ ] Memory-only mode with streaming (no file)
-- [ ] Merged chronological view across sources (timestamp parsing + source-colored lines)
+- [x] Merged chronological view across sources (CombinedReader) — `$all` merge by `@ts` with carry-forward for lagging indexes ✅
 - [ ] Filter across all tabs simultaneously
 - [ ] Command-based sources in config (`command: "docker logs -f api"`)
 - [ ] Tmux-aware capture (store session:window.pane in marker, expose in `list_sources`)
@@ -338,8 +344,12 @@
 - [ ] Combined source view — merge sources chronologically using sidecar timestamps
 - [ ] When opening files as arguments (`lazytail file.log`), still show all discovered sources in the side panel under a separate "Args" category — currently only the file arg and global sources appear, hiding project/captured sources
 - [ ] Integration tests for full app behavior
+- [ ] Local end-to-end test for large files (~6GB): open file, build/validate index, render viewport, switch tabs — verify no freeze or O(N) regressions
 - [ ] UI snapshot testing
 - [ ] Performance benchmarks in CI
+- [x] Binary file handling — tolerate non-UTF-8 content, strip control characters ✅
+- [x] Nightly builds workflow + `lazytail update --nightly` ✅
+- [x] AUR automated publishing on release ✅
 - [ ] Pre-built binaries for Windows
 
 ---

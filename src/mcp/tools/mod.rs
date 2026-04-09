@@ -273,7 +273,8 @@ impl ServerHandler for LazyTailMcp {
                 "LazyTail MCP server for log file analysis. \
                  Start with list_sources to discover available logs and their names. \
                  Use search to find patterns (supports regex), get_tail for recent activity, \
-                 get_lines to read specific sections, and get_context to explore around a line number. \
+                 get_lines to read specific sections, get_context to explore around a line number, \
+                 and get_stats to check index metadata, severity breakdown, ingestion rate, and time range. \
                  All tools accept a source name (from list_sources), not a file path. \
                  Log sources are captured via 'cmd | lazytail -n NAME'. \
                  Sources are discovered from both project-local (.lazytail/data/ next to lazytail.yaml) \
@@ -282,7 +283,14 @@ impl ServerHandler for LazyTailMcp {
                  field-based filtering on JSON/logfmt logs (LogQL-style). Example query: \
                  {\"parser\": \"json\", \"filters\": [{\"field\": \"level\", \"op\": \"eq\", \"value\": \"error\"}]}. \
                  Queries support aggregation via the `aggregate` field for grouping and counting results. \
-                 Example: {\"parser\": \"json\", \"aggregate\": {\"type\": \"count_by\", \"fields\": [\"level\"]}}."
+                 Example: {\"parser\": \"json\", \"aggregate\": {\"type\": \"count_by\", \"fields\": [\"level\"]}}. \
+                 Use the virtual field \"@ts\" to filter by ingestion timestamp (when the line was captured, \
+                 not the timestamp inside the log line) — e.g. {\"field\": \"@ts\", \"op\": \"gte\", \"value\": \"now-5m\"}. \
+                 Relative time values are supported: \"now-5m\", \"now-1h30m\", or absolute ISO 8601 timestamps. \
+                 Set include_ts=true on search, get_lines, get_tail, or get_context to see arrival timestamps in results. \
+                 Use get_stats to check the time range of a source before writing @ts queries. \
+                 The get_tail tool supports incremental polling via since_line — pass the last line_number \
+                 you received to get only new lines added after that point."
                     .into(),
             ),
             ..Default::default()
