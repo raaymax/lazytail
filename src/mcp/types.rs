@@ -5,6 +5,154 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Core parsing logic for flexible usize conversion.
+/// Accepts u64, i64, f64, or string representations of non-negative integers.
+mod flexible_usize {
+    use serde::de;
+
+    pub(super) fn from_u64<E: de::Error>(v: u64) -> Result<usize, E> {
+        usize::try_from(v).map_err(|_| {
+            E::custom(format!(
+                "value {} is too large (maximum is {})",
+                v,
+                usize::MAX
+            ))
+        })
+    }
+
+    pub(super) fn from_i64<E: de::Error>(v: i64) -> Result<usize, E> {
+        if v < 0 {
+            Err(E::custom(format!(
+                "expected a non-negative integer, got {}",
+                v
+            )))
+        } else {
+            from_u64(v as u64)
+        }
+    }
+
+    pub(super) fn from_f64<E: de::Error>(v: f64) -> Result<usize, E> {
+        if v.fract() != 0.0 {
+            Err(E::custom(format!(
+                "expected an integer, got floating-point value {}",
+                v
+            )))
+        } else if v < 0.0 {
+            Err(E::custom(format!(
+                "expected a non-negative integer, got {}",
+                v
+            )))
+        } else {
+            from_u64(v as u64)
+        }
+    }
+
+    pub(super) fn from_str<E: de::Error>(v: &str) -> Result<usize, E> {
+        v.parse::<usize>().map_err(|_| {
+            E::custom(format!(
+                "invalid value \"{}\": expected a non-negative integer",
+                v
+            ))
+        })
+    }
+}
+
+/// Deserialize a `usize` that accepts both numeric values and string-encoded numbers.
+///
+/// MCP clients sometimes send numeric parameters as strings (e.g., `"100"` instead of `100`).
+/// This deserializer accepts both forms and provides descriptive parse errors.
+pub(crate) fn deserialize_flexible_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+
+    impl<'de> Visitor<'de> for V {
+        type Value = usize;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a non-negative integer or a string containing a non-negative integer")
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            flexible_usize::from_u64(v)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            flexible_usize::from_i64(v)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            flexible_usize::from_f64(v)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            flexible_usize::from_str(v)
+        }
+    }
+
+    deserializer.deserialize_any(V)
+}
+
+/// Same as [`deserialize_flexible_usize`] but wrapped in `Option` for optional fields.
+pub(crate) fn deserialize_flexible_usize_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+
+    impl<'de> Visitor<'de> for V {
+        type Value = Option<usize>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str(
+                "null, a non-negative integer, or a string containing a non-negative integer",
+            )
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, deserializer: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            deserialize_flexible_usize(deserializer).map(Some)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            flexible_usize::from_u64(v).map(Some)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            flexible_usize::from_i64(v).map(Some)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            flexible_usize::from_f64(v).map(Some)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            flexible_usize::from_str(v).map(Some)
+        }
+    }
+
+    deserializer.deserialize_any(V)
+}
+
 /// Output format for tool responses.
 #[derive(Debug, Default, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -34,10 +182,13 @@ pub struct GetLinesRequest {
     /// Source name (from list_sources)
     pub source: String,
     /// Starting line number (0-indexed)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_usize")]
     pub start: usize,
     /// Number of lines to fetch (default 100, max 1000)
-    #[serde(default = "default_count")]
+    #[serde(
+        default = "default_count",
+        deserialize_with = "deserialize_flexible_usize"
+    )]
     pub count: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
     #[serde(default)]
@@ -110,10 +261,13 @@ pub struct SearchRequest {
     #[serde(default)]
     pub case_sensitive: bool,
     /// Maximum number of results to return (default 100, max 1000)
-    #[serde(default = "default_max_results")]
+    #[serde(
+        default = "default_max_results",
+        deserialize_with = "deserialize_flexible_usize"
+    )]
     pub max_results: usize,
     /// Number of context lines before and after each match (default 0, max 50)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_usize")]
     pub context_lines: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
     #[serde(default)]
@@ -173,13 +327,16 @@ pub struct GetTailRequest {
     /// Source name (from list_sources)
     pub source: String,
     /// Number of lines to fetch from the end (default 100, max 1000)
-    #[serde(default = "default_count")]
+    #[serde(
+        default = "default_count",
+        deserialize_with = "deserialize_flexible_usize"
+    )]
     pub count: usize,
     /// Only return lines after this line number (0-indexed, exclusive).
     /// Enables efficient incremental polling — pass the last line_number
     /// you received to get only new lines. When set, returns up to `count`
     /// lines starting from `since_line + 1`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_usize_option")]
     pub since_line: Option<usize>,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
     #[serde(default)]
@@ -201,12 +358,19 @@ pub struct GetContextRequest {
     /// Source name (from list_sources)
     pub source: String,
     /// The target line number (0-indexed)
+    #[serde(deserialize_with = "deserialize_flexible_usize")]
     pub line_number: usize,
     /// Number of lines before the target (default 5, max 50)
-    #[serde(default = "default_context")]
+    #[serde(
+        default = "default_context",
+        deserialize_with = "deserialize_flexible_usize"
+    )]
     pub before: usize,
     /// Number of lines after the target (default 5, max 50)
-    #[serde(default = "default_context")]
+    #[serde(
+        default = "default_context",
+        deserialize_with = "deserialize_flexible_usize"
+    )]
     pub after: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
     #[serde(default)]
@@ -358,4 +522,106 @@ pub struct SeverityCountsInfo {
     pub warn: u32,
     pub error: u32,
     pub fatal: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn get_lines_accepts_numeric_params() {
+        let req: GetLinesRequest =
+            serde_json::from_value(json!({"source": "test", "start": 10, "count": 50})).unwrap();
+        assert_eq!(req.start, 10);
+        assert_eq!(req.count, 50);
+    }
+
+    #[test]
+    fn get_lines_accepts_string_params() {
+        let req: GetLinesRequest =
+            serde_json::from_value(json!({"source": "test", "start": "10", "count": "50"}))
+                .unwrap();
+        assert_eq!(req.start, 10);
+        assert_eq!(req.count, 50);
+    }
+
+    #[test]
+    fn get_lines_defaults_when_omitted() {
+        let req: GetLinesRequest = serde_json::from_value(json!({"source": "test"})).unwrap();
+        assert_eq!(req.start, 0);
+        assert_eq!(req.count, 100);
+    }
+
+    #[test]
+    fn get_tail_accepts_string_since_line() {
+        let req: GetTailRequest =
+            serde_json::from_value(json!({"source": "test", "count": "200", "since_line": "42"}))
+                .unwrap();
+        assert_eq!(req.count, 200);
+        assert_eq!(req.since_line, Some(42));
+    }
+
+    #[test]
+    fn get_tail_since_line_null() {
+        let req: GetTailRequest =
+            serde_json::from_value(json!({"source": "test", "since_line": null})).unwrap();
+        assert_eq!(req.since_line, None);
+    }
+
+    #[test]
+    fn get_context_accepts_string_params() {
+        let req: GetContextRequest = serde_json::from_value(
+            json!({"source": "test", "line_number": "100", "before": "3", "after": "7"}),
+        )
+        .unwrap();
+        assert_eq!(req.line_number, 100);
+        assert_eq!(req.before, 3);
+        assert_eq!(req.after, 7);
+    }
+
+    #[test]
+    fn search_accepts_string_params() {
+        let req: SearchRequest = serde_json::from_value(
+            json!({"source": "test", "pattern": "err", "max_results": "50", "context_lines": "3"}),
+        )
+        .unwrap();
+        assert_eq!(req.max_results, 50);
+        assert_eq!(req.context_lines, 3);
+    }
+
+    #[test]
+    fn rejects_negative_number() {
+        let err = serde_json::from_value::<GetLinesRequest>(json!({"source": "test", "start": -1}))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("non-negative"),
+            "error should mention 'non-negative', got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_string() {
+        let err =
+            serde_json::from_value::<GetLinesRequest>(json!({"source": "test", "start": "abc"}))
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid value \"abc\""),
+            "error should include the bad value, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn rejects_float_value() {
+        let err =
+            serde_json::from_value::<GetLinesRequest>(json!({"source": "test", "start": 1.5}))
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("floating-point"),
+            "error should mention floating-point, got: {}",
+            err
+        );
+    }
 }
