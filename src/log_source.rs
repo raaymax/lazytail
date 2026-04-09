@@ -140,6 +140,8 @@ pub struct LogSource {
     pub raw_mode: bool,
     /// Line wrap mode - wrap long lines instead of truncating
     pub line_wrap: bool,
+    /// Show arrival timestamps next to line numbers
+    pub show_timestamps: bool,
     /// Per-source reader
     pub reader: Arc<Mutex<dyn LogReader + Send>>,
     /// Filter configuration and state
@@ -179,6 +181,7 @@ impl LogSource {
             follow_mode: true,
             raw_mode: false,
             line_wrap: false,
+            show_timestamps: false,
             reader,
             filter: FilterConfig::default(),
             source_status: None,

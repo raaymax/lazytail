@@ -8,6 +8,7 @@ use crate::reader::{file_reader::FileReader, LogReader};
 use std::path::Path;
 
 impl LazyTailMcp {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_lines_impl(
         &self,
         path: &Path,
@@ -79,6 +80,7 @@ impl LazyTailMcp {
         format_lines(&response, output)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_tail_impl(
         &self,
         path: &Path,

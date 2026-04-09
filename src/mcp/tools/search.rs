@@ -69,6 +69,7 @@ impl LazyTailMcp {
             output,
             full_content,
             include_ts,
+            None,
         )
     }
 
@@ -84,12 +85,13 @@ impl LazyTailMcp {
         output: OutputFormat,
         full_content: bool,
         include_ts: bool,
+        existing_index: Option<IndexReader>,
     ) -> String {
         let total_matches = matching_indices.len();
         let truncated = total_matches > max_results;
         matching_indices.truncate(max_results);
 
-        let matches = if matching_indices.is_empty() {
+        let mut matches = if matching_indices.is_empty() {
             Vec::new()
         } else {
             match Self::get_lines_content(path, &matching_indices, context_lines) {
@@ -99,9 +101,9 @@ impl LazyTailMcp {
         };
 
         // Populate arrival timestamps if requested
-        let mut matches = matches;
         if include_ts {
-            if let Some(index) = IndexReader::open(path) {
+            let index = existing_index.or_else(|| IndexReader::open(path));
+            if let Some(index) = index {
                 for m in &mut matches {
                     m.timestamp = index.get_timestamp(m.line_number).map(millis_to_iso8601);
                 }
@@ -162,6 +164,7 @@ impl LazyTailMcp {
         crate::mcp::format::format_aggregation(&response, output)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn query_impl(
         path: &Path,
         query: crate::filter::query::FilterQuery,
@@ -239,6 +242,7 @@ impl LazyTailMcp {
             output,
             full_content,
             include_ts,
+            index,
         )
     }
 

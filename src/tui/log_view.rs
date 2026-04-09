@@ -23,6 +23,9 @@ use unicode_width::UnicodeWidthStr;
 const LINE_PREFIX_WIDTH: usize = 9; // "{:6} | " = 9 characters
 /// Extra prefix width for combined view: "[tag] " before the line number
 const MAX_SOURCE_TAG_WIDTH: usize = 8; // e.g. "[api-sv] "
+/// Width of the timestamp column: "YYYY-MM-DD HH:MM:SS.mmm " = 24 characters (max, with date).
+/// Today's lines use "HH:MM:SS.mmm" (13 chars) left-padded to this width.
+const TIMESTAMP_COL_WIDTH: usize = 24;
 
 /// Shared rendering state for all lines in a frame.
 struct RenderContext<'a> {
@@ -35,6 +38,7 @@ struct RenderContext<'a> {
     is_combined: bool,
     raw_mode: bool,
     line_wrap: bool,
+    show_timestamps: bool,
     prefix_width: usize,
     content_width: usize,
 }
@@ -46,6 +50,8 @@ struct LineInfo {
     severity: Severity,
     is_selected: bool,
     is_expanded: bool,
+    /// Formatted timestamp to display, or None when unavailable.
+    timestamp_display: Option<String>,
 }
 
 /// Map severity to a subtle background color for line highlighting.
@@ -84,11 +90,14 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     // Layout
     let available_width = area.width.saturating_sub(2) as usize;
     let is_combined = tab.is_combined;
-    let prefix_width = if is_combined {
-        LINE_PREFIX_WIDTH + MAX_SOURCE_TAG_WIDTH
-    } else {
-        LINE_PREFIX_WIDTH
-    };
+    let show_timestamps = tab.source.show_timestamps;
+    let prefix_width = LINE_PREFIX_WIDTH
+        + if is_combined { MAX_SOURCE_TAG_WIDTH } else { 0 }
+        + if show_timestamps {
+            TIMESTAMP_COL_WIDTH
+        } else {
+            0
+        };
     let content_width = available_width.saturating_sub(prefix_width);
 
     let ctx = RenderContext {
@@ -105,6 +114,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
         is_combined,
         raw_mode: tab.source.raw_mode,
         line_wrap: tab.source.line_wrap,
+        show_timestamps,
         prefix_width,
         content_width,
     };
@@ -155,12 +165,29 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
     // Build visible items
     let mut items = Vec::new();
     let mut visual_rows_used = 0usize;
-
+    let today = if ctx.show_timestamps {
+        local_today()
+    } else {
+        (0, 0, 0)
+    };
     for i in start_idx..total_lines {
         if let Some(&line_number) = tab.source.line_indices.get(i) {
             let raw_line = reader_guard.get_line(line_number)?.unwrap_or_default();
             let line_text = expand_tabs(&raw_line);
             let is_expanded = expanded_lines.contains(&line_number);
+
+            let timestamp_display = if ctx.show_timestamps {
+                resolve_timestamp(
+                    line_number,
+                    ctx.is_combined,
+                    ctx.index_reader,
+                    &*reader_guard,
+                )
+                .filter(|&ms| ms > 0)
+                .map(|ms| format_epoch_ms_local(ms, today))
+            } else {
+                None
+            };
 
             let info = LineInfo {
                 line_number,
@@ -178,6 +205,7 @@ pub(super) fn render_log_view(f: &mut Frame, area: Rect, app: &mut App) -> Resul
                 ),
                 is_selected: i == selected_idx,
                 is_expanded,
+                timestamp_display,
             };
 
             // Content spans — single path for all modes
@@ -256,6 +284,64 @@ fn resolve_source_tag(
     combined
         .source_info(line_number, &ui.source_colors)
         .map(|(name, color)| (name.to_string(), color))
+}
+
+fn resolve_timestamp(
+    line_number: usize,
+    is_combined: bool,
+    index_reader: Option<&IndexReader>,
+    reader: &dyn LogReader,
+) -> Option<u64> {
+    if is_combined {
+        reader
+            .as_any()
+            .downcast_ref::<CombinedReader>()
+            .and_then(|c| c.timestamp(line_number))
+    } else {
+        index_reader.and_then(|ir| ir.get_timestamp(line_number))
+    }
+}
+
+/// Local date as (year, month 1-12, day 1-31) for "today" comparison.
+fn local_today() -> (i32, i32, i32) {
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let tm = unsafe {
+        libc::localtime_r(&now, tm.as_mut_ptr());
+        tm.assume_init()
+    };
+    (tm.tm_year, tm.tm_mon, tm.tm_mday)
+}
+
+/// Format epoch milliseconds as "HH:MM:SS.mmm" (today) or "YYYY-MM-DD HH:MM:SS.mmm" (other days).
+/// `today` is (tm_year, tm_mon, tm_mday) from `local_today()`.
+fn format_epoch_ms_local(epoch_ms: u64, today: (i32, i32, i32)) -> String {
+    let ms_part = (epoch_ms % 1000) as u32;
+    let epoch_secs = (epoch_ms / 1000) as libc::time_t;
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // Safety: localtime_r is thread-safe and writes into our stack buffer.
+    let tm = unsafe {
+        libc::localtime_r(&epoch_secs, tm.as_mut_ptr());
+        tm.assume_init()
+    };
+    let is_today = (tm.tm_year, tm.tm_mon, tm.tm_mday) == today;
+    if is_today {
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            tm.tm_hour, tm.tm_min, tm.tm_sec, ms_part
+        )
+    } else {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec,
+            ms_part
+        )
+    }
 }
 
 fn resolve_severity(
@@ -347,6 +433,48 @@ fn format_line_spans(
 // Item building — single path for all lines
 // ---------------------------------------------------------------------------
 
+/// Span layout for the first row of a line: [tag?][ts?][num][sep][content...]
+/// Computed once, used everywhere that needs to index into prefix spans.
+struct PrefixLayout {
+    #[allow(dead_code)] // documents the layout even though tag styling is handled separately
+    tag: Option<usize>,
+    ts: Option<usize>,
+    num: usize,
+    sep: usize,
+    content_start: usize,
+}
+
+impl PrefixLayout {
+    fn new(has_tag: bool, has_ts: bool) -> Self {
+        let mut next = 0;
+        let tag = if has_tag {
+            let idx = next;
+            next += 1;
+            Some(idx)
+        } else {
+            None
+        };
+        let ts = if has_ts {
+            let idx = next;
+            next += 1;
+            Some(idx)
+        } else {
+            None
+        };
+        let num = next;
+        next += 1;
+        let sep = next;
+        next += 1;
+        PrefixLayout {
+            tag,
+            ts,
+            num,
+            sep,
+            content_start: next,
+        }
+    }
+}
+
 /// Build a ListItem from content lines (1 for single-line, N for wrapped/expanded).
 /// Adds prefix (source tag + line number + separator), then applies styling
 /// (selection, expanded bg, severity bg).
@@ -358,11 +486,13 @@ fn build_item(
     let severity_color = severity_bg(info.severity, ctx.ui);
     let line_num_part = format!("{:6} |", info.line_number + 1);
     let line_sep_part = " ";
+    let layout = PrefixLayout::new(info.source_tag.is_some(), ctx.show_timestamps);
 
     let mut item_lines: Vec<Line<'static>> = Vec::new();
 
     for (row_idx, mut line) in content_lines.into_iter().enumerate() {
-        // Add prefix: first row gets line number, continuation rows get indent
+        // Add prefix: first row gets line number, continuation rows get indent.
+        // Inserted at position 0 in reverse layout order (sep, num, ts?, tag?).
         if row_idx == 0 {
             let num_style = severity_color
                 .map(|bg| Style::default().bg(bg))
@@ -371,6 +501,14 @@ fn build_item(
                 .insert(0, Span::styled(line_sep_part, Style::default()));
             line.spans
                 .insert(0, Span::styled(line_num_part.clone(), num_style));
+            if ctx.show_timestamps {
+                let ts_text = match &info.timestamp_display {
+                    Some(ts) => format!("{:<width$}", ts, width = TIMESTAMP_COL_WIDTH),
+                    None => " ".repeat(TIMESTAMP_COL_WIDTH),
+                };
+                line.spans
+                    .insert(0, Span::styled(ts_text, Style::default().fg(ctx.ui.muted)));
+            }
             if let Some((ref name, color)) = info.source_tag {
                 let tag = format_source_tag(name, MAX_SOURCE_TAG_WIDTH);
                 line.spans
@@ -387,18 +525,11 @@ fn build_item(
                 span.style = apply_selection_style(span.style, ctx.ui);
             }
         } else if info.is_expanded {
-            apply_expanded_bg(
-                &mut line,
-                row_idx,
-                info.source_tag.is_some(),
-                severity_color,
-                ctx.ui,
-            );
+            apply_expanded_bg(&mut line, row_idx, &layout, severity_color, ctx.ui);
         } else if row_idx == 0 {
             // Normal/wrap mode: severity bg on line number only
             if let Some(bg) = severity_color {
-                let num_idx = if info.source_tag.is_some() { 1 } else { 0 };
-                if let Some(num_span) = line.spans.get_mut(num_idx) {
+                if let Some(num_span) = line.spans.get_mut(layout.num) {
                     num_span.style = num_span.style.bg(bg);
                 }
             }
@@ -414,40 +545,36 @@ fn build_item(
 fn apply_expanded_bg(
     line: &mut Line<'static>,
     row_idx: usize,
-    has_source_tag: bool,
+    layout: &PrefixLayout,
     severity_color: Option<Color>,
     ui: &UiColors,
 ) {
-    // Content spans start after prefix spans
-    let prefix_span_count = if row_idx == 0 {
-        if has_source_tag {
-            3
-        } else {
-            2
-        } // [tag] + num + sep, or num + sep
-    } else {
-        1 // indent
-    };
-
-    for span in line.spans.iter_mut().skip(prefix_span_count) {
-        span.style = span.style.bg(ui.expanded_bg);
-    }
-
     if row_idx == 0 {
+        // Content spans get expanded bg
+        for span in line.spans.iter_mut().skip(layout.content_start) {
+            span.style = span.style.bg(ui.expanded_bg);
+        }
         // Separator gets expanded bg
-        let sep_idx = if has_source_tag { 2 } else { 1 };
-        if let Some(sep_span) = line.spans.get_mut(sep_idx) {
+        if let Some(sep_span) = line.spans.get_mut(layout.sep) {
             sep_span.style = sep_span.style.bg(ui.expanded_bg);
         }
         // Line number gets expanded bg (unless severity color takes precedence)
         if severity_color.is_none() {
-            let num_idx = if has_source_tag { 1 } else { 0 };
-            if let Some(num_span) = line.spans.get_mut(num_idx) {
+            if let Some(num_span) = line.spans.get_mut(layout.num) {
                 num_span.style = num_span.style.bg(ui.expanded_bg);
             }
         }
-    } else if let Some(indent_span) = line.spans.first_mut() {
-        indent_span.style = indent_span.style.bg(ui.expanded_bg);
+        // Timestamp gets expanded bg
+        if let Some(ts_idx) = layout.ts {
+            if let Some(ts_span) = line.spans.get_mut(ts_idx) {
+                ts_span.style = ts_span.style.bg(ui.expanded_bg);
+            }
+        }
+    } else {
+        // Continuation row: single indent span
+        for span in line.spans.iter_mut() {
+            span.style = span.style.bg(ui.expanded_bg);
+        }
     }
 }
 

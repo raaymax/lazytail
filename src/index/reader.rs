@@ -276,7 +276,8 @@ impl IndexReader {
             None
         };
 
-        // Compute time range from time column (first and last non-zero timestamps)
+        // Compute time range from time column (first and last non-zero timestamps).
+        // Arrival timestamps are monotonically increasing since lines are appended in order.
         let time_range = if meta.has_column(ColumnBit::Time) {
             ColumnReader::<u64>::open(idx_dir.join("time"), trusted_entries)
                 .ok()

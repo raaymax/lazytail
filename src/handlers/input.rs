@@ -207,6 +207,7 @@ fn handle_normal_mode(key: KeyEvent, app: &App) -> Vec<AppEvent> {
         KeyCode::Char(' ') => vec![AppEvent::ToggleLineExpansion],
         KeyCode::Char('c') => vec![AppEvent::CollapseAll],
         KeyCode::Char('r') => vec![AppEvent::ToggleRawMode],
+        KeyCode::Char('t') => vec![AppEvent::ToggleTimestamps],
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             vec![AppEvent::CloseCurrentTab]
         }

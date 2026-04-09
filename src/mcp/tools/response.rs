@@ -233,3 +233,40 @@ pub(super) fn render_line_info(
         line_info.rendered = Some(segments_to_plain_text(&segments));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn millis_to_iso8601_epoch_zero() {
+        assert_eq!(millis_to_iso8601(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_known_date() {
+        // 2026-04-08T12:34:56Z = 1775651696 seconds = 1775651696000 ms
+        assert_eq!(millis_to_iso8601(1775651696000), "2026-04-08T12:34:56Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_subsecond_truncation() {
+        // 999ms after epoch should still show :00
+        assert_eq!(millis_to_iso8601(999), "1970-01-01T00:00:00Z");
+        assert_eq!(millis_to_iso8601(1000), "1970-01-01T00:00:01Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_leap_year() {
+        // 2024-02-29T00:00:00Z (leap day) = 1709164800 seconds
+        assert_eq!(millis_to_iso8601(1709164800000), "2024-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn millis_to_iso8601_year_boundary() {
+        // 2024-12-31T23:59:59Z = 1735689599 seconds
+        assert_eq!(millis_to_iso8601(1735689599000), "2024-12-31T23:59:59Z");
+        // 2025-01-01T00:00:00Z = 1735689600 seconds
+        assert_eq!(millis_to_iso8601(1735689600000), "2025-01-01T00:00:00Z");
+    }
+}
