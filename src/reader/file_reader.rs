@@ -458,7 +458,10 @@ fn read_line_lossy(reader: &mut BufReader<File>) -> Result<Option<String>> {
     trim_newline(&mut line);
     // Strip control characters that break TUI rendering.
     // Keep: \t (expand_tabs), \x1b (ANSI ESC), \x07 (BEL, used as OSC terminator)
-    if line.bytes().any(|b| b < 0x20 && b != b'\t' && b != b'\x1b' && b != b'\x07') {
+    if line
+        .bytes()
+        .any(|b| b < 0x20 && b != b'\t' && b != b'\x1b' && b != b'\x07')
+    {
         line = line
             .chars()
             .filter(|&c| c >= ' ' || c == '\t' || c == '\x1b' || c == '\x07')
