@@ -18,43 +18,49 @@ The application operates in six distinct modes:
 ```
 src/
   main.rs           Core event loop, mode dispatch, CLI definition (~1200 lines)
-  lib.rs            Library crate interface (config, index, source, theme)
+  lib.rs            Library crate interface (config, filter, index, parsing, reader, renderer, source, text_wrap, theme)
   ansi.rs           ANSI escape sequence stripping
+  filter_orchestrator.rs  FilterOrchestrator — unified filter dispatch entry point
   log_source.rs     Domain-only source state (LogSource, FilterConfig, LineRateTracker)
+  parsing.rs        Logfmt parser
   signal.rs         Flag-based SIGINT/SIGTERM handling
   source.rs         Source discovery, PID markers, data directory management
   capture.rs        Capture mode implementation
   history.rs        Filter history persistence (~/.config/lazytail/history.json)
   session.rs        Session persistence (last-opened source per project)
+  text_wrap.rs      Line wrapping logic for TUI display
 
   app/
-    mod.rs           Top-level application state (App struct, InputMode, ViewMode)
-    tab.rs           Per-tab TUI state (TabState) wrapping LogSource
-    viewport.rs      Vim-style viewport with anchor-based scrolling
+    mod.rs           Top-level application state (App struct with sub-controllers)
     event.rs         AppEvent enum (all possible state transitions)
+    filter_controller.rs  FilterController (debounce, validation, history)
+    input_controller.rs   InputController, InputMode
+    source_panel.rs       SourcePanelController (tree navigation)
+    tab.rs           Per-tab TUI state (TabState) wrapping LogSource
+    tab_manager.rs   TabManager (tab collection, combined views, active tab)
+    viewport.rs      Vim-style viewport with anchor-based scrolling
 
   reader/
-    mod.rs           LogReader trait
-    file_reader.rs   Sparse-indexed file reader (O(1) memory)
+    mod.rs           LogReader trait (total_lines, get_line, reload, as_any)
+    file_reader.rs   Sparse-indexed file reader (O(1) memory, lossy UTF-8)
     stream_reader.rs Stdin/pipe buffering reader
-    combined_reader.rs Multi-source chronological merging via index timestamps
+    combined_reader.rs Multi-source chronological merging via @ts index timestamps
     sparse_index.rs  Sparse line offset index
-    mmap_reader.rs   Memory-mapped reader (experimental)
-    huge_file_reader.rs  Large file reader (experimental)
-    tail_buffer.rs   Tail buffer (experimental)
 
   filter/
     mod.rs           Filter trait, FilterMode, FilterHistoryEntry
-    orchestrator.rs  FilterOrchestrator — unified filter dispatch entry point
     search_engine.rs SearchEngine — stateless search dispatch (picks fastest path)
     engine.rs        FilterEngine — background thread coordination
     streaming_filter.rs  mmap + memchr grep-like filtering
     string_filter.rs Plain text substring filter
     regex_filter.rs  Regex-based filter
-    query.rs         Structured query language (json/logfmt field filtering)
+    query/           Structured query language (json/logfmt field filtering)
+      ast.rs         FilterQuery AST
+      parser.rs      Text query parser
+      filter.rs      QueryFilter implementation
+      time.rs        @ts time-based filtering (relative/absolute timestamps)
     aggregation.rs   Grouped query results (count by field, top N)
     cancel.rs        CancelToken for cooperative cancellation
-    parallel_engine.rs  Parallel filtering (experimental)
 
   handlers/
     mod.rs           Handler module exports
@@ -90,17 +96,20 @@ src/
 
   web/
     mod.rs           HTTP server with embedded SPA for browser-based log viewing
+    handlers.rs      HTTP request handlers
+    state.rs         Server state management
     index.html       Embedded single-page application
 
   index/
     mod.rs           Columnar index module exports
     builder.rs       Index writer (flags, offsets, checkpoints)
-    reader.rs        IndexReader — read-only access to flags and checkpoints
+    reader.rs        IndexReader — read-only access to flags, checkpoints, timestamps
     column.rs        ColumnReader/ColumnWriter for typed columnar storage
     checkpoint.rs    Checkpoint and SeverityCounts types
     flags.rs         Severity enum, format flags, line classification
     meta.rs          Index metadata (entry count, column bits)
     lock.rs          Advisory flock-based write lock
+    validate.rs      Index integrity verification (partial trust, checkpoint-based)
 
   config/
     mod.rs           Config module exports
@@ -117,14 +126,14 @@ src/
     theme.rs         `lazytail theme import/list` commands
     update.rs        `lazytail update` command (feature-gated: self-update)
 
-  cache/
-    mod.rs           Cache module
-    line_cache.rs    LRU cache for line content
-    ansi_cache.rs    LRU cache for parsed ANSI sequences
-
-  mcp/              (feature-gated: "mcp")
+  mcp/
     mod.rs           MCP server entry point (tokio + rmcp)
-    tools.rs         6 MCP tools implementation
+    tools/           6 MCP tools (list_sources, search, get_lines, get_tail, get_context, get_stats)
+      context.rs     get_context implementation
+      lines.rs       get_lines implementation
+      search.rs      search/query implementation
+      stats.rs       get_stats implementation
+      response.rs    Shared response building
     types.rs         MCP request/response types
     format.rs        Output formatting for MCP responses
     ansi.rs          ANSI stripping for MCP output
@@ -166,19 +175,20 @@ See [ADR-001: Event-Driven Architecture](adr/001-event-driven-architecture.md).
 
 ```
 App
-  tabs: Vec<TabState>           One per open file/source/pipe
-  combined_tabs: [Option; 5]    Per-category combined ($all) tabs
-  active_tab: usize             Index into tabs
-  active_combined: Option<...>  Which combined tab is active
-  input_mode: InputMode         Normal, EnteringFilter, EnteringLineJump,
-                                ZPending, SourcePanel, ConfirmClose
-  input_buffer: String          Shared input for filter/line-jump
-  filter_history: Vec<...>      Persistent across sessions
-  source_panel: ...             Tree navigation state
+  tab_mgr: TabManager                   Manages tabs, combined views, active tab
+    tabs: Vec<TabState>                   One per open file/source/pipe
+    combined: [Option<TabState>; 5]       Per-category combined ($all) tabs
+    active_tab: usize                     Index into tabs
+    active_combined: Option<SourceType>   Which combined tab is active
+  input: InputController                 Input mode and buffer management
+    mode: InputMode                       Normal, EnteringFilter, EnteringLineJump, etc.
+    buffer: String                        Shared input for filter/line-jump
+  filter: FilterController               Filter debounce, validation, history
+    history: Vec<FilterHistoryEntry>      Persistent across sessions
+  panel: SourcePanelController           Source tree navigation state
   preset_registry: Arc<...>     Compiled rendering presets
   theme: Theme                  UI color scheme
   source_renderer_map: ...      Source name → renderer preset names
-  pending_filter_at: Option<..> Debounced filter trigger time
 
 TabState                              TUI adapter state
   source: LogSource              Domain core (shared across adapters)
@@ -193,12 +203,15 @@ TabState                              TUI adapter state
 
 LogSource                        Domain-only state (log_source.rs)
   reader: Arc<Mutex<dyn LogReader>>   File or stream reader
-  index_reader: Option<IndexReader>   Columnar index (severity, flags)
+  index_reader: Option<IndexReader>   Columnar index (severity, flags, timestamps)
   filter: FilterConfig                Active filter, cancel token, receiver
   line_indices: Vec<usize>            Current visible line indices
   total_lines: usize                  Total lines in source
   mode: ViewMode                      Normal, Filtered, or Aggregation
   follow_mode: bool                   Auto-scroll on new content
+  raw_mode: bool                      Display raw lines (no preset rendering)
+  line_wrap: bool                     Soft-wrap long lines
+  show_timestamps: bool               Show arrival timestamps per line
   source_path: Option<PathBuf>        File path (None for stdin)
   source_status: Option<SourceStatus> Active/Ended for discovered sources
   rate_tracker: LineRateTracker       Sliding-window ingestion rate

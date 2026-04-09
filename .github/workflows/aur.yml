@@ -1,0 +1,75 @@
+name: AUR Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.10.0)'
+        required: true
+        type: string
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  publish:
+    name: Update AUR Package
+    runs-on: ubuntu-latest
+    steps:
+    - name: Derive version from tag
+      run: echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+
+    - name: Download source tarball and compute checksum
+      run: |
+        curl -sL "https://github.com/raaymax/lazytail/archive/${TAG}.tar.gz" -o source.tar.gz
+        SHA256=$(sha256sum source.tar.gz | cut -d' ' -f1)
+        echo "SHA256=${SHA256}" >> $GITHUB_ENV
+
+    - name: Set up SSH for AUR
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.AUR_SSH_KEY }}" > ~/.ssh/aur_key
+        chmod 600 ~/.ssh/aur_key
+        cat >> ~/.ssh/config << EOF
+        Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur_key
+            User aur
+            StrictHostKeyChecking accept-new
+        EOF
+
+    - name: Clone AUR repo
+      run: git clone ssh://aur@aur.archlinux.org/lazytail.git aur-repo
+
+    - name: Update PKGBUILD and .SRCINFO
+      run: |
+        cd aur-repo
+        sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+        sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+        sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
+
+        # .SRCINFO uses tabs for field indentation
+        printf '%s\n' \
+          "pkgbase = lazytail" \
+          "	pkgdesc = A fast, universal terminal-based log viewer with live filtering and follow mode" \
+          "	pkgver = ${VERSION}" \
+          "	pkgrel = 1" \
+          "	url = https://github.com/raaymax/lazytail" \
+          "	arch = x86_64" \
+          "	license = MIT" \
+          "	makedepends = cargo" \
+          "	source = lazytail-${VERSION}.tar.gz::https://github.com/raaymax/lazytail/archive/v${VERSION}.tar.gz" \
+          "	sha256sums = ${SHA256}" \
+          "" \
+          "pkgname = lazytail" > .SRCINFO
+
+    - name: Commit and push to AUR
+      run: |
+        cd aur-repo
+        git config user.name "Mateusz Russak"
+        git config user.email "mateusz@russak.biz"
+        git add PKGBUILD .SRCINFO
+        git diff --cached --quiet && echo "No changes" && exit 0
+        git commit -m "Update to ${VERSION}"
+        git push

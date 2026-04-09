@@ -37,23 +37,26 @@ cargo run --release -- test.log
 ```
 src/
 ├── main.rs                   # Entry point, CLI (clap), and main event loop
-├── lib.rs                    # Library crate interface (config, index, source, theme)
+├── lib.rs                    # Library crate interface (config, filter, index, parsing, reader, renderer, source, text_wrap, theme)
 ├── ansi.rs                   # ANSI escape sequence stripping
 ├── capture.rs                # Capture mode (tee-like stdin to file)
+├── filter_orchestrator.rs    # FilterOrchestrator — unified filter dispatch
 ├── history.rs                # Filter history persistence
 ├── log_source.rs             # Domain state shared across TUI/Web/MCP (LogSource)
+├── parsing.rs                # Logfmt parser
 ├── session.rs                # Session persistence (last-opened source per project)
 ├── signal.rs                 # Signal handling (SIGINT/SIGTERM)
 ├── source.rs                 # Source discovery and status tracking
+├── text_wrap.rs              # Line wrapping logic for TUI display
 ├── app/
-│   ├── mod.rs                # App struct, InputMode, ViewMode
+│   ├── mod.rs                # App struct (top-level state)
 │   ├── event.rs              # AppEvent enum
+│   ├── filter_controller.rs  # FilterController (debounce, validation, history)
+│   ├── input_controller.rs   # InputController, InputMode
+│   ├── source_panel.rs       # SourcePanelController (tree navigation)
 │   ├── tab.rs                # Per-tab TUI state (TabState)
+│   ├── tab_manager.rs        # TabManager (tab collection, combined views)
 │   └── viewport.rs           # Vim-style viewport scrolling
-├── cache/
-│   ├── mod.rs                # Cache module
-│   ├── line_cache.rs         # LRU cache for line content
-│   └── ansi_cache.rs         # ANSI-parsed line cache
 ├── cli/
 │   ├── mod.rs                # CLI subcommand definitions
 │   ├── init.rs               # `lazytail init` command
@@ -72,9 +75,12 @@ src/
 │   ├── aggregation.rs        # Grouped query results (count by)
 │   ├── cancel.rs             # Cancellation tokens
 │   ├── engine.rs             # Background filtering engine
-│   ├── orchestrator.rs       # FilterOrchestrator — unified filter dispatch
-│   ├── parallel_engine.rs    # Parallel filtering
-│   ├── query.rs              # Query language (json | field == value)
+│   ├── query/                # Query language (json | field == value)
+│   │   ├── mod.rs            # Query module
+│   │   ├── ast.rs            # FilterQuery AST
+│   │   ├── filter.rs         # QueryFilter implementation
+│   │   ├── parser.rs         # Text query parser
+│   │   └── time.rs           # @ts time-based filtering
 │   ├── regex_filter.rs       # Regex filter implementation
 │   ├── search_engine.rs      # SearchEngine — stateless search dispatch
 │   ├── streaming_filter.rs   # Streaming mmap-based filter (grep-like)
@@ -92,22 +98,26 @@ src/
 │   ├── flags.rs              # Severity enum, format flags, line classification
 │   ├── lock.rs               # Advisory flock-based write lock
 │   ├── meta.rs               # Index metadata (entry count, column bits)
-│   └── reader.rs             # IndexReader — read-only access to flags/checkpoints
+│   ├── reader.rs             # IndexReader — read-only access to flags/checkpoints
+│   └── validate.rs           # Index integrity verification (partial trust)
 ├── mcp/
 │   ├── mod.rs                # MCP server module
-│   ├── tools.rs              # Tool implementations (6 tools)
+│   ├── tools/                # Tool implementations (6 tools)
+│   │   ├── mod.rs            # Tool dispatch and tests
+│   │   ├── context.rs        # get_context implementation
+│   │   ├── lines.rs          # get_lines implementation
+│   │   ├── search.rs         # search/query implementation
+│   │   ├── stats.rs          # get_stats implementation
+│   │   └── response.rs       # Shared response building
 │   ├── types.rs              # Request/response types
 │   ├── format.rs             # Plain text output formatters
 │   └── ansi.rs               # ANSI escape code stripping
 ├── reader/
 │   ├── mod.rs                # LogReader trait
 │   ├── combined_reader.rs    # Multi-source chronological merging
-│   ├── file_reader.rs        # Lazy file reader with line indexing
-│   ├── huge_file_reader.rs   # Large file support (experimental)
-│   ├── mmap_reader.rs        # Memory-mapped reader (experimental)
+│   ├── file_reader.rs        # Lazy file reader with line indexing (lossy UTF-8)
 │   ├── sparse_index.rs       # Sparse line index
-│   ├── stream_reader.rs      # Stdin/stream reader
-│   └── tail_buffer.rs        # Tail buffer (experimental)
+│   └── stream_reader.rs      # Stdin/stream reader
 ├── renderer/
 │   ├── mod.rs                # PresetRegistry — compiled rendering presets
 │   ├── builtin.rs            # Built-in preset definitions
@@ -137,6 +147,8 @@ src/
 │   └── dir.rs                # Directory watcher for source discovery
 └── web/
     ├── mod.rs                # HTTP server (tiny_http)
+    ├── handlers.rs           # HTTP request handlers
+    ├── state.rs              # Server state management
     └── index.html            # Embedded SPA
 ```
 
@@ -341,6 +353,14 @@ Triggered when the release PR is merged (release is published).
   - `lazytail-linux-x86_64.tar.gz`
   - `lazytail-macos-x86_64.tar.gz`
   - `lazytail-macos-aarch64.tar.gz`
+
+### AUR Publish Workflow (`.github/workflows/aur.yml`)
+
+Triggered on release publish. Updates the AUR `lazytail` package automatically.
+
+### Nightly Build Workflow (`.github/workflows/nightly.yml`)
+
+Runs on every push to master. Builds and uploads nightly binaries tagged as `nightly`.
 
 ## Release Process
 

@@ -29,6 +29,9 @@ This directory contains Architecture Decision Records (ADRs) for LazyTail. Each 
 | [021](021-web-server-architecture.md) | Web Server Architecture | Accepted |
 | [022](022-session-persistence.md) | Session Persistence | Accepted |
 | [023](023-self-update-mechanism.md) | Self-Update Mechanism | Accepted |
+| [024](024-ts-virtual-field-time-queries.md) | @ts Virtual Field and Time-Based Queries | Accepted |
+| [025](025-app-state-decomposition.md) | App State Decomposition into Sub-Controllers | Accepted |
+| [026](026-index-validation-partial-trust.md) | Index Validation with Partial Trust | Accepted |
 
 ## Format
 
