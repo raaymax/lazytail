@@ -58,12 +58,14 @@ fn build_source_line(
     tab: &TabState,
     number: &str,
     indicator: &str,
+    is_selected: bool,
     name: &str,
     style: Style,
     ui: &UiColors,
 ) -> Line<'static> {
+    let prefix = if is_selected { ">" } else { " " };
     let mut line = Line::from(vec![Span::styled(
-        format!("  {}{} {}", number, indicator, name),
+        format!(" {}{}{} {}", prefix, number, indicator, name),
         style,
     )]);
 
@@ -170,6 +172,7 @@ fn render_sources_list(
                 }
 
                 let indicator = if is_active { ">" } else { " " };
+                let prefix = if is_tree_selected { ">" } else { " " };
 
                 let mut style = Style::default()
                     .fg(ui.highlight)
@@ -178,8 +181,10 @@ fn render_sources_list(
                     style = style.bg(ui.selection_bg);
                 }
 
-                let mut line =
-                    Line::from(vec![Span::styled(format!("   {} $all", indicator), style)]);
+                let mut line = Line::from(vec![Span::styled(
+                    format!(" {} {} $all", prefix, indicator),
+                    style,
+                )]);
 
                 // Inline metadata: line count + source count
                 let source_count = tab_indices
@@ -201,8 +206,10 @@ fn render_sources_list(
                 }
 
                 if is_tree_selected {
-                    let mut full_line =
-                        Line::from(vec![Span::styled(format!("   {} $all", indicator), style)]);
+                    let mut full_line = Line::from(vec![Span::styled(
+                        format!(" {} {} $all", prefix, indicator),
+                        style,
+                    )]);
                     full_line
                         .spans
                         .push(Span::styled(meta, Style::default().fg(ui.muted)));
@@ -259,7 +266,15 @@ fn render_sources_list(
                 };
 
                 // Build line with indicators and metadata
-                let mut line = build_source_line(tab, &number, indicator, &name, item_style, ui);
+                let mut line = build_source_line(
+                    tab,
+                    &number,
+                    indicator,
+                    is_tree_selected,
+                    &name,
+                    item_style,
+                    ui,
+                );
 
                 // Inline metadata (line count · file size) - show whatever fits
                 let meta = format_source_meta(tab);
@@ -278,6 +293,7 @@ fn render_sources_list(
                         tab,
                         &number,
                         indicator,
+                        is_tree_selected,
                         &tab.source.name,
                         item_style,
                         ui,

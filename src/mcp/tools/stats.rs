@@ -38,7 +38,9 @@ impl LazyTailMcp {
                 stats.time_range,
             )
         } else {
-            (0, 0, false, None, None, Vec::new(), None)
+            // Index unavailable or corrupt — fall back to file metadata for size
+            let log_file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            (0, log_file_size, false, None, None, Vec::new(), None)
         };
 
         let response = GetStatsResponse {

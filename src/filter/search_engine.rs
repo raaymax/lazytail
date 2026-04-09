@@ -59,7 +59,8 @@ impl SearchEngine {
             if let (Some(q), Some(reader)) = (query, index) {
                 // TsBounds::from_filters validated in orchestrator/MCP, unwrap is safe here
                 if let Ok(Some(ts_bounds)) = TsBounds::from_filters(&q.ts_filters) {
-                    let ts_bitmap: Vec<bool> = (0..reader.len())
+                    let reader_len = reader.len();
+                    let ts_bitmap: Vec<bool> = (0..reader_len)
                         .map(|i| {
                             reader
                                 .get_timestamp(i)
@@ -79,6 +80,18 @@ impl SearchEngine {
             }
         }
 
+        // Guard: if @ts filters were requested but bitmap wasn't created or is
+        // empty (index has 0 entries), return an empty result set instead of
+        // silently falling through to the unfiltered generic path.
+        if has_ts_filters && bitmap.as_ref().is_none_or(|b| b.is_empty()) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx.send(FilterProgress::Complete {
+                matches: vec![],
+                lines_processed: 0,
+            });
+            return Ok(rx);
+        }
+
         if let Some((start, end)) = range {
             // Incremental filtering (new lines only)
             let start_byte_offset = {
@@ -95,6 +108,20 @@ impl SearchEngine {
                 end,
                 start_byte_offset,
                 bitmap,
+                cancel,
+            )
+        } else if has_ts_filters {
+            // @ts-filtered search: use range-limited path capped to indexed lines
+            // so that lines beyond the index (with no timestamps) are excluded.
+            let bitmap = bitmap.unwrap(); // guarded above
+            let end = bitmap.len();
+            streaming_filter::run_streaming_filter_range(
+                path.to_path_buf(),
+                filter,
+                0,
+                end,
+                None,
+                Some(bitmap),
                 cancel,
             )
         } else if let Some(bitmap) = bitmap {

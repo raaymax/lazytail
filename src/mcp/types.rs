@@ -153,6 +153,59 @@ where
     deserializer.deserialize_any(V)
 }
 
+/// Core parsing logic for flexible bool conversion.
+/// Accepts native booleans or string representations ("true"/"false", "1"/"0", "yes"/"no").
+mod flexible_bool {
+    use serde::de;
+
+    pub(super) fn from_bool<E: de::Error>(v: bool) -> Result<bool, E> {
+        Ok(v)
+    }
+
+    pub(super) fn from_str<E: de::Error>(v: &str) -> Result<bool, E> {
+        match v.to_lowercase().as_str() {
+            "true" | "1" | "yes" => Ok(true),
+            "false" | "0" | "no" => Ok(false),
+            _ => Err(E::custom(format!(
+                "invalid boolean value \"{}\": expected true/false, 1/0, or yes/no",
+                v
+            ))),
+        }
+    }
+}
+
+/// Deserialize a `bool` that accepts both native booleans and string-encoded values.
+///
+/// MCP clients sometimes send boolean parameters as strings (e.g., `"true"` instead of `true`).
+/// This deserializer accepts both forms and provides descriptive parse errors.
+pub(crate) fn deserialize_flexible_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+
+    impl<'de> Visitor<'de> for V {
+        type Value = bool;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a boolean or a string containing a boolean (true/false, 1/0, yes/no)")
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            flexible_bool::from_bool(v)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            flexible_bool::from_str(v)
+        }
+    }
+
+    deserializer.deserialize_any(V)
+}
+
 /// Output format for tool responses.
 #[derive(Debug, Default, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -191,16 +244,16 @@ pub struct GetLinesRequest {
     )]
     pub count: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub raw: bool,
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub full_content: bool,
     /// Include arrival timestamp (when the line was captured) before each line (default: false)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub include_ts: bool,
 }
 
@@ -258,7 +311,7 @@ pub struct SearchRequest {
     #[serde(default)]
     pub mode: SearchMode,
     /// Case sensitive search (default: false)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub case_sensitive: bool,
     /// Maximum number of results to return (default 100, max 1000)
     #[serde(
@@ -270,7 +323,7 @@ pub struct SearchRequest {
     #[serde(default, deserialize_with = "deserialize_flexible_usize")]
     pub context_lines: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub raw: bool,
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
@@ -281,10 +334,10 @@ pub struct SearchRequest {
     #[serde(default)]
     pub query: Option<FilterQuery>,
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub full_content: bool,
     /// Include arrival timestamp (when the line was captured) before each line (default: false)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub include_ts: bool,
 }
 
@@ -339,16 +392,16 @@ pub struct GetTailRequest {
     #[serde(default, deserialize_with = "deserialize_flexible_usize_option")]
     pub since_line: Option<usize>,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub raw: bool,
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub full_content: bool,
     /// Include arrival timestamp (when the line was captured) before each line (default: false)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub include_ts: bool,
 }
 
@@ -373,16 +426,16 @@ pub struct GetContextRequest {
     )]
     pub after: usize,
     /// Return raw content with ANSI escape codes intact (default: false, strips ANSI)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub raw: bool,
     /// Output format: "text" (default, plain text) or "json"
     #[serde(default)]
     pub output: OutputFormat,
     /// Return full line content without truncation (default: false, lines over 500 chars are truncated)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub full_content: bool,
     /// Include arrival timestamp (when the line was captured) before each line (default: false)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     pub include_ts: bool,
 }
 
@@ -621,6 +674,63 @@ mod tests {
         assert!(
             err.to_string().contains("floating-point"),
             "error should mention floating-point, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn bool_accepts_native_true() {
+        let req: GetLinesRequest =
+            serde_json::from_value(json!({"source": "test", "raw": true, "include_ts": false}))
+                .unwrap();
+        assert!(req.raw);
+        assert!(!req.include_ts);
+    }
+
+    #[test]
+    fn bool_accepts_string_true() {
+        let req: GetLinesRequest =
+            serde_json::from_value(json!({"source": "test", "raw": "true", "include_ts": "false"}))
+                .unwrap();
+        assert!(req.raw);
+        assert!(!req.include_ts);
+    }
+
+    #[test]
+    fn bool_accepts_string_yes_no() {
+        let req: GetTailRequest =
+            serde_json::from_value(json!({"source": "test", "raw": "yes", "full_content": "no"}))
+                .unwrap();
+        assert!(req.raw);
+        assert!(!req.full_content);
+    }
+
+    #[test]
+    fn bool_accepts_string_one_zero() {
+        let req: SearchRequest = serde_json::from_value(
+            json!({"source": "test", "pattern": "err", "case_sensitive": "1", "raw": "0"}),
+        )
+        .unwrap();
+        assert!(req.case_sensitive);
+        assert!(!req.raw);
+    }
+
+    #[test]
+    fn bool_defaults_to_false_when_omitted() {
+        let req: GetLinesRequest = serde_json::from_value(json!({"source": "test"})).unwrap();
+        assert!(!req.raw);
+        assert!(!req.full_content);
+        assert!(!req.include_ts);
+    }
+
+    #[test]
+    fn bool_rejects_invalid_string() {
+        let err =
+            serde_json::from_value::<GetLinesRequest>(json!({"source": "test", "raw": "maybe"}))
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid boolean value"),
+            "error should mention invalid boolean, got: {}",
             err
         );
     }
