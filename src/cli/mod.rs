@@ -56,6 +56,10 @@ pub struct UpdateArgs {
     /// Only check for updates, don't install (exit code 0 = up-to-date, 1 = available)
     #[arg(long)]
     pub check: bool,
+
+    /// Use nightly (pre-release) build instead of latest stable
+    #[arg(long)]
+    pub nightly: bool,
 }
 
 /// Arguments for the bench subcommand.

@@ -13,7 +13,18 @@ NC='\033[0m' # No Color
 REPO="raaymax/lazytail"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
+# Parse flags
+NIGHTLY=false
+for arg in "$@"; do
+    case "$arg" in
+        --nightly) NIGHTLY=true ;;
+    esac
+done
+
 echo -e "${GREEN}LazyTail Installer${NC}"
+if [ "$NIGHTLY" = true ]; then
+    echo -e "${YELLOW}(nightly build)${NC}"
+fi
 echo ""
 
 # Detect distribution
@@ -167,16 +178,21 @@ if check_existing_install; then
     echo ""
 fi
 
-# Get latest release version
-echo "Fetching latest release..."
-LATEST_VERSION=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i '^location:' | sed -E 's|.*/tag/||' | tr -d '[:space:]')
+# Get release version
+if [ "$NIGHTLY" = true ]; then
+    echo "Fetching nightly build..."
+    LATEST_VERSION="nightly"
+else
+    echo "Fetching latest release..."
+    LATEST_VERSION=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i '^location:' | sed -E 's|.*/tag/||' | tr -d '[:space:]')
 
-if [ -z "$LATEST_VERSION" ]; then
-    echo -e "${RED}Failed to fetch latest version${NC}"
-    exit 1
+    if [ -z "$LATEST_VERSION" ]; then
+        echo -e "${RED}Failed to fetch latest version${NC}"
+        exit 1
+    fi
 fi
 
-echo "Latest version: $LATEST_VERSION"
+echo "Version: $LATEST_VERSION"
 
 # Construct download URL
 BINARY_NAME="lazytail-${PLATFORM}-${ARCH_SUFFIX}.tar.gz"

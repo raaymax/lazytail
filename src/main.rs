@@ -150,7 +150,7 @@ fn main() -> Result<()> {
                     .map_err(|code| anyhow::anyhow!("theme list failed with exit code {}", code)),
             },
             #[cfg(feature = "self-update")]
-            cli::Commands::Update(args) => cli::update::run(args.check)
+            cli::Commands::Update(args) => cli::update::run(args.check, args.nightly)
                 .map_err(|code| anyhow::anyhow!("update failed with exit code {}", code)),
         };
     }

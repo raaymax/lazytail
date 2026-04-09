@@ -6,7 +6,7 @@
 use super::{get_target, save_cache, UpdateCheckCache, UpdateInfo, REPO_NAME, REPO_OWNER};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Check the latest version from GitHub releases.
+/// Check the latest stable version from GitHub releases.
 ///
 /// Iterates through releases to find the first one that has downloadable
 /// assets for the current platform. This skips drafts, prereleases, and
@@ -31,6 +31,44 @@ pub fn check_latest_version() -> Result<UpdateInfo, String> {
     let release_url = format!(
         "https://github.com/{}/{}/releases/tag/{}",
         REPO_OWNER, REPO_NAME, latest.name
+    );
+
+    Ok(UpdateInfo {
+        current_version,
+        latest_version,
+        release_url,
+    })
+}
+
+/// Check the nightly (pre-release) version from GitHub releases.
+///
+/// Looks specifically for a release tagged "nightly". Skips caching since
+/// nightly builds change frequently.
+pub fn check_nightly_version() -> Result<UpdateInfo, String> {
+    let releases = self_update::backends::github::ReleaseList::configure()
+        .repo_owner(REPO_OWNER)
+        .repo_name(REPO_NAME)
+        .build()
+        .map_err(|e| format!("Failed to configure release list: {}", e))?
+        .fetch()
+        .map_err(|e| format!("Failed to fetch releases: {}", e))?;
+
+    let target = get_target();
+    let nightly = releases
+        .iter()
+        .find(|r| r.name == "nightly" && r.has_target_asset(&target))
+        .ok_or_else(|| {
+            format!(
+                "No nightly release found with assets for target '{}'",
+                target
+            )
+        })?;
+
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let latest_version = nightly.version.clone();
+    let release_url = format!(
+        "https://github.com/{}/{}/releases/tag/nightly",
+        REPO_OWNER, REPO_NAME
     );
 
     Ok(UpdateInfo {

@@ -9,17 +9,32 @@ use colored::Colorize;
 /// Run the update subcommand.
 ///
 /// - `check_only`: If true, only check and report (exit code 0 = up-to-date, 1 = available).
+/// - `nightly`: If true, look for the nightly pre-release instead of latest stable.
 /// - Returns `Ok(())` on success or `Err(code)` with an exit code.
-pub fn run(check_only: bool) -> Result<(), i32> {
+pub fn run(check_only: bool, nightly: bool) -> Result<(), i32> {
     let install_method = update::detection::detect_install_method();
 
-    eprintln!("Checking for updates...");
+    if nightly {
+        eprintln!("Checking for nightly build...");
+    } else {
+        eprintln!("Checking for updates...");
+    }
 
-    let info = match update::checker::check_latest_version() {
-        Ok(info) => info,
-        Err(e) => {
-            eprintln!("{} {}", "error:".red().bold(), e);
-            return Err(1);
+    let info = if nightly {
+        match update::checker::check_nightly_version() {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("{} {}", "error:".red().bold(), e);
+                return Err(1);
+            }
+        }
+    } else {
+        match update::checker::check_latest_version() {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("{} {}", "error:".red().bold(), e);
+                return Err(1);
+            }
         }
     };
 
@@ -33,8 +48,9 @@ pub fn run(check_only: bool) -> Result<(), i32> {
     }
 
     println!(
-        "{} Update available: {} → {}",
+        "{} {} available: {} → {}",
         "●".yellow().bold(),
+        if nightly { "Nightly build" } else { "Update" },
         info.current_version.dimmed(),
         info.latest_version.green().bold()
     );
@@ -47,16 +63,28 @@ pub fn run(check_only: bool) -> Result<(), i32> {
     // Check if we should defer to a package manager
     match install_method {
         update::InstallMethod::PackageManager { name, upgrade_cmd } => {
-            println!(
-                "\nlazytail was installed via {}. Update with:\n  {}",
-                name.bold(),
-                upgrade_cmd.cyan()
-            );
+            if nightly {
+                println!(
+                    "\nlazytail was installed via {}. Nightly builds are only available for self-managed installs.",
+                    name.bold()
+                );
+            } else {
+                println!(
+                    "\nlazytail was installed via {}. Update with:\n  {}",
+                    name.bold(),
+                    upgrade_cmd.cyan()
+                );
+            }
             Ok(())
         }
         update::InstallMethod::SelfManaged => {
             println!();
-            match update::installer::install_latest() {
+            let result = if nightly {
+                update::installer::install_nightly()
+            } else {
+                update::installer::install_latest()
+            };
+            match result {
                 Ok(version) => {
                     println!(
                         "\n{} Successfully updated to {}!",
