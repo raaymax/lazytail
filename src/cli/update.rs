@@ -38,7 +38,9 @@ pub fn run(check_only: bool, nightly: bool) -> Result<(), i32> {
         }
     };
 
-    if !info.is_update_available() {
+    // Nightly builds always offer to install (version is "nightly", not semver-comparable).
+    // Stable updates compare versions normally.
+    if !nightly && !info.is_update_available() {
         println!(
             "{} lazytail {} is up to date.",
             "✓".green().bold(),
@@ -52,7 +54,11 @@ pub fn run(check_only: bool, nightly: bool) -> Result<(), i32> {
         "●".yellow().bold(),
         if nightly { "Nightly build" } else { "Update" },
         info.current_version.dimmed(),
-        info.latest_version.green().bold()
+        if nightly {
+            "nightly".green().bold()
+        } else {
+            info.latest_version.green().bold()
+        }
     );
 
     if check_only {

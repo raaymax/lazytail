@@ -38,7 +38,7 @@ pub fn install_nightly() -> Result<String, String> {
 
     let nightly = releases
         .iter()
-        .find(|r| r.name == "nightly" && r.has_target_asset(&target))
+        .find(|r| r.version == "nightly" && r.has_target_asset(&target))
         .ok_or_else(|| {
             format!(
                 "No nightly release found with assets for target '{}'",

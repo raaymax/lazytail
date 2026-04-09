@@ -23,7 +23,7 @@ pub fn check_latest_version() -> Result<UpdateInfo, String> {
     let target = get_target();
     let latest = releases
         .iter()
-        .find(|r| r.has_target_asset(&target))
+        .find(|r| r.version != "nightly" && r.has_target_asset(&target))
         .ok_or_else(|| format!("No releases found with assets for target '{}'", target))?;
 
     let current_version = env!("CARGO_PKG_VERSION").to_string();
@@ -56,7 +56,7 @@ pub fn check_nightly_version() -> Result<UpdateInfo, String> {
     let target = get_target();
     let nightly = releases
         .iter()
-        .find(|r| r.name == "nightly" && r.has_target_asset(&target))
+        .find(|r| r.version == "nightly" && r.has_target_asset(&target))
         .ok_or_else(|| {
             format!(
                 "No nightly release found with assets for target '{}'",
