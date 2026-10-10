@@ -3,7 +3,10 @@
 //! Fetches the latest release from GitHub and compares with the current version.
 //! Results are cached for 24 hours to avoid repeated API calls.
 
-use super::{get_target, save_cache, UpdateCheckCache, UpdateInfo, REPO_NAME, REPO_OWNER};
+use super::{
+    expected_asset_name, get_target, save_cache, UpdateCheckCache, UpdateInfo, REPO_NAME,
+    REPO_OWNER,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Check the latest stable version from GitHub releases.
@@ -21,10 +24,11 @@ pub fn check_latest_version() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("Failed to fetch releases: {}", e))?;
 
     let target = get_target();
+    let asset_name = expected_asset_name(&target);
     let latest = releases
         .iter()
-        .find(|r| r.version != "nightly" && r.has_target_asset(&target))
-        .ok_or_else(|| format!("No releases found with assets for target '{}'", target))?;
+        .find(|r| r.version != "nightly" && r.assets.iter().any(|a| a.name == asset_name))
+        .ok_or_else(|| format!("No releases found with asset '{}'", asset_name))?;
 
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let latest_version = latest.version.clone();
@@ -54,15 +58,11 @@ pub fn check_nightly_version() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("Failed to fetch releases: {}", e))?;
 
     let target = get_target();
+    let asset_name = expected_asset_name(&target);
     let nightly = releases
         .iter()
-        .find(|r| r.version == "nightly" && r.has_target_asset(&target))
-        .ok_or_else(|| {
-            format!(
-                "No nightly release found with assets for target '{}'",
-                target
-            )
-        })?;
+        .find(|r| r.version == "nightly" && r.assets.iter().any(|a| a.name == asset_name))
+        .ok_or_else(|| format!("No nightly release found with asset '{}'", asset_name))?;
 
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let latest_version = nightly.version.clone();

@@ -15,9 +15,14 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Parse flags
 NIGHTLY=false
+FORCE_MUSL=false
+INSTALL_METHOD=""  # "aur" or "binary"; empty means ask on Arch
 for arg in "$@"; do
     case "$arg" in
         --nightly) NIGHTLY=true ;;
+        --musl) FORCE_MUSL=true ;;
+        --aur) INSTALL_METHOD="aur" ;;
+        --no-aur) INSTALL_METHOD="binary" ;;
     esac
 done
 
@@ -38,6 +43,17 @@ detect_distro() {
     else
         echo "unknown"
     fi
+}
+
+# Detect whether the system C library is musl (e.g. Alpine, Void musl)
+is_musl() {
+    if ls /lib/ld-musl-*.so.1 &> /dev/null; then
+        return 0
+    fi
+    if command -v ldd &> /dev/null && ldd --version 2>&1 | grep -qi musl; then
+        return 0
+    fi
+    return 1
 }
 
 # Check if binary is already installed
@@ -81,8 +97,22 @@ case "$ARCH" in
         ;;
 esac
 
-# Handle Arch Linux
-if [ "$DISTRO" = "arch" ]; then
+# Pick glibc or musl build on Linux
+LIBC_SUFFIX=""
+if [ "$PLATFORM" = "linux" ]; then
+    if [ "$FORCE_MUSL" = true ] || is_musl; then
+        if [ "$ARCH_SUFFIX" != "x86_64" ]; then
+            echo -e "${RED}musl builds are only available for x86_64 (detected: $ARCH)${NC}"
+            exit 1
+        fi
+        LIBC_SUFFIX="-musl"
+        echo -e "${BLUE}Using musl (statically linked) build${NC}"
+        echo ""
+    fi
+fi
+
+# Handle Arch Linux: let the user choose between AUR and a direct binary download
+if [ "$DISTRO" = "arch" ] && [ "$INSTALL_METHOD" != "binary" ]; then
     echo -e "${BLUE}Arch Linux detected!${NC}"
     echo ""
 
@@ -94,65 +124,54 @@ if [ "$DISTRO" = "arch" ]; then
         AUR_HELPER="paru"
     fi
 
-    if [ -n "$AUR_HELPER" ]; then
-        echo "Recommended installation method for Arch Linux is via AUR."
+    if [ -z "$INSTALL_METHOD" ]; then
+        echo "How do you want to install LazyTail?"
         echo ""
-        echo "Benefits of AUR installation:"
-        echo "  • Integrated with pacman"
-        echo "  • Automatic updates with system upgrades"
-        echo "  • Easy removal and dependency tracking"
+        echo "  1) Download prebuilt binary from GitHub releases (default)"
+        if [ -n "$AUR_HELPER" ]; then
+            echo "  2) Install from AUR using $AUR_HELPER (pacman-managed updates)"
+        else
+            echo "  2) Install from AUR (requires an AUR helper such as yay or paru)"
+        fi
         echo ""
+        echo "Note: AUR packages are user-submitted. Review the PKGBUILD before installing."
+        echo ""
+        echo -n "Choice [1-2]: "
+        read -r choice < /dev/tty
+        case "$choice" in
+            2) INSTALL_METHOD="aur" ;;
+            *) INSTALL_METHOD="binary" ;;
+        esac
+        echo ""
+    fi
 
-        if check_existing_install; then
-            echo -e "${YELLOW}Found existing binary installation: $EXISTING_PATH${NC}"
-            echo "You can remove it after AUR installation completes."
+    if [ "$INSTALL_METHOD" = "aur" ]; then
+        if [ -z "$AUR_HELPER" ]; then
+            echo -e "${YELLOW}No AUR helper found (yay or paru).${NC}"
+            echo "Install one, then run:"
+            echo -e "    ${GREEN}yay -S lazytail${NC}"
             echo ""
+            echo "Or re-run this script and choose the binary download."
+            exit 1
         fi
 
-        echo "Do you want to install via AUR now using $AUR_HELPER? [Y/n]"
-        read -r response < /dev/tty
+        echo "Running: $AUR_HELPER -S lazytail"
+        echo ""
+        if $AUR_HELPER -S lazytail; then
+            echo ""
+            echo -e "${GREEN}✓ LazyTail installed successfully via AUR!${NC}"
 
-        case "$response" in
-            [nN][oO]|[nN])
-                echo "Continuing with binary install..."
+            if check_existing_install && [[ "$EXISTING_PATH" != "/usr/bin/lazytail" ]]; then
                 echo ""
-                ;;
-            *)
-                echo ""
-                echo "Running: $AUR_HELPER -S lazytail"
-                echo ""
-                $AUR_HELPER -S lazytail
+                echo -e "${YELLOW}Cleanup: Remove old binary installation${NC}"
+                echo "  rm $EXISTING_PATH"
+            fi
 
-                if [ $? -eq 0 ]; then
-                    echo ""
-                    echo -e "${GREEN}✓ LazyTail installed successfully via AUR!${NC}"
-
-                    if check_existing_install && [[ "$EXISTING_PATH" != "/usr/bin/lazytail" ]]; then
-                        echo ""
-                        echo -e "${YELLOW}Cleanup: Remove old binary installation${NC}"
-                        echo "  rm $EXISTING_PATH"
-                    fi
-
-                    exit 0
-                else
-                    echo -e "${RED}AUR installation failed. Falling back to binary install...${NC}"
-                    echo ""
-                fi
-                ;;
-        esac
-    else
-        echo "Recommended installation method for Arch Linux is via AUR:"
-        echo ""
-        echo "  Install an AUR helper first:"
-        echo "    ${GREEN}sudo pacman -S --needed git base-devel && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si${NC}"
-        echo ""
-        echo "  Then install lazytail:"
-        echo "    ${GREEN}yay -S lazytail${NC}"
-        echo ""
-        echo "Or continue with binary install..."
-        echo "Press Ctrl+C to cancel, or Enter to continue..."
-        read -r < /dev/tty
-        echo ""
+            exit 0
+        else
+            echo -e "${RED}AUR installation failed. Falling back to binary install...${NC}"
+            echo ""
+        fi
     fi
 fi
 
@@ -195,7 +214,7 @@ fi
 echo "Version: $LATEST_VERSION"
 
 # Construct download URL
-BINARY_NAME="lazytail-${PLATFORM}-${ARCH_SUFFIX}.tar.gz"
+BINARY_NAME="lazytail-${PLATFORM}-${ARCH_SUFFIX}${LIBC_SUFFIX}.tar.gz"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_VERSION/$BINARY_NAME"
 
 echo "Downloading from: $DOWNLOAD_URL"
@@ -206,8 +225,11 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Download and extract
 cd "$TMP_DIR"
-if ! curl -L -o "$BINARY_NAME" "$DOWNLOAD_URL"; then
+if ! curl -fL -o "$BINARY_NAME" "$DOWNLOAD_URL"; then
     echo -e "${RED}Failed to download binary${NC}"
+    if [ -n "$LIBC_SUFFIX" ] && [ "$NIGHTLY" != true ]; then
+        echo "This release may not include a musl build yet. Try: --nightly"
+    fi
     exit 1
 fi
 
@@ -240,10 +262,7 @@ fi
 
 # Reminder about updates for binary installs
 echo ""
-echo -e "${BLUE}Note:${NC} To update in the future, re-run this script."
-if [ "$DISTRO" = "arch" ]; then
-    echo "Consider switching to AUR for automatic updates: ${GREEN}yay -S lazytail${NC}"
-fi
+echo -e "${BLUE}Note:${NC} To update in the future, run 'lazytail update' or re-run this script."
 
 # MCP Configuration Section
 echo ""

@@ -26,8 +26,24 @@ curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh 
 
 ### Arch Linux (AUR)
 
+On Arch, the install script asks whether to download the prebuilt binary (default) or install from AUR. Skip the prompt with `--no-aur` or `--aur`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash -s -- --no-aur
+```
+
+Or install from AUR directly:
+
 ```bash
 yay -S lazytail
+```
+
+### musl / Alpine
+
+The install script detects musl-based systems and downloads the statically linked `x86_64-musl` build. Force it on any Linux with `--musl`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raaymax/lazytail/master/install.sh | bash -s -- --musl
 ```
 
 ### Build from source

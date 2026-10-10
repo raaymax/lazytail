@@ -99,6 +99,9 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// Map the current platform to the asset naming convention used in releases.
+///
+/// Linux musl builds get a `-musl` suffix so glibc and musl assets are
+/// distinguishable. macOS has only one libc, so no suffix is added.
 pub fn get_target() -> String {
     let os = if cfg!(target_os = "linux") {
         "linux"
@@ -116,7 +119,22 @@ pub fn get_target() -> String {
         "unknown"
     };
 
-    format!("{}-{}", os, arch)
+    let libc_suffix = if cfg!(all(target_os = "linux", target_env = "musl")) {
+        "-musl"
+    } else {
+        ""
+    };
+
+    format!("{}-{}{}", os, arch, libc_suffix)
+}
+
+/// Build the exact release asset filename for a given target.
+///
+/// Used in place of `self_update`'s substring matching so that a glibc target
+/// (`linux-x86_64`) doesn't accidentally resolve to the musl asset
+/// (`lazytail-linux-x86_64-musl.tar.gz`).
+pub fn expected_asset_name(target: &str) -> String {
+    format!("lazytail-{}.tar.gz", target)
 }
 
 #[cfg(test)]
@@ -151,6 +169,32 @@ mod tests {
             release_url: "https://example.com".to_string(),
         };
         assert!(!info.is_update_available());
+    }
+
+    #[test]
+    fn test_expected_asset_name() {
+        assert_eq!(
+            expected_asset_name("linux-x86_64"),
+            "lazytail-linux-x86_64.tar.gz"
+        );
+        assert_eq!(
+            expected_asset_name("linux-x86_64-musl"),
+            "lazytail-linux-x86_64-musl.tar.gz"
+        );
+        assert_eq!(
+            expected_asset_name("macos-aarch64"),
+            "lazytail-macos-aarch64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn test_get_target_matches_build_target() {
+        let target = get_target();
+        if cfg!(all(target_os = "linux", target_env = "musl")) {
+            assert_eq!(target, "linux-x86_64-musl");
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert_eq!(target, "linux-x86_64");
+        }
     }
 
     #[test]
