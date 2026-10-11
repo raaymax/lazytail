@@ -154,15 +154,11 @@ impl FilterController {
             return None;
         }
 
-        let new_index = match self.history_index {
-            None => return None,
-            Some(idx) => {
-                if idx < self.history.len() - 1 {
-                    Some(idx + 1)
-                } else {
-                    None
-                }
-            }
+        let idx = self.history_index?;
+        let new_index = if idx < self.history.len() - 1 {
+            Some(idx + 1)
+        } else {
+            None
         };
 
         self.history_index = new_index;

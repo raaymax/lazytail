@@ -157,10 +157,9 @@ fn parse_iso8601(s: &str) -> Option<i64> {
         0i64
     } else if let Some(offset) = rest.strip_prefix('+') {
         parse_tz_offset(offset)?
-    } else if let Some(offset) = rest.strip_prefix('-') {
-        -parse_tz_offset(offset)?
     } else {
-        return None;
+        let offset = rest.strip_prefix('-')?;
+        -parse_tz_offset(offset)?
     };
 
     Some(epoch - tz_offset_secs)

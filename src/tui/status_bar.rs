@@ -24,11 +24,9 @@ pub(super) fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         match &tab.source.filter.state {
             FilterState::Inactive => String::new(),
             FilterState::Processing { lines_processed } => {
-                let percent = if tab.source.total_lines > 0 {
-                    (lines_processed * 100) / tab.source.total_lines
-                } else {
-                    0
-                };
+                let percent = (lines_processed * 100)
+                    .checked_div(tab.source.total_lines)
+                    .unwrap_or(0);
                 format!("| Filtering: {}%", percent)
             }
             FilterState::Complete { matches } => format!("| Matches: {}", matches),

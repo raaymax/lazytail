@@ -182,10 +182,8 @@ fn detect_severity_single_pass(bytes: &[u8]) -> u32 {
                     return SEVERITY_DEBUG;
                 }
             }
-            b't' if remaining >= 5 => {
-                if eq_ci_word(bytes, i, b"trace") {
-                    return SEVERITY_TRACE;
-                }
+            b't' if remaining >= 5 && eq_ci_word(bytes, i, b"trace") => {
+                return SEVERITY_TRACE;
             }
             _ => {}
         }
@@ -265,10 +263,8 @@ fn detect_severity_scalar(bytes: &[u8]) -> u32 {
                     return SEVERITY_DEBUG;
                 }
             }
-            b't' if remaining >= 5 => {
-                if eq_ci_word(bytes, i, b"trace") {
-                    return SEVERITY_TRACE;
-                }
+            b't' if remaining >= 5 && eq_ci_word(bytes, i, b"trace") => {
+                return SEVERITY_TRACE;
             }
             _ => {}
         }
