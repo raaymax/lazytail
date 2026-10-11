@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/raaymax/lazytail/compare/v0.10.0...v0.11.0) (2026-10-11)
+
+
+### Features
+
+* **install:** add AUR opt-out and musl support ([4275534](https://github.com/raaymax/lazytail/commit/4275534db41b1e9146667a51df2839148baf12c3))
+
+
+### Bug Fixes
+
+* resolve clippy lints from Rust 1.97 ([9bec529](https://github.com/raaymax/lazytail/commit/9bec5290b69c99a1552a8f7690062ec8f4386192))
+
 ## [0.10.0](https://github.com/raaymax/lazytail/compare/v0.9.0...v0.10.0) (2026-04-09)
 
 
